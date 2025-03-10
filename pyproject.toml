@@ -14,7 +14,7 @@ dependencies = [
     "aiohttp==3.10.11",
     "apprise==1.9.2",
     "ccxt==4.4.60",
-    "configparser==7.1.0",
+    "configparser==7.2.0",
     "psutil==7.0.0",
     "python-dotenv==1.0.1"
 ]
