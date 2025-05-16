@@ -23,7 +23,7 @@ dependencies = [
 dev = [
     "pytest==8.3.5",
     "pytest-asyncio==0.25.3",
-    "pytest-cov==6.0.0",
+    "pytest-cov==6.1.1",
     "pytest-timeout==2.3.1",
 ]
 
