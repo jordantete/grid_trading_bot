@@ -15,7 +15,7 @@ dependencies = [
     "apprise==1.9.4",
     "ccxt==4.4.82",
     "configparser==7.2.0",
-    "psutil==7.0.0",
+    "psutil==7.1.2",
     "python-dotenv==1.1.1"
 ]
 
