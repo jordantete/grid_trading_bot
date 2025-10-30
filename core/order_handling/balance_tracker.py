@@ -8,6 +8,7 @@ from ..validation.exceptions import (
     InsufficientBalanceError,
     InsufficientCryptoBalanceError,
 )
+from .exceptions import DataFetchError
 from .fee_calculator import FeeCalculator
 from .order import Order, OrderSide, OrderStatus
 
@@ -82,18 +83,27 @@ class BalanceTracker:
         Returns:
             tuple: The quote and base currency balances.
         """
-        balances = await exchange_service.get_balance()
+        try:
+            # Mock balances for paper/dry-run mode (no real API call)
+            if self.config_manager.get_trading_mode() in ["paper", "dry_run"]:
+                fiat_balance = self.config_manager.get_initial_balance()  # e.g., 550 USDT
+                crypto_balance = 0.0  # Start with no crypto
+                self.logger.info(f"Paper mode: Mocked initial balances - Fiat: {fiat_balance} USDT, Crypto: {crypto_balance} {self.trading_pair.split('/')[0]}")
+                return fiat_balance, crypto_balance
+            balances = await exchange_service.get_balance()
 
-        if not balances or "free" not in balances:
-            raise ValueError(f"Unexpected balance structure: {balances}")
+            if not balances or "free" not in balances:
+                raise ValueError(f"Unexpected balance structure: {balances}")
 
-        quote_balance = float(balances.get("free", {}).get(self.quote_currency, 0.0))
-        base_balance = float(balances.get("free", {}).get(self.base_currency, 0.0))
-        self.logger.info(
-            f"Fetched balances - Quote: {self.quote_currency}: {quote_balance}, "
-            f"Base: {self.base_currency}: {base_balance}",
-        )
-        return quote_balance, base_balance
+            quote_balance = float(balances.get("free", {}).get(self.quote_currency, 0.0))
+            base_balance = float(balances.get("free", {}).get(self.base_currency, 0.0))
+            self.logger.info(
+                f"Fetched balances - Quote: {self.quote_currency}: {quote_balance}, "
+                f"Base: {self.base_currency}: {base_balance}",
+            )
+            return quote_balance, base_balance
+        except Exception as e:
+            raise DataFetchError(f"Error fetching balances: {e}")
 
     async def _update_balance_on_order_completion(self, order: Order) -> None:
         """
