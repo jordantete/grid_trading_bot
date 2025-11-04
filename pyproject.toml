@@ -16,7 +16,7 @@ dependencies = [
     "ccxt==4.4.82",
     "configparser==7.2.0",
     "psutil==7.1.3",
-    "python-dotenv==1.1.1"
+    "python-dotenv==1.2.1"
 ]
 
 [project.optional-dependencies]
