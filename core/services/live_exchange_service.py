@@ -40,17 +40,24 @@ class LiveExchangeService(ExchangeInterface):
             raise MissingEnvironmentVariableError(f"Missing required environment variable: {key}")
         return value
 
-    def _initialize_exchange(self) -> None:
+    def _initialize_exchange(self) -> Any:
         try:
+            trading_mode = self.config_manager.get_trading_mode()
+            sandbox = trading_mode == "live"
+            self.logger.info(f"Initializing exchange with sandbox={sandbox} (mode: {trading_mode})")
             exchange = getattr(ccxtpro, self.exchange_name)(
                 {
                     "apiKey": self.api_key,
                     "secret": self.secret_key,
+                    "sandbox": sandbox,
                     "enableRateLimit": True,
+                    'options': {
+                        'defaultType': 'spot', 
+                    },
                 },
             )
 
-            if self.is_paper_trading_activated:
+            if sandbox:
                 self._enable_sandbox_mode(exchange)
             return exchange
         except AttributeError:
