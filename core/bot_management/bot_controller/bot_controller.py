@@ -131,7 +131,10 @@ class BotController:
         """
         try:
             self.logger.info("Pause bot command received")
-            duration = int(command.split()[1])
+            parts = command.split()
+            if len(parts) < 2:
+                raise CommandParsingError("Usage: pause <duration_in_seconds>")
+            duration = int(parts[1])
             await self.event_bus.publish(Events.STOP_BOT, "User issued pause command")
             self.logger.info(f"Bot paused for {duration} seconds.")
             await asyncio.sleep(duration)

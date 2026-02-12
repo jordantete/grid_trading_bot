@@ -9,7 +9,7 @@ from core.bot_management.event_bus import EventBus, Events
 from core.bot_management.grid_trading_bot import GridTradingBot
 from core.bot_management.notification.notification_content import NotificationType
 from core.bot_management.notification.notification_handler import NotificationHandler
-from utils.constants import RESSOURCE_THRESHOLDS
+from utils.constants import RESOURCE_THRESHOLDS
 
 
 @dataclass
@@ -221,7 +221,7 @@ class HealthCheck:
         trends = self.get_resource_trends()
 
         # Check current values against thresholds
-        for resource, threshold in RESSOURCE_THRESHOLDS.items():
+        for resource, threshold in RESOURCE_THRESHOLDS.items():
             current_value = usage.get(resource, 0)
             if current_value > threshold:
                 trend = trends.get(f"{resource}_trend", 0)
