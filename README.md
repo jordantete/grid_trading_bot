@@ -280,7 +280,7 @@ To run the bot, use the following command:
 ### Multiple Configurations:
 If you want to run the bot with multiple configuration files simultaneously, you can specify them all:
   ```sh
-  uv run python main.py --config config/config1.json config/config2.json config/config3.json
+  uv run python main.py --config config/config1.json --config config/config2.json --config config/config3.json
   ```
 
 ### Saving Performance Results:
@@ -298,7 +298,7 @@ To run the bot without displaying the end-of-simulation plots, use the **--no-pl
 ### Combining Options:
 You can combine multiple options to customize how the bot runs. For example:
   ```sh
-  uv run python main.py --config config/config1.json config/config2.json --save_performance_results combined_results.json --no-plot
+  uv run python main.py --config config/config1.json --config config/config2.json --save_performance_results combined_results.json --no-plot
   ```
 
 ### Available Command-Line Arguments:
