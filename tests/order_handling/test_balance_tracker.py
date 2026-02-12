@@ -167,19 +167,15 @@ class TestBalanceTracker:
     @pytest.mark.asyncio
     async def test_setup_balances_paper_trading_mode(self, setup_balance_tracker):
         balance_tracker, _, _ = setup_balance_tracker
-        mock_exchange_service = AsyncMock()
-        balance_tracker._fetch_live_balances = AsyncMock(return_value=(1000, 3))
 
         balance_tracker.trading_mode = TradingMode.PAPER_TRADING
         await balance_tracker.setup_balances(
-            initial_balance=0,
-            initial_crypto_balance=0,
-            exchange_service=mock_exchange_service,
+            initial_balance=2000,
+            initial_crypto_balance=10,
         )
 
-        balance_tracker._fetch_live_balances.assert_awaited_once_with(mock_exchange_service)
-        assert balance_tracker.balance == 1000
-        assert balance_tracker.crypto_balance == 3
+        assert balance_tracker.balance == 2000
+        assert balance_tracker.crypto_balance == 10
 
     @pytest.mark.asyncio
     async def test_fetch_live_balances_success(self, setup_balance_tracker):
