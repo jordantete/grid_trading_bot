@@ -55,18 +55,18 @@ class BalanceTracker:
         """
         Sets up the balances based on trading mode.
 
-        For BACKTEST mode, sets initial balances.
-        For LIVE and PAPER_TRADING modes, fetches balances dynamically from the exchange.
+        For BACKTEST and PAPER_TRADING modes, sets initial balances from config.
+        For LIVE mode, fetches balances dynamically from the exchange.
 
         Args:
-            initial_balance: The initial fiat balance for backtest mode.
-            initial_crypto_balance: The initial crypto balance for backtest mode.
-            exchange_service: The exchange instance (required for live and paper_trading trading).
+            initial_balance: The initial fiat balance for backtest and paper trading modes.
+            initial_crypto_balance: The initial crypto balance for backtest and paper trading modes.
+            exchange_service: The exchange instance (required for live trading).
         """
-        if self.trading_mode == TradingMode.BACKTEST:
+        if self.trading_mode == TradingMode.BACKTEST or self.trading_mode == TradingMode.PAPER_TRADING:
             self.balance = initial_balance
             self.crypto_balance = initial_crypto_balance
-        elif self.trading_mode == TradingMode.LIVE or self.trading_mode == TradingMode.PAPER_TRADING:
+        elif self.trading_mode == TradingMode.LIVE:
             self.balance, self.crypto_balance = await self._fetch_live_balances(exchange_service)
 
     async def _fetch_live_balances(

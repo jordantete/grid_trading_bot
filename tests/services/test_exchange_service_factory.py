@@ -46,6 +46,23 @@ class TestExchangeServiceFactory:
         service = ExchangeServiceFactory.create_exchange_service(config_manager, TradingMode.BACKTEST)
         assert isinstance(service, BacktestExchangeService), "Expected a BacktestExchangeService instance"
 
+    @patch("core.services.live_exchange_service.ccxtpro")
+    @patch("core.services.live_exchange_service.getattr")
+    def test_create_paper_trading_exchange_service(self, mock_getattr, mock_ccxtpro, config_manager, monkeypatch):
+        monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
+        monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
+
+        mock_exchange_instance = Mock()
+        mock_exchange_instance.urls = {"api": "https://api.binance.com/api"}
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_getattr.return_value = mock_ccxtpro.binance
+
+        service = ExchangeServiceFactory.create_exchange_service(config_manager, TradingMode.PAPER_TRADING)
+
+        assert isinstance(service, LiveExchangeService), "Expected a LiveExchangeService instance"
+        assert service.is_paper_trading_activated is True
+        assert mock_exchange_instance.urls["api"] == "https://testnet.binance.vision/api"
+
     def test_invalid_trading_mode(self, config_manager):
         config_manager.get_trading_mode.return_value = "invalid_mode"
         with pytest.raises(ValueError, match="Unsupported trading mode: invalid_mode"):

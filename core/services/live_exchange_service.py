@@ -40,7 +40,7 @@ class LiveExchangeService(ExchangeInterface):
             raise MissingEnvironmentVariableError(f"Missing required environment variable: {key}")
         return value
 
-    def _initialize_exchange(self) -> None:
+    def _initialize_exchange(self) -> Any:
         try:
             exchange = getattr(ccxtpro, self.exchange_name)(
                 {
