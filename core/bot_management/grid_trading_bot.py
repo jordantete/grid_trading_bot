@@ -13,6 +13,7 @@ from core.order_handling.execution_strategy.order_execution_strategy_factory imp
 from core.order_handling.fee_calculator import FeeCalculator
 from core.order_handling.order_book import OrderBook
 from core.order_handling.order_manager import OrderManager
+from core.order_handling.order_simulator import OrderSimulator
 from core.order_handling.order_status_tracker import OrderStatusTracker
 from core.services.exceptions import (
     DataFetchError,
@@ -86,6 +87,12 @@ class GridTradingBot:
                 polling_interval=5.0,
             )
 
+            order_simulator = OrderSimulator(
+                order_book=order_book,
+                grid_manager=grid_manager,
+                event_bus=self.event_bus,
+            )
+
             order_manager = OrderManager(
                 grid_manager,
                 order_validator,
@@ -94,6 +101,7 @@ class GridTradingBot:
                 self.event_bus,
                 order_execution_strategy,
                 self.notification_handler,
+                order_simulator,
                 self.trading_mode,
                 trading_pair,
                 strategy_type,
@@ -112,6 +120,7 @@ class GridTradingBot:
                 self.trading_mode,
                 trading_pair,
                 plotter,
+                order_simulator,
             )
 
         except (UnsupportedExchangeError, DataFetchError, UnsupportedTimeframeError) as e:

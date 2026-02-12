@@ -1,13 +1,12 @@
 import logging
 
-import numpy as np
-
 from config.config_manager import ConfigManager
 from core.domain.spacing_type import SpacingType
 from core.domain.strategy_type import StrategyType
 
 from ..order_handling.order import Order, OrderSide
 from .grid_level import GridCycleState, GridLevel
+from .grid_strategy import GridStrategy, HedgedGridStrategy, SimpleGridStrategy
 
 
 class GridManager:
@@ -19,11 +18,23 @@ class GridManager:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.config_manager: ConfigManager = config_manager
         self.strategy_type: StrategyType = strategy_type
+        self.grid_strategy: GridStrategy = self._create_grid_strategy(strategy_type)
         self.price_grids: list[float]
         self.central_price: float
         self.sorted_buy_grids: list[float]
         self.sorted_sell_grids: list[float]
         self.grid_levels: dict[float, GridLevel] = {}
+        self._sorted_prices: list[float] = []
+        self._price_index_map: dict[float, int] = {}
+
+    @staticmethod
+    def _create_grid_strategy(strategy_type: StrategyType) -> GridStrategy:
+        if strategy_type == StrategyType.SIMPLE_GRID:
+            return SimpleGridStrategy()
+        elif strategy_type == StrategyType.HEDGED_GRID:
+            return HedgedGridStrategy()
+        else:
+            raise ValueError(f"Unsupported strategy type: {strategy_type}")
 
     def initialize_grids_and_levels(self) -> None:
         """
@@ -41,30 +52,11 @@ class GridManager:
         - Sell grid levels are initialized with `READY_TO_SELL`.
         """
         self.price_grids, self.central_price = self._calculate_price_grids_and_central_price()
-
-        if self.strategy_type == StrategyType.SIMPLE_GRID:
-            self.sorted_buy_grids = [price_grid for price_grid in self.price_grids if price_grid <= self.central_price]
-            self.sorted_sell_grids = [price_grid for price_grid in self.price_grids if price_grid > self.central_price]
-            self.grid_levels = {
-                price: GridLevel(
-                    price,
-                    GridCycleState.READY_TO_BUY if price <= self.central_price else GridCycleState.READY_TO_SELL,
-                )
-                for price in self.price_grids
-            }
-
-        elif self.strategy_type == StrategyType.HEDGED_GRID:
-            self.sorted_buy_grids = self.price_grids[:-1]  # All except the top grid
-            self.sorted_sell_grids = self.price_grids[1:]  # All except the bottom grid
-            self.grid_levels = {
-                price: GridLevel(
-                    price,
-                    GridCycleState.READY_TO_BUY_OR_SELL
-                    if price != self.price_grids[-1]
-                    else GridCycleState.READY_TO_SELL,
-                )
-                for price in self.price_grids
-            }
+        self.sorted_buy_grids, self.sorted_sell_grids, self.grid_levels = self.grid_strategy.initialize_levels(
+            self.price_grids, self.central_price
+        )
+        self._sorted_prices = sorted(self.price_grids)
+        self._price_index_map = {p: i for i, p in enumerate(self._sorted_prices)}
         self.logger.info(f"Grids and levels initialized. Central price: {self.central_price}")
         self.logger.info(f"Price grids: {self.price_grids}")
         self.logger.info(f"Buy grids: {self.sorted_buy_grids}")
@@ -160,48 +152,17 @@ class GridManager:
         Returns:
             The paired sell grid level, or None if no valid level exists.
         """
-        if self.strategy_type == StrategyType.SIMPLE_GRID:
-            self.logger.info(f"Looking for paired sell level for buy level at {buy_grid_level}")
-            self.logger.info(f"Available sell grids: {self.sorted_sell_grids}")
-
-            for sell_price in self.sorted_sell_grids:
-                sell_level = self.grid_levels[sell_price]
-                self.logger.info(f"Checking sell level {sell_price}, state: {sell_level.state}")
-
-                if sell_level and not self.can_place_order(sell_level, OrderSide.SELL):
-                    self.logger.info(
-                        f"Skipping sell level {sell_price} - cannot place order. State: {sell_level.state}",
-                    )
-                    continue
-
-                if sell_price > buy_grid_level.price:
-                    self.logger.info(f"Paired sell level found at {sell_price} for buy level {buy_grid_level}.")
-                    return sell_level
-
-            self.logger.warning(f"No suitable sell level found above {buy_grid_level}")
-            return None
-
-        elif self.strategy_type == StrategyType.HEDGED_GRID:
-            self.logger.info(f"Available price grids: {self.price_grids}")
-            sorted_prices = sorted(self.price_grids)
-            current_index = sorted_prices.index(buy_grid_level.price)
-            self.logger.info(f"Current index of buy level {buy_grid_level.price}: {current_index}")
-
-            if current_index + 1 < len(sorted_prices):
-                paired_sell_price = sorted_prices[current_index + 1]
-                sell_level = self.grid_levels[paired_sell_price]
-                self.logger.info(
-                    f"Paired sell level for buy level {buy_grid_level.price} is at "
-                    f"{paired_sell_price} (state: {sell_level.state})",
-                )
-                return sell_level
-
+        result = self.grid_strategy.get_paired_sell_level(
+            buy_grid_level,
+            self.grid_levels,
+            self.sorted_sell_grids,
+            self._sorted_prices,
+            self._price_index_map,
+            self.can_place_order,
+        )
+        if result is None:
             self.logger.warning(f"No suitable sell level found for buy grid level {buy_grid_level}")
-            return None
-
-        else:
-            self.logger.error(f"Unsupported strategy type: {self.strategy_type}")
-            return None
+        return result
 
     def get_grid_level_below(self, grid_level: GridLevel) -> GridLevel | None:
         """
@@ -213,11 +174,10 @@ class GridManager:
         Returns:
             The grid level below the given grid level, or None if it doesn't exist.
         """
-        sorted_levels = sorted(self.grid_levels.keys())
-        current_index = sorted_levels.index(grid_level.price)
+        current_index = self._price_index_map[grid_level.price]
 
         if current_index > 0:
-            lower_price = sorted_levels[current_index - 1]
+            lower_price = self._sorted_prices[current_index - 1]
             return self.grid_levels[lower_price]
         return None
 
@@ -232,7 +192,6 @@ class GridManager:
         Args:
             grid_level: The grid level to update.
             order: The Order object representing the pending order.
-            order_side: The side of the order (buy or sell).
         """
         grid_level.add_order(order)
 
@@ -255,47 +214,7 @@ class GridManager:
             grid_level: The grid level where the order was completed.
             order_side: The side of the completed order (buy or sell).
         """
-        if self.strategy_type == StrategyType.SIMPLE_GRID:
-            if order_side == OrderSide.BUY:
-                grid_level.state = GridCycleState.READY_TO_SELL
-                self.logger.info(
-                    f"Buy order completed at grid level {grid_level.price}. Transitioning to READY_TO_SELL.",
-                )
-            elif order_side == OrderSide.SELL:
-                grid_level.state = GridCycleState.READY_TO_BUY
-                self.logger.info(
-                    f"Sell order completed at grid level {grid_level.price}. Transitioning to READY_TO_BUY.",
-                )
-
-        elif self.strategy_type == StrategyType.HEDGED_GRID:
-            if order_side == OrderSide.BUY:
-                grid_level.state = GridCycleState.READY_TO_BUY_OR_SELL
-                self.logger.info(
-                    f"Buy order completed at grid level {grid_level.price}. Transitioning to READY_TO_BUY_OR_SELL.",
-                )
-
-                # Transition the paired buy level to "READY_TO_SELL"
-                if grid_level.paired_sell_level:
-                    grid_level.paired_sell_level.state = GridCycleState.READY_TO_SELL
-                    self.logger.info(
-                        f"Paired sell grid level {grid_level.paired_sell_level.price} transitioned to READY_TO_SELL.",
-                    )
-
-            elif order_side == OrderSide.SELL:
-                grid_level.state = GridCycleState.READY_TO_BUY_OR_SELL
-                self.logger.info(
-                    f"Sell order completed at grid level {grid_level.price}. Transitioning to READY_TO_BUY_OR_SELL.",
-                )
-
-                # Transition the paired buy level to "READY_TO_BUY"
-                if grid_level.paired_buy_level:
-                    grid_level.paired_buy_level.state = GridCycleState.READY_TO_BUY
-                    self.logger.info(
-                        f"Paired buy grid level {grid_level.paired_buy_level.price} transitioned to READY_TO_BUY.",
-                    )
-
-        else:
-            self.logger.error("Unexpected strategy type")
+        self.grid_strategy.complete_order(grid_level, order_side, self.logger)
 
     def can_place_order(
         self,
@@ -312,20 +231,7 @@ class GridManager:
         Returns:
             bool: True if the order can be placed, False otherwise.
         """
-        if self.strategy_type == StrategyType.SIMPLE_GRID:
-            if order_side == OrderSide.BUY:
-                return grid_level.state == GridCycleState.READY_TO_BUY
-            elif order_side == OrderSide.SELL:
-                return grid_level.state == GridCycleState.READY_TO_SELL
-
-        elif self.strategy_type == StrategyType.HEDGED_GRID:
-            if order_side == OrderSide.BUY:
-                return grid_level.state in {GridCycleState.READY_TO_BUY, GridCycleState.READY_TO_BUY_OR_SELL}
-            elif order_side == OrderSide.SELL:
-                return grid_level.state in {GridCycleState.READY_TO_SELL, GridCycleState.READY_TO_BUY_OR_SELL}
-
-        else:
-            return False
+        return self.grid_strategy.can_place_order(grid_level, order_side)
 
     def _extract_grid_config(self) -> tuple[float, float, int, str]:
         """
@@ -349,7 +255,7 @@ class GridManager:
         bottom_range, top_range, num_grids, spacing_type = self._extract_grid_config()
 
         if spacing_type == SpacingType.ARITHMETIC:
-            grids = np.linspace(bottom_range, top_range, num_grids)
+            grids = [bottom_range + i * (top_range - bottom_range) / (num_grids - 1) for i in range(num_grids)]
             central_price = (top_range + bottom_range) / 2
 
         elif spacing_type == SpacingType.GEOMETRIC:

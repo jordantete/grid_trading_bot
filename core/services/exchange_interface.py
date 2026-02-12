@@ -19,7 +19,15 @@ class ExchangeInterface(ABC):
         amount: float,
         price: float | None = None,
     ) -> dict[str, str | float]:
-        """Places an order, returning a dictionary with order details including id and status."""
+        """Places an order, returning a dictionary with order details including id and status.
+
+        Args:
+            pair: Trading pair symbol (e.g., "BTC/USDT").
+            order_side: Order side as expected by CCXT — "buy" or "sell".
+            order_type: Order type as expected by CCXT — "market" or "limit".
+            amount: Order quantity in base currency.
+            price: Limit price in quote currency. Required for limit orders, None for market orders.
+        """
         pass
 
     @abstractmethod

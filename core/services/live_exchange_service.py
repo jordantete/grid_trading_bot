@@ -58,7 +58,7 @@ class LiveExchangeService(ExchangeInterface):
         except AttributeError:
             raise UnsupportedExchangeError(f"The exchange '{self.exchange_name}' is not supported.") from None
 
-    def _enable_sandbox_mode(self, exchange) -> None:
+    def _enable_sandbox_mode(self, exchange: Any) -> None:
         if self.exchange_name == "binance":
             exchange.urls["api"] = "https://testnet.binance.vision/api"
         elif self.exchange_name == "kraken":

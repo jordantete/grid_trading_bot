@@ -213,7 +213,7 @@ class TestGridManager:
     def test_calculate_price_grids_and_central_price_arithmetic(self, grid_manager):
         expected_grids = np.linspace(1000, 2000, 10)
         grids, central_price = grid_manager._calculate_price_grids_and_central_price()
-        np.testing.assert_array_equal(grids, expected_grids)
+        np.testing.assert_array_almost_equal(grids, expected_grids, decimal=10)
         assert central_price == 1500
 
     def test_calculate_price_grids_and_central_price_geometric(self, config_manager):

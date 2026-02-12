@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 import logging
 import math
 
@@ -10,6 +11,7 @@ from core.bot_management.event_bus import EventBus, Events
 from core.grid_management.grid_manager import GridManager
 from core.order_handling.balance_tracker import BalanceTracker
 from core.order_handling.order_manager import OrderManager
+from core.order_handling.order_simulator import OrderSimulator
 from core.services.exchange_interface import ExchangeInterface
 from strategies.plotter import Plotter
 from strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
@@ -19,6 +21,7 @@ from .trading_strategy_interface import TradingStrategyInterface
 
 class GridTradingStrategy(TradingStrategyInterface):
     TICKER_REFRESH_INTERVAL = 3  # in seconds
+    MAX_LIVE_METRICS = 86_400  # 24h at ~1 data point per 3 seconds
 
     def __init__(
         self,
@@ -32,6 +35,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         trading_mode: TradingMode,
         trading_pair: str,
         plotter: Plotter | None = None,
+        order_simulator: OrderSimulator | None = None,
     ):
         super().__init__(config_manager, balance_tracker)
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -39,12 +43,13 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.exchange_service = exchange_service
         self.grid_manager = grid_manager
         self.order_manager = order_manager
+        self.order_simulator = order_simulator
         self.trading_performance_analyzer = trading_performance_analyzer
         self.trading_mode = trading_mode
         self.trading_pair = trading_pair
         self.plotter = plotter
         self.data: pd.DataFrame | None = None
-        self.live_trading_metrics = []
+        self.live_trading_metrics: deque = deque(maxlen=self.MAX_LIVE_METRICS)
         self._running = True
 
     async def _initialize_historical_data(self) -> pd.DataFrame | None:
@@ -225,7 +230,7 @@ class GridTradingStrategy(TradingStrategyInterface):
                 last_price = current_price
                 continue
 
-            await self.order_manager.simulate_order_fills(high_price, low_price, timestamp)
+            await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
 
             if await self._handle_take_profit_stop_loss(current_price):
                 break
@@ -262,7 +267,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             await self.order_manager.initialize_grid_orders(current_price)
             return True
 
-        self.logger.info(
+        self.logger.debug(
             f"Current price {current_price} did not cross trigger price {trigger_price}. Last price: {last_price}.",
         )
         return False
