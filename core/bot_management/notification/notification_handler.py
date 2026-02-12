@@ -1,6 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import logging
+import string
 
 import apprise
 
@@ -37,6 +38,8 @@ class NotificationHandler:
             for url in urls:
                 self.apprise_instance.add(url)
 
+    _formatter = string.Formatter()
+
     def send_notification(
         self,
         content: NotificationType | str,
@@ -47,7 +50,9 @@ class NotificationHandler:
                 title = content.value.title
                 message_template = content.value.message
                 required_placeholders = {
-                    key.strip("{}") for key in message_template.split() if "{" in key and "}" in key
+                    field_name
+                    for _, field_name, _, _ in self._formatter.parse(message_template)
+                    if field_name is not None
                 }
                 missing_placeholders = required_placeholders - kwargs.keys()
 

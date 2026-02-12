@@ -38,7 +38,9 @@ class LiveExchangeService(ExchangeInterface):
         value = os.getenv(key)
         if value is None:
             raise MissingEnvironmentVariableError(f"Missing required environment variable: {key}")
-        return value
+        if not value.strip():
+            raise MissingEnvironmentVariableError(f"Environment variable {key} is empty")
+        return value.strip()
 
     def _initialize_exchange(self) -> Any:
         try:

@@ -82,18 +82,15 @@ class GridManager:
         """
         Calculates the order size for a grid level based on the total balance, total grids, and current price.
 
-        The order size is determined by evenly distributing the total balance across all grid levels and adjusting
-        it to reflect the current price.
-
         Args:
+            total_balance: The total portfolio value in fiat.
             current_price: The current price of the trading pair.
 
         Returns:
             The calculated order size as a float.
         """
         total_grids = len(self.grid_levels)
-        order_size = total_balance / total_grids / current_price
-        return order_size
+        return total_balance / total_grids / current_price
 
     def get_initial_order_quantity(
         self,

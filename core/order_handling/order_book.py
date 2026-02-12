@@ -10,6 +10,7 @@ class OrderBook:
         self.sell_orders: list[Order] = []
         self.non_grid_orders: list[Order] = []  # Orders that are not linked to any grid level
         self.order_to_grid_map: dict[Order, GridLevel] = {}  # Mapping of Order -> GridLevel
+        self._open_orders: set[Order] = set()
 
     def add_order(
         self,
@@ -20,6 +21,9 @@ class OrderBook:
             self.buy_orders.append(order)
         else:
             self.sell_orders.append(order)
+
+        if order.is_open():
+            self._open_orders.add(order)
 
         if grid_level:
             self.order_to_grid_map[order] = grid_level  # Store the grid level associated with this order
@@ -39,7 +43,8 @@ class OrderBook:
         return self.sell_orders
 
     def get_open_orders(self) -> list[Order]:
-        return [order for order in chain(self.buy_orders, self.sell_orders) if order.is_open()]
+        self._open_orders = {order for order in self._open_orders if order.is_open()}
+        return list(self._open_orders)
 
     def get_completed_orders(self) -> list[Order]:
         return [order for order in chain(self.buy_orders, self.sell_orders) if order.is_filled()]
@@ -55,4 +60,6 @@ class OrderBook:
         for order in chain(self.buy_orders, self.sell_orders):
             if order.identifier == order_id:
                 order.status = new_status
+                if not order.is_open():
+                    self._open_orders.discard(order)
                 break

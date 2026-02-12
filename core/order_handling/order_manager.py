@@ -89,8 +89,9 @@ class OrderManager:
                     )
 
                     if order is None:
-                        self.logger.error(f"Failed to place buy order at {price}: No order returned.")
-                        continue
+                        raise OrderExecutionFailedError(
+                            f"Buy order at {price} returned None",
+                        )
 
                     await self.balance_tracker.reserve_funds_for_buy(adjusted_buy_order_quantity * price)
                     self.grid_manager.mark_order_pending(grid_level, order)
@@ -144,8 +145,9 @@ class OrderManager:
                     )
 
                     if order is None:
-                        self.logger.error(f"Failed to place sell order at {price}: No order returned.")
-                        continue
+                        raise OrderExecutionFailedError(
+                            f"Sell order at {price} returned None",
+                        )
 
                     await self.balance_tracker.reserve_funds_for_sell(adjusted_sell_order_quantity)
                     self.grid_manager.mark_order_pending(grid_level, order)
@@ -178,7 +180,7 @@ class OrderManager:
         Args:
             order: The cancelled Order instance.
         """
-        ## TODO: place new limit Order
+        self.logger.warning(f"Order cancelled at grid level — re-placement not yet implemented: {order}")
         await self.notification_handler.async_send_notification(
             NotificationType.ORDER_CANCELLED,
             order_details=str(order),
@@ -198,7 +200,7 @@ class OrderManager:
             grid_level = self.order_book.get_grid_level_for_order(order)
 
             if not grid_level:
-                self.logger.warning(
+                self.logger.error(
                     f"Could not handle Order completion - No grid level found for the given filled order {order}",
                 )
                 return
@@ -471,8 +473,9 @@ class OrderManager:
             )
 
             if not order:
-                self.logger.error(f"Order execution failed: {order}")
-                raise Exception
+                raise OrderExecutionFailedError(
+                    f"{event} order execution returned None at price {current_price}",
+                )
 
             self.order_book.add_order(order)
             await self.notification_handler.async_send_notification(
