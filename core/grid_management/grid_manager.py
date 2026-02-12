@@ -3,8 +3,8 @@ import logging
 import numpy as np
 
 from config.config_manager import ConfigManager
-from strategies.spacing_type import SpacingType
-from strategies.strategy_type import StrategyType
+from core.domain.spacing_type import SpacingType
+from core.domain.strategy_type import StrategyType
 
 from ..order_handling.order import Order, OrderSide
 from .grid_level import GridCycleState, GridLevel

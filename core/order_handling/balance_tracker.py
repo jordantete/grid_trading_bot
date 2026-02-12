@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from config.trading_mode import TradingMode
@@ -43,6 +44,7 @@ class BalanceTracker:
         self.total_fees: float = 0
         self.reserved_fiat: float = 0.0
         self.reserved_crypto: float = 0.0
+        self._lock = asyncio.Lock()
 
         self.event_bus.subscribe(Events.ORDER_FILLED, self._update_balance_on_order_completion)
 
@@ -107,10 +109,11 @@ class BalanceTracker:
             order: The filled `Order` object containing details such as the side
                 (BUY/SELL), filled quantity, and price.
         """
-        if order.side == OrderSide.BUY:
-            self._update_after_buy_order_filled(order.filled, order.price)
-        elif order.side == OrderSide.SELL:
-            self._update_after_sell_order_filled(order.filled, order.price)
+        async with self._lock:
+            if order.side == OrderSide.BUY:
+                self._update_after_buy_order_filled(order.filled, order.price)
+            elif order.side == OrderSide.SELL:
+                self._update_after_sell_order_filled(order.filled, order.price)
 
     def _update_after_buy_order_filled(
         self,
@@ -168,28 +171,29 @@ class BalanceTracker:
         self.total_fees += fee
         self.logger.info(f"Sell order completed: {quantity} crypto sold at {price}.")
 
-    def update_after_initial_purchase(self, initial_order: Order):
+    async def update_after_initial_purchase(self, initial_order: Order):
         """
         Updates balances after an initial crypto purchase.
 
         Args:
             initial_order: The Order object containing details of the completed purchase.
         """
-        if initial_order.status != OrderStatus.CLOSED:
-            raise ValueError(f"Order {initial_order.id} is not CLOSED. Cannot update balances.")
+        async with self._lock:
+            if initial_order.status != OrderStatus.CLOSED:
+                raise ValueError(f"Order {initial_order.id} is not CLOSED. Cannot update balances.")
 
-        total_cost = initial_order.filled * initial_order.average
-        fee = self.fee_calculator.calculate_fee(initial_order.amount * initial_order.average)
+            total_cost = initial_order.filled * initial_order.average
+            fee = self.fee_calculator.calculate_fee(initial_order.amount * initial_order.average)
 
-        self.crypto_balance += initial_order.filled
-        self.balance -= total_cost + fee
-        self.total_fees += fee
-        self.logger.info(
-            f"Updated balances. Crypto balance: {self.crypto_balance}, "
-            f"Fiat balance: {self.balance}, Total fees: {self.total_fees}",
-        )
+            self.crypto_balance += initial_order.filled
+            self.balance -= total_cost + fee
+            self.total_fees += fee
+            self.logger.info(
+                f"Updated balances. Crypto balance: {self.crypto_balance}, "
+                f"Fiat balance: {self.balance}, Total fees: {self.total_fees}",
+            )
 
-    def reserve_funds_for_buy(
+    async def reserve_funds_for_buy(
         self,
         amount: float,
     ) -> None:
@@ -199,14 +203,15 @@ class BalanceTracker:
         Args:
             amount: The amount of fiat to reserve.
         """
-        if self.balance < amount:
-            raise InsufficientBalanceError(f"Insufficient fiat balance to reserve {amount}.")
+        async with self._lock:
+            if self.balance < amount:
+                raise InsufficientBalanceError(f"Insufficient fiat balance to reserve {amount}.")
 
-        self.reserved_fiat += amount
-        self.balance -= amount
-        self.logger.info(f"Reserved {amount} fiat for a buy order. Remaining fiat balance: {self.balance}.")
+            self.reserved_fiat += amount
+            self.balance -= amount
+            self.logger.info(f"Reserved {amount} fiat for a buy order. Remaining fiat balance: {self.balance}.")
 
-    def reserve_funds_for_sell(
+    async def reserve_funds_for_sell(
         self,
         quantity: float,
     ) -> None:
@@ -216,14 +221,15 @@ class BalanceTracker:
         Args:
             quantity: The quantity of crypto to reserve.
         """
-        if self.crypto_balance < quantity:
-            raise InsufficientCryptoBalanceError(f"Insufficient crypto balance to reserve {quantity}.")
+        async with self._lock:
+            if self.crypto_balance < quantity:
+                raise InsufficientCryptoBalanceError(f"Insufficient crypto balance to reserve {quantity}.")
 
-        self.reserved_crypto += quantity
-        self.crypto_balance -= quantity
-        self.logger.info(
-            f"Reserved {quantity} crypto for a sell order. Remaining crypto balance: {self.crypto_balance}.",
-        )
+            self.reserved_crypto += quantity
+            self.crypto_balance -= quantity
+            self.logger.info(
+                f"Reserved {quantity} crypto for a sell order. Remaining crypto balance: {self.crypto_balance}.",
+            )
 
     def get_adjusted_fiat_balance(self) -> float:
         """

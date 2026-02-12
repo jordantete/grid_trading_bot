@@ -101,28 +101,11 @@ class EventBus:
         data: Any,
     ) -> None:
         """
-        Safely invokes an async callback, suppressing and logging any exceptions.
+        Safely invokes an async callback, awaiting it directly so errors propagate
+        to the caller via asyncio.gather(return_exceptions=True).
         """
-        task = asyncio.create_task(self._invoke_callback(callback, data))
-        self._tasks.add(task)
-
-        def remove_task(completed_task: asyncio.Task):
-            if not completed_task.cancelled():
-                self._tasks.discard(completed_task)
-
-        task.add_done_callback(remove_task)
-        self.logger.debug(f"Task created for callback '{callback.__name__}' with data: {data}")
-
-    async def _invoke_callback(
-        self,
-        callback: Callable[[Any], None],
-        data: Any,
-    ) -> None:
-        try:
-            self.logger.info(f"Executing async callback '{callback.__name__}' for event with data: {data}")
-            await callback(data)
-        except Exception as e:
-            self.logger.error(f"Error in async callback '{callback.__name__}': {e}", exc_info=True)
+        self.logger.info(f"Executing async callback '{callback.__name__}' for event with data: {data}")
+        await callback(data)
 
     def _safe_invoke_sync(
         self,

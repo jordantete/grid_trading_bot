@@ -2,8 +2,8 @@ import json
 import logging
 import os
 
-from strategies.spacing_type import SpacingType
-from strategies.strategy_type import StrategyType
+from core.domain.spacing_type import SpacingType
+from core.domain.strategy_type import StrategyType
 
 from .exceptions import ConfigFileNotFoundError, ConfigParseError
 from .trading_mode import TradingMode

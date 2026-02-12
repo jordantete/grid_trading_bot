@@ -35,47 +35,53 @@ class TestBalanceTracker:
         assert balance_tracker.reserved_fiat == 0
         assert balance_tracker.reserved_crypto == 0
 
-    def test_reserve_funds_for_buy(self, setup_balance_tracker):
+    @pytest.mark.asyncio
+    async def test_reserve_funds_for_buy(self, setup_balance_tracker):
         balance_tracker, _, _ = setup_balance_tracker
         balance_tracker.balance = 1000
 
-        balance_tracker.reserve_funds_for_buy(200)
+        await balance_tracker.reserve_funds_for_buy(200)
 
         assert balance_tracker.reserved_fiat == 200
         assert balance_tracker.balance == 800
 
-    def test_reserve_funds_for_buy_insufficient_balance(self, setup_balance_tracker):
+    @pytest.mark.asyncio
+    async def test_reserve_funds_for_buy_insufficient_balance(self, setup_balance_tracker):
         balance_tracker, _, _ = setup_balance_tracker
         with pytest.raises(InsufficientBalanceError):
-            balance_tracker.reserve_funds_for_buy(1200)
+            await balance_tracker.reserve_funds_for_buy(1200)
 
-    def test_reserve_funds_for_sell(self, setup_balance_tracker):
+    @pytest.mark.asyncio
+    async def test_reserve_funds_for_sell(self, setup_balance_tracker):
         balance_tracker, _, _ = setup_balance_tracker
         balance_tracker.crypto_balance = 5
 
-        balance_tracker.reserve_funds_for_sell(2)
+        await balance_tracker.reserve_funds_for_sell(2)
 
         assert balance_tracker.reserved_crypto == 2
         assert balance_tracker.crypto_balance == 3
 
-    def test_reserve_funds_for_sell_insufficient_balance(self, setup_balance_tracker):
+    @pytest.mark.asyncio
+    async def test_reserve_funds_for_sell_insufficient_balance(self, setup_balance_tracker):
         balance_tracker, _, _ = setup_balance_tracker
         with pytest.raises(InsufficientCryptoBalanceError):
-            balance_tracker.reserve_funds_for_sell(10)
+            await balance_tracker.reserve_funds_for_sell(10)
 
-    def test_get_adjusted_fiat_balance(self, setup_balance_tracker):
+    @pytest.mark.asyncio
+    async def test_get_adjusted_fiat_balance(self, setup_balance_tracker):
         balance_tracker, _, _ = setup_balance_tracker
         balance_tracker.balance = 1000
 
-        balance_tracker.reserve_funds_for_buy(200)
+        await balance_tracker.reserve_funds_for_buy(200)
 
         assert balance_tracker.get_adjusted_fiat_balance() == 1000
 
-    def test_get_adjusted_crypto_balance(self, setup_balance_tracker):
+    @pytest.mark.asyncio
+    async def test_get_adjusted_crypto_balance(self, setup_balance_tracker):
         balance_tracker, _, _ = setup_balance_tracker
         balance_tracker.crypto_balance = 5
 
-        balance_tracker.reserve_funds_for_sell(2)
+        await balance_tracker.reserve_funds_for_sell(2)
 
         assert balance_tracker.get_adjusted_crypto_balance() == 5
 

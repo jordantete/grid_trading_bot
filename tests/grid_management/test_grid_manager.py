@@ -4,11 +4,11 @@ import numpy as np
 import pytest
 
 from config.config_manager import ConfigManager
+from core.domain.spacing_type import SpacingType
+from core.domain.strategy_type import StrategyType
 from core.grid_management.grid_level import GridCycleState, GridLevel
 from core.grid_management.grid_manager import GridManager
 from core.order_handling.order import Order, OrderSide
-from strategies.spacing_type import SpacingType
-from strategies.strategy_type import StrategyType
 
 
 class TestGridManager:

@@ -100,9 +100,9 @@ class TestGridTradingStrategy:
 
         # Verify `listen_to_ticker_updates` was called with the correct parameters
         assert actual_call_args[0][0] == strategy.trading_pair, "Expected the trading pair to be passed."
-        assert actual_call_args[0][2] == strategy.TICKER_REFRESH_INTERVAL, (
-            "Expected the correct ticker refresh interval."
-        )
+        assert (
+            actual_call_args[0][2] == strategy.TICKER_REFRESH_INTERVAL
+        ), "Expected the correct ticker refresh interval."
         assert callable(actual_callback), "Expected a callable callback for on_ticker_update."
 
     @pytest.mark.asyncio
@@ -110,7 +110,7 @@ class TestGridTradingStrategy:
         create_strategy, _, _, grid_manager, order_manager, balance_tracker, *_ = setup_strategy
         strategy = create_strategy()
 
-        strategy.data = pd.DataFrame(
+        mock_data = pd.DataFrame(
             {
                 "close": [10000, 10500, 11000],
                 "high": [10100, 10600, 11100],
@@ -119,6 +119,7 @@ class TestGridTradingStrategy:
             },
             index=pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
         )
+        strategy._initialize_historical_data = AsyncMock(return_value=mock_data)
 
         balance_tracker.get_total_balance_value.side_effect = [9000, 9500, 10000, 10000]
         balance_tracker.crypto_balance = 1
@@ -191,7 +192,7 @@ class TestGridTradingStrategy:
         create_strategy, _, _, _, _, _, _, _, _ = setup_strategy
         strategy = create_strategy(TradingMode.LIVE)
 
-        result = strategy._initialize_historical_data()
+        result = await strategy._initialize_historical_data()
         assert result is None
 
     @pytest.mark.asyncio
@@ -208,7 +209,7 @@ class TestGridTradingStrategy:
         strategy = create_strategy(TradingMode.BACKTEST)
         exchange_service.fetch_ohlcv.reset_mock()
 
-        result = strategy._initialize_historical_data()
+        result = await strategy._initialize_historical_data()
 
         assert result is not None
         assert isinstance(result, pd.DataFrame)
@@ -228,7 +229,7 @@ class TestGridTradingStrategy:
         exchange_service.fetch_ohlcv.side_effect = Exception("Failed to fetch data")
 
         with caplog.at_level(logging.ERROR):
-            result = strategy._initialize_historical_data()
+            result = await strategy._initialize_historical_data()
 
         assert result is None
         assert "Failed to initialize data for backtest trading mode" in caplog.text
@@ -437,7 +438,7 @@ class TestGridTradingStrategy:
     async def test_run_backtest_with_no_data(self, setup_strategy):
         create_strategy, _, _, _, _, _, _, _, _ = setup_strategy
         strategy = create_strategy(TradingMode.BACKTEST)
-        strategy.data = None
+        strategy._initialize_historical_data = AsyncMock(return_value=None)
 
         await strategy.run()
 
