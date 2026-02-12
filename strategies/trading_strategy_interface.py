@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
 import logging
 
+from config.config_manager import ConfigManager
+from core.order_handling.balance_tracker import BalanceTracker
+
 
 class TradingStrategyInterface(ABC):
     """
@@ -8,7 +11,7 @@ class TradingStrategyInterface(ABC):
     Requires implementation of key methods for any concrete strategy.
     """
 
-    def __init__(self, config_manager, balance_tracker):
+    def __init__(self, config_manager: ConfigManager, balance_tracker: BalanceTracker):
         """
         Initializes the strategy with the given configuration manager and balance tracker.
 
@@ -21,7 +24,7 @@ class TradingStrategyInterface(ABC):
         self.balance_tracker = balance_tracker
 
     @abstractmethod
-    def initialize_strategy(self):
+    def initialize_strategy(self) -> None:
         """
         Method to initialize the strategy with specific settings (grids, limits, etc.).
         Must be implemented by any subclass.
@@ -29,7 +32,7 @@ class TradingStrategyInterface(ABC):
         pass
 
     @abstractmethod
-    async def run(self):
+    async def run(self) -> None:
         """
         Run the strategy with historical or live data.
         Must be implemented by any subclass.
@@ -37,7 +40,7 @@ class TradingStrategyInterface(ABC):
         pass
 
     @abstractmethod
-    def plot_results(self):
+    def plot_results(self) -> None:
         """
         Plots the strategy performance after simulation.
         Must be implemented by any subclass.

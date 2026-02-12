@@ -39,14 +39,30 @@ class BalanceTracker:
         self.base_currency: str = base_currency
         self.quote_currency: str = quote_currency
 
-        self.balance: float = 0.0
-        self.crypto_balance: float = 0.0
+        self._balance: float = 0.0
+        self._crypto_balance: float = 0.0
         self.total_fees: float = 0
-        self.reserved_fiat: float = 0.0
-        self.reserved_crypto: float = 0.0
+        self._reserved_fiat: float = 0.0
+        self._reserved_crypto: float = 0.0
         self._lock = asyncio.Lock()
 
         self.event_bus.subscribe(Events.ORDER_FILLED, self._update_balance_on_order_completion)
+
+    @property
+    def balance(self) -> float:
+        return self._balance
+
+    @property
+    def crypto_balance(self) -> float:
+        return self._crypto_balance
+
+    @property
+    def reserved_fiat(self) -> float:
+        return self._reserved_fiat
+
+    @property
+    def reserved_crypto(self) -> float:
+        return self._reserved_crypto
 
     async def setup_balances(
         self,
@@ -66,10 +82,10 @@ class BalanceTracker:
             exchange_service: The exchange instance (required for live trading).
         """
         if self.trading_mode == TradingMode.BACKTEST or self.trading_mode == TradingMode.PAPER_TRADING:
-            self.balance = initial_balance
-            self.crypto_balance = initial_crypto_balance
+            self._balance = initial_balance
+            self._crypto_balance = initial_crypto_balance
         elif self.trading_mode == TradingMode.LIVE:
-            self.balance, self.crypto_balance = await self._fetch_live_balances(exchange_service)
+            self._balance, self._crypto_balance = await self._fetch_live_balances(exchange_service)
 
     async def _fetch_live_balances(
         self,
@@ -134,13 +150,13 @@ class BalanceTracker:
         fee = self.fee_calculator.calculate_fee(quantity * price)
         total_cost = quantity * price + fee
 
-        self.reserved_fiat -= total_cost
-        if self.reserved_fiat < 0:
-            overflow = -self.reserved_fiat
-            self.balance -= overflow
-            self.reserved_fiat = 0
+        self._reserved_fiat -= total_cost
+        if self._reserved_fiat < 0:
+            overflow = -self._reserved_fiat
+            self._balance -= overflow
+            self._reserved_fiat = 0
 
-        self.crypto_balance += quantity
+        self._crypto_balance += quantity
         self.total_fees += fee
         self.logger.info(f"Buy order completed: {quantity} crypto purchased at {price}.")
 
@@ -162,14 +178,14 @@ class BalanceTracker:
         """
         fee = self.fee_calculator.calculate_fee(quantity * price)
         sale_proceeds = quantity * price - fee
-        self.reserved_crypto -= quantity
+        self._reserved_crypto -= quantity
 
-        if self.reserved_crypto < 0:
-            overflow = -self.reserved_crypto
-            self.crypto_balance += overflow
-            self.reserved_crypto = 0
+        if self._reserved_crypto < 0:
+            overflow = -self._reserved_crypto
+            self._crypto_balance += overflow
+            self._reserved_crypto = 0
 
-        self.balance += sale_proceeds
+        self._balance += sale_proceeds
         self.total_fees += fee
         self.logger.info(f"Sell order completed: {quantity} crypto sold at {price}.")
 
@@ -187,12 +203,12 @@ class BalanceTracker:
             total_cost = initial_order.filled * initial_order.average
             fee = self.fee_calculator.calculate_fee(initial_order.amount * initial_order.average)
 
-            self.crypto_balance += initial_order.filled
-            self.balance -= total_cost + fee
+            self._crypto_balance += initial_order.filled
+            self._balance -= total_cost + fee
             self.total_fees += fee
             self.logger.info(
-                f"Updated balances. Crypto balance: {self.crypto_balance}, "
-                f"Fiat balance: {self.balance}, Total fees: {self.total_fees}",
+                f"Updated balances. Crypto balance: {self._crypto_balance}, "
+                f"Fiat balance: {self._balance}, Total fees: {self.total_fees}",
             )
 
     async def reserve_funds_for_buy(
@@ -206,12 +222,12 @@ class BalanceTracker:
             amount: The amount of fiat to reserve.
         """
         async with self._lock:
-            if self.balance < amount:
+            if self._balance < amount:
                 raise InsufficientBalanceError(f"Insufficient fiat balance to reserve {amount}.")
 
-            self.reserved_fiat += amount
-            self.balance -= amount
-            self.logger.info(f"Reserved {amount} fiat for a buy order. Remaining fiat balance: {self.balance}.")
+            self._reserved_fiat += amount
+            self._balance -= amount
+            self.logger.info(f"Reserved {amount} fiat for a buy order. Remaining fiat balance: {self._balance}.")
 
     async def reserve_funds_for_sell(
         self,
@@ -224,13 +240,13 @@ class BalanceTracker:
             quantity: The quantity of crypto to reserve.
         """
         async with self._lock:
-            if self.crypto_balance < quantity:
+            if self._crypto_balance < quantity:
                 raise InsufficientCryptoBalanceError(f"Insufficient crypto balance to reserve {quantity}.")
 
-            self.reserved_crypto += quantity
-            self.crypto_balance -= quantity
+            self._reserved_crypto += quantity
+            self._crypto_balance -= quantity
             self.logger.info(
-                f"Reserved {quantity} crypto for a sell order. Remaining crypto balance: {self.crypto_balance}.",
+                f"Reserved {quantity} crypto for a sell order. Remaining crypto balance: {self._crypto_balance}.",
             )
 
     def get_adjusted_fiat_balance(self) -> float:
@@ -240,7 +256,7 @@ class BalanceTracker:
         Returns:
             float: The total fiat balance including reserved funds.
         """
-        return self.balance + self.reserved_fiat
+        return self._balance + self._reserved_fiat
 
     def get_adjusted_crypto_balance(self) -> float:
         """
@@ -249,7 +265,7 @@ class BalanceTracker:
         Returns:
             float: The total crypto balance including reserved funds.
         """
-        return self.crypto_balance + self.reserved_crypto
+        return self._crypto_balance + self._reserved_crypto
 
     def get_total_balance_value(self, price: float) -> float:
         """

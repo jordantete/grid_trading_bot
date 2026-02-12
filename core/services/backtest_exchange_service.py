@@ -155,13 +155,16 @@ class BacktestExchangeService(ExchangeInterface):
         delay=5,
         **kwargs,
     ):
+        # time.sleep is acceptable here because this method runs inside
+        # asyncio.to_thread(), so it blocks a worker thread, not the event loop.
         for attempt in range(retries):
             try:
                 return method(*args, **kwargs)
             except Exception as e:
                 if attempt < retries - 1:
-                    self.logger.warning(f"Attempt {attempt + 1} failed. Retrying in {delay} seconds...")
-                    time.sleep(delay)
+                    backoff_delay = delay * (attempt + 1)
+                    self.logger.warning(f"Attempt {attempt + 1} failed. Retrying in {backoff_delay} seconds...")
+                    time.sleep(backoff_delay)
                 else:
                     self.logger.error(f"Failed after {retries} attempts: {e}")
                     raise DataFetchError(f"Failed to fetch data after {retries} attempts: {e!s}") from e

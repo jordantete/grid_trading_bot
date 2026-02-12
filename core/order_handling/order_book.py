@@ -43,8 +43,10 @@ class OrderBook:
         return self.sell_orders
 
     def get_open_orders(self) -> list[Order]:
-        self._open_orders = {order for order in self._open_orders if order.is_open()}
         return list(self._open_orders)
+
+    def remove_open_order(self, order: Order) -> None:
+        self._open_orders.discard(order)
 
     def get_completed_orders(self) -> list[Order]:
         return [order for order in chain(self.buy_orders, self.sell_orders) if order.is_filled()]

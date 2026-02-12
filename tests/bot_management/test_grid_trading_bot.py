@@ -8,6 +8,7 @@ from config.trading_mode import TradingMode
 from core.bot_management.event_bus import EventBus
 from core.bot_management.grid_trading_bot import GridTradingBot
 from core.bot_management.notification.notification_handler import NotificationHandler
+from core.domain.strategy_type import StrategyType
 from core.services.exceptions import (
     DataFetchError,
     UnsupportedExchangeError,
@@ -32,6 +33,7 @@ class TestGridTradingBot:
         mock_config.get_top_range.return_value = 2000
         mock_config.get_bottom_range.return_value = 1500
         mock_config.get_num_grids.return_value = 10
+        mock_config.get_strategy_type.return_value = StrategyType.SIMPLE_GRID
         return mock_config
 
     @pytest.fixture

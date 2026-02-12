@@ -11,6 +11,7 @@ from core.bot_management.event_bus import EventBus
 from core.grid_management.grid_manager import GridManager
 from core.order_handling.balance_tracker import BalanceTracker
 from core.order_handling.order_manager import OrderManager
+from core.order_handling.order_simulator import OrderSimulator
 from core.services.exchange_interface import ExchangeInterface
 from strategies.grid_trading_strategy import GridTradingStrategy
 from strategies.plotter import Plotter
@@ -28,6 +29,8 @@ class TestGridTradingStrategy:
         trading_performance_analyzer = Mock(spec=TradingPerformanceAnalyzer)
         plotter = Mock(spec=Plotter)
         event_bus = Mock(spec=EventBus)
+        order_simulator = Mock(spec=OrderSimulator)
+        order_simulator.simulate_order_fills = AsyncMock()
 
         config_manager.get_timeframe.return_value = "1d"
         config_manager.is_take_profit_enabled.return_value = True
@@ -47,6 +50,7 @@ class TestGridTradingStrategy:
                 trading_mode=trading_mode,
                 trading_pair="BTC/USDT",
                 plotter=plotter,
+                order_simulator=order_simulator,
             )
 
         return (
@@ -124,7 +128,6 @@ class TestGridTradingStrategy:
         balance_tracker.get_total_balance_value.side_effect = [9000, 9500, 10000, 10000]
         balance_tracker.crypto_balance = 1
         grid_manager.get_trigger_price.return_value = 8900
-        order_manager.simulate_order_fills = AsyncMock()
         order_manager.initialize_grid_orders = AsyncMock()
         strategy._initialize_grid_orders_once = AsyncMock(side_effect=[False, True, True])
         strategy._handle_take_profit_stop_loss = AsyncMock(side_effect=[False, False, False])

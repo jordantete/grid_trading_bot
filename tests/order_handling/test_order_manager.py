@@ -3,11 +3,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from config.trading_mode import TradingMode
-from core.bot_management.event_bus import EventBus, Events
+from core.bot_management.event_bus import EventBus
 from core.bot_management.notification.notification_content import NotificationType
 from core.domain.strategy_type import StrategyType
 from core.order_handling.exceptions import OrderExecutionFailedError
-from core.order_handling.order import OrderSide, OrderStatus, OrderType
+from core.order_handling.order import OrderSide, OrderType
 from core.order_handling.order_manager import OrderManager
 
 
@@ -22,6 +22,8 @@ class TestOrderManager:
         order_execution_strategy = Mock()
         notification_handler = Mock()
         notification_handler.async_send_notification = AsyncMock()
+        order_simulator = Mock()
+        order_simulator._simulate_fill = AsyncMock()
 
         manager = OrderManager(
             grid_manager=grid_manager,
@@ -31,6 +33,7 @@ class TestOrderManager:
             event_bus=event_bus,
             order_execution_strategy=order_execution_strategy,
             notification_handler=notification_handler,
+            order_simulator=order_simulator,
             trading_mode=TradingMode.LIVE,
             trading_pair="BTC/USD",
             strategy_type=StrategyType.HEDGED_GRID,
@@ -109,11 +112,11 @@ class TestOrderManager:
         mock_grid_level = Mock(price=50000)
         grid_manager.get_paired_sell_level.return_value = Mock()
         grid_manager.can_place_order.return_value = True
-        manager._place_sell_order = AsyncMock()
+        manager._place_order = AsyncMock()
 
         await manager._handle_order_completion(mock_order, mock_grid_level)
 
-        manager._place_sell_order.assert_awaited_once()
+        manager._place_order.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_handle_order_completion_sell(self, setup_order_manager):
@@ -121,11 +124,11 @@ class TestOrderManager:
         mock_order = Mock(side=OrderSide.SELL, filled=0.01)
         mock_grid_level = Mock(price=50000)
         manager._get_or_create_paired_buy_level = Mock(return_value=Mock())
-        manager._place_buy_order = AsyncMock()
+        manager._place_order = AsyncMock()
 
         await manager._handle_order_completion(mock_order, mock_grid_level)
 
-        manager._place_buy_order.assert_awaited_once()
+        manager._place_order.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_perform_initial_purchase(self, setup_order_manager):
@@ -237,28 +240,7 @@ class TestOrderManager:
         grid_manager.get_grid_level_below.assert_called_once_with(mock_sell_grid_level)
 
     @pytest.mark.asyncio
-    async def test_simulate_order_fills_partial_fill(self, setup_order_manager):
-        manager, grid_manager, _, _, order_book, _, _, _ = setup_order_manager
-        mock_order = Mock(
-            side=OrderSide.BUY,
-            price=48000,
-            amount=0.02,
-            filled=0.01,
-            remaining=0.01,
-            status=OrderStatus.OPEN,
-        )
-        order_book.get_open_orders.return_value = [mock_order]
-        grid_manager.sorted_buy_grids = [48000]
-        grid_manager.sorted_sell_grids = []
-
-        await manager.simulate_order_fills(49000, 47000, 1234567890)
-
-        assert mock_order.filled == 0.02
-        assert mock_order.remaining == 0.0
-        assert mock_order.status == OrderStatus.CLOSED
-
-    @pytest.mark.asyncio
-    async def test_place_sell_order_failure(self, setup_order_manager):
+    async def test_place_order_sell_failure(self, setup_order_manager):
         manager, grid_manager, order_validator, balance_tracker, order_book, _, order_execution_strategy, _ = (
             setup_order_manager
         )
@@ -267,9 +249,9 @@ class TestOrderManager:
         quantity = 0.01
 
         order_validator.adjust_and_validate_sell_quantity.return_value = quantity
-        order_execution_strategy.execute_limit_order = AsyncMock(return_value=None)  # Make it an AsyncMock
+        order_execution_strategy.execute_limit_order = AsyncMock(return_value=None)
 
-        await manager._place_sell_order(buy_grid_level, sell_grid_level, quantity)
+        await manager._place_order(OrderSide.SELL, buy_grid_level, sell_grid_level, quantity)
 
         grid_manager.pair_grid_levels.assert_not_called()
         balance_tracker.reserve_funds_for_sell.assert_not_called()
@@ -277,7 +259,7 @@ class TestOrderManager:
         order_book.add_order.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_place_buy_order_failure(self, setup_order_manager):
+    async def test_place_order_buy_failure(self, setup_order_manager):
         manager, grid_manager, order_validator, balance_tracker, order_book, _, order_execution_strategy, _ = (
             setup_order_manager
         )
@@ -286,9 +268,9 @@ class TestOrderManager:
         quantity = 0.01
 
         order_validator.adjust_and_validate_buy_quantity.return_value = quantity
-        order_execution_strategy.execute_limit_order = AsyncMock(return_value=None)  # Make it an AsyncMock
+        order_execution_strategy.execute_limit_order = AsyncMock(return_value=None)
 
-        await manager._place_buy_order(sell_grid_level, buy_grid_level, quantity)
+        await manager._place_order(OrderSide.BUY, sell_grid_level, buy_grid_level, quantity)
 
         grid_manager.pair_grid_levels.assert_not_called()
         balance_tracker.reserve_funds_for_buy.assert_not_called()
@@ -374,22 +356,3 @@ class TestOrderManager:
             NotificationType.ORDER_CANCELLED,
             order_details=str(mock_order),
         )
-
-    @pytest.mark.asyncio
-    async def test_simulate_fill(self, setup_order_manager):
-        manager, _, _, _, _, event_bus, _, _ = setup_order_manager
-        mock_order = Mock(
-            amount=1.0,
-            side=OrderSide.BUY,
-            price=50000,
-        )
-        timestamp = 1234567890
-        event_bus.publish = AsyncMock()
-
-        await manager._simulate_fill(mock_order, timestamp)
-
-        assert mock_order.filled == mock_order.amount
-        assert mock_order.remaining == 0.0
-        assert mock_order.status == OrderStatus.CLOSED
-        assert mock_order.last_trade_timestamp == timestamp
-        event_bus.publish.assert_awaited_with(Events.ORDER_FILLED, mock_order)
