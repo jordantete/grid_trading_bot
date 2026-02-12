@@ -49,6 +49,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.trading_pair = trading_pair
         self.plotter = plotter
         self.data: pd.DataFrame | None = None
+        self.close_prices = None
         self.live_trading_metrics: deque = deque(maxlen=self.MAX_LIVE_METRICS)
         self._running = True
 

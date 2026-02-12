@@ -13,6 +13,11 @@ from grid_trading_bot.core.bot_management.notification.notification_handler impo
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CSV_DATA_FILE = str(PROJECT_ROOT / "data" / "SOL_USDT" / "2024" / "1m.csv")
 
+pytestmark = pytest.mark.skipif(
+    not Path(CSV_DATA_FILE).exists(),
+    reason=f"Integration test data not available: {CSV_DATA_FILE}",
+)
+
 # Short period for fast tests (~2880 candles at 1m)
 # CSV data ranges from 2024-01-01 to 2024-10-21, SOL/USDT prices ~150-173 in Aug 2024
 TEST_START_DATE = "2024-08-01T00:00:00Z"
