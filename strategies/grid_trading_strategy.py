@@ -1,7 +1,7 @@
 import asyncio
 import logging
+import math
 
-import numpy as np
 import pandas as pd
 
 from config.config_manager import ConfigManager
@@ -197,7 +197,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             return
 
         self.logger.info("Starting backtest simulation")
-        self.data["account_value"] = np.nan
+        self.data["account_value"] = math.nan
         self.close_prices = self.data["close"].values
         high_prices = self.data["high"].values
         low_prices = self.data["low"].values
