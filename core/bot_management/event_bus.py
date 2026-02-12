@@ -46,9 +46,12 @@ class EventBus:
 
         self.subscribers[event_type].append(callback)
         callback_name = getattr(callback, "__name__", str(callback))
-        caller_frame = inspect.stack()[1]
-        caller_name = f"{caller_frame.function} (from {caller_frame.filename}:{caller_frame.lineno})"
-        self.logger.info(f"Callback '{callback_name}' subscribed to event: {event_type} by {caller_name}")
+        if self.logger.isEnabledFor(logging.DEBUG):
+            caller_frame = inspect.stack()[1]
+            caller_name = f"{caller_frame.function} (from {caller_frame.filename}:{caller_frame.lineno})"
+            self.logger.debug(f"Callback '{callback_name}' subscribed to event: {event_type} by {caller_name}")
+        else:
+            self.logger.info(f"Callback '{callback_name}' subscribed to event: {event_type}")
 
     async def publish(
         self,

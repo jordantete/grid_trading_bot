@@ -1,5 +1,4 @@
 import asyncio
-import cProfile
 import logging
 import os
 from typing import Any
@@ -27,12 +26,13 @@ def initialize_config(config_path: str) -> ConfigManager:
         return ConfigManager(config_path, ConfigValidator())
 
     except ConfigError as e:
-        logging.error(f"An error occured during the initialization of ConfigManager {e}")
+        logging.error(f"An error occurred during the initialization of ConfigManager {e}")
         exit(1)
 
 
 def initialize_notification_handler(config_manager: ConfigManager, event_bus: EventBus) -> NotificationHandler:
-    notification_urls = os.getenv("APPRISE_NOTIFICATION_URLS", "").split(",")
+    notification_urls_str = os.getenv("APPRISE_NOTIFICATION_URLS", "")
+    notification_urls = [url.strip() for url in notification_urls_str.split(",") if url.strip()]
     trading_mode = config_manager.get_trading_mode()
     return NotificationHandler(event_bus, notification_urls, trading_mode)
 
@@ -60,6 +60,8 @@ async def run_bot(
     health_check = HealthCheck(bot, notification_handler, event_bus)
 
     if profile:
+        import cProfile
+
         cProfile.runctx("asyncio.run(bot.run())", globals(), locals(), "profile_results.prof")
         return None
 

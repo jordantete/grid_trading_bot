@@ -30,7 +30,7 @@ TIMEFRAME_MAPPINGS = {
     "1M": 30 * 24 * 60 * 60 * 1000,  # 1 month (approximated as 30 days)
 }
 
-RESSOURCE_THRESHOLDS = {
+RESOURCE_THRESHOLDS = {
     "cpu": 90,
     "bot_cpu": 80,
     "memory": 80,

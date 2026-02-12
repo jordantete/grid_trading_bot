@@ -1,3 +1,5 @@
+from itertools import chain
+
 from ..grid_management.grid_level import GridLevel
 from .order import Order, OrderSide, OrderStatus
 
@@ -37,10 +39,10 @@ class OrderBook:
         return self.sell_orders
 
     def get_open_orders(self) -> list[Order]:
-        return [order for order in self.buy_orders + self.sell_orders if order.is_open()]
+        return [order for order in chain(self.buy_orders, self.sell_orders) if order.is_open()]
 
     def get_completed_orders(self) -> list[Order]:
-        return [order for order in self.buy_orders + self.sell_orders if order.is_filled()]
+        return [order for order in chain(self.buy_orders, self.sell_orders) if order.is_filled()]
 
     def get_grid_level_for_order(self, order: Order) -> GridLevel | None:
         return self.order_to_grid_map.get(order)
@@ -50,7 +52,7 @@ class OrderBook:
         order_id: str,
         new_status: OrderStatus,
     ) -> None:
-        for order in self.buy_orders + self.sell_orders:
+        for order in chain(self.buy_orders, self.sell_orders):
             if order.identifier == order_id:
                 order.status = new_status
                 break

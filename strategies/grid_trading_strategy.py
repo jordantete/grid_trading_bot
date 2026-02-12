@@ -236,10 +236,10 @@ class GridTradingStrategy(TradingStrategyInterface):
         last_price: float | None = None,
     ) -> bool:
         """
-        Extracts configuration values for timeframe, start date, and end date.
+        Performs the initial purchase and grid order setup when the trigger price is first crossed.
 
         Returns:
-            tuple: A tuple containing the timeframe, start date, and end date as strings.
+            bool: True if grid orders have been initialized, False otherwise.
         """
         if grid_orders_initialized:
             return True
@@ -250,7 +250,7 @@ class GridTradingStrategy(TradingStrategyInterface):
 
         if last_price <= trigger_price <= current_price or last_price == trigger_price:
             self.logger.info(
-                f"Current price {current_price} reached trigger price {trigger_price}. Will perform initial purhcase",
+                f"Current price {current_price} reached trigger price {trigger_price}. Will perform initial purchase",
             )
             await self.order_manager.perform_initial_purchase(current_price)
             self.logger.info("Initial purchase done, will initialize grid orders")
