@@ -27,7 +27,6 @@ class EventBus:
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.subscribers: dict[str, list[Callable[[Any], None]]] = {}
-        self._tasks: set[asyncio.Task] = set()
 
     def subscribe(
         self,
@@ -122,11 +121,8 @@ class EventBus:
 
     async def shutdown(self):
         """
-        Cancels all active tasks tracked by the EventBus for graceful shutdown.
+        Gracefully shuts down the EventBus and clears all subscribers.
         """
         self.logger.info("Shutting down EventBus...")
-        for task in self._tasks:
-            task.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
+        self.subscribers.clear()
         self.logger.info("EventBus shutdown complete.")
