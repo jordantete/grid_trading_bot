@@ -11,9 +11,9 @@ dependencies = [
     "numpy==2.1.3",
     "plotly==6.5.2",
     "tabulate==0.9.0",
-    "aiohttp==3.10.11",
+    "aiohttp==3.13.3",
     "apprise==1.9.7",
-    "ccxt==4.4.82",
+    "ccxt==4.5.37",
     "configparser==7.2.0",
     "psutil==7.2.2",
     "python-dotenv==1.2.1"
@@ -41,9 +41,12 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 log_cli = true
 log_cli_level = "INFO"
+addopts = "-m 'not sandbox'"
 markers = [
     "asyncio: mark a test as an async test",
-    "timeout: mark a test with a timeout"
+    "timeout: mark a test with a timeout",
+    "integration: end-to-end integration tests (backtest)",
+    "sandbox: tests requiring network access to exchange (skipped by default)",
 ]
 
 [tool.coverage.run]
