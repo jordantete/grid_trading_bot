@@ -1,0 +1,10 @@
+{
+  "num_buy_trades": 6,
+  "num_sell_trades": 3,
+  "roi": "-2.26%",
+  "total_fees": "0.22",
+  "final_balance_fiat": "146.61",
+  "grid_trading_gains": "-109.20",
+  "max_drawdown": "6.64%",
+  "num_orders": 9
+}

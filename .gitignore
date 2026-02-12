@@ -38,6 +38,9 @@ grafana-data/
 # `uv` Package Manager
 .uv/
 
+# Claude Code
+.claude/
+
 # Project specific
 /data/
 logs/*
