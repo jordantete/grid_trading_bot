@@ -136,7 +136,8 @@ class BalanceTracker:
 
         self.reserved_fiat -= total_cost
         if self.reserved_fiat < 0:
-            self.balance += self.reserved_fiat  # Adjust with excess reserved fiat
+            overflow = -self.reserved_fiat
+            self.balance -= overflow
             self.reserved_fiat = 0
 
         self.crypto_balance += quantity
@@ -164,7 +165,8 @@ class BalanceTracker:
         self.reserved_crypto -= quantity
 
         if self.reserved_crypto < 0:
-            self.crypto_balance += abs(self.reserved_crypto)  # Adjust with excess reserved crypto
+            overflow = -self.reserved_crypto
+            self.crypto_balance += overflow
             self.reserved_crypto = 0
 
         self.balance += sale_proceeds

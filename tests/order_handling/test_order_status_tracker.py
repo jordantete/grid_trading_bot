@@ -31,12 +31,12 @@ class TestOrderStatusTracker:
 
         order_book.get_open_orders.return_value = [mock_order]
         order_execution_strategy.get_order = AsyncMock(return_value=mock_remote_order)
-        tracker._handle_order_status_change = Mock()
+        tracker._handle_order_status_change = AsyncMock()
 
         await tracker._process_open_orders()
 
         order_execution_strategy.get_order.assert_awaited_once_with("order_1", "BTC/USDT")
-        tracker._handle_order_status_change.assert_called_once_with(mock_remote_order)
+        tracker._handle_order_status_change.assert_awaited_once_with(mock_remote_order)
 
     @pytest.mark.asyncio
     async def test_process_open_orders_failure(self, setup_tracker):
@@ -55,35 +55,40 @@ class TestOrderStatusTracker:
                 exc_info=True,
             )
 
-    def test_handle_order_status_change_closed(self, setup_tracker):
+    @pytest.mark.asyncio
+    async def test_handle_order_status_change_closed(self, setup_tracker):
         tracker, order_book, _, event_bus = setup_tracker
         mock_remote_order = Mock(identifier="order_1", status=OrderStatus.CLOSED)
+        event_bus.publish = AsyncMock()
 
         with patch.object(tracker.logger, "info") as mock_logger_info:
-            tracker._handle_order_status_change(mock_remote_order)
+            await tracker._handle_order_status_change(mock_remote_order)
 
             order_book.update_order_status.assert_called_once_with("order_1", OrderStatus.CLOSED)
-            event_bus.publish_sync.assert_called_once_with(Events.ORDER_FILLED, mock_remote_order)
+            event_bus.publish.assert_awaited_once_with(Events.ORDER_FILLED, mock_remote_order)
             mock_logger_info.assert_called_once_with("Order order_1 filled.")
 
-    def test_handle_order_status_change_canceled(self, setup_tracker):
+    @pytest.mark.asyncio
+    async def test_handle_order_status_change_canceled(self, setup_tracker):
         tracker, order_book, _, event_bus = setup_tracker
         mock_remote_order = Mock(identifier="order_1", status=OrderStatus.CANCELED)
+        event_bus.publish = AsyncMock()
 
         with patch.object(tracker.logger, "warning") as mock_logger_warning:
-            tracker._handle_order_status_change(mock_remote_order)
+            await tracker._handle_order_status_change(mock_remote_order)
 
             order_book.update_order_status.assert_called_once_with("order_1", OrderStatus.CANCELED)
-            event_bus.publish_sync.assert_called_once_with(Events.ORDER_CANCELLED, mock_remote_order)
+            event_bus.publish.assert_awaited_once_with(Events.ORDER_CANCELLED, mock_remote_order)
 
             mock_logger_warning.assert_any_call("Order order_1 was canceled.")
 
-    def test_handle_order_status_change_unknown_status(self, setup_tracker):
+    @pytest.mark.asyncio
+    async def test_handle_order_status_change_unknown_status(self, setup_tracker):
         tracker, _, _, _ = setup_tracker
         mock_remote_order = Mock(identifier="order_1", status=OrderStatus.UNKNOWN)
 
         with patch.object(tracker.logger, "error") as mock_logger_error:
-            tracker._handle_order_status_change(mock_remote_order)
+            await tracker._handle_order_status_change(mock_remote_order)
 
             mock_logger_error.assert_any_call(
                 f"Missing 'status' in remote order object: {mock_remote_order}",
@@ -95,33 +100,36 @@ class TestOrderStatusTracker:
             )
             assert mock_logger_error.call_count == 2
 
-    def test_handle_order_status_change_open(self, setup_tracker):
+    @pytest.mark.asyncio
+    async def test_handle_order_status_change_open(self, setup_tracker):
         tracker, _, _, _ = setup_tracker
         mock_remote_order = Mock(identifier="order_1", status=OrderStatus.OPEN, filled=0)
 
         with patch.object(tracker.logger, "info") as mock_logger_info:
-            tracker._handle_order_status_change(mock_remote_order)
+            await tracker._handle_order_status_change(mock_remote_order)
 
             mock_logger_info.assert_called_once_with(f"Order {mock_remote_order} is still open. No fills yet.")
 
-    def test_handle_order_status_change_partially_filled(self, setup_tracker):
+    @pytest.mark.asyncio
+    async def test_handle_order_status_change_partially_filled(self, setup_tracker):
         tracker, _, _, _ = setup_tracker
         mock_remote_order = Mock(identifier="order_1", status=OrderStatus.OPEN, filled=0.5, remaining=0.5)
 
         with patch.object(tracker.logger, "info") as mock_logger_info:
-            tracker._handle_order_status_change(mock_remote_order)
+            await tracker._handle_order_status_change(mock_remote_order)
 
             mock_logger_info.assert_called_once_with(
                 f"Order {mock_remote_order} partially filled. Filled: {mock_remote_order.filled}, "
                 f"Remaining: {mock_remote_order.remaining}.",
             )
 
-    def test_handle_order_status_change_unhandled_status(self, setup_tracker):
+    @pytest.mark.asyncio
+    async def test_handle_order_status_change_unhandled_status(self, setup_tracker):
         tracker, _, _, _ = setup_tracker
         mock_remote_order = Mock(identifier="order_1", status="unexpected_status")
 
         with patch.object(tracker.logger, "warning") as mock_logger_warning:
-            tracker._handle_order_status_change(mock_remote_order)
+            await tracker._handle_order_status_change(mock_remote_order)
 
             mock_logger_warning.assert_called_once_with("Unhandled order status 'unexpected_status' for order order_1.")
 
@@ -224,7 +232,7 @@ class TestOrderStatusTracker:
 
         order_book.get_open_orders.return_value = [mock_order1, mock_order2]
         order_execution_strategy.get_order = AsyncMock(side_effect=[mock_remote_order1, mock_remote_order2])
-        tracker._handle_order_status_change = Mock()
+        tracker._handle_order_status_change = AsyncMock()
 
         await tracker._process_open_orders()
 

@@ -114,8 +114,8 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
             order_result = await self._parse_order_result(raw_order)
             return order_result
 
-        except DataFetchError as e:
-            raise e
+        except DataFetchError:
+            raise
 
         except Exception as e:
             raise DataFetchError(f"Unexpected error during order status retrieval: {e!s}") from e
@@ -132,12 +132,20 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
 
         Returns:
             An Order object with standardized fields.
+
+        Raises:
+            DataFetchError: If required fields are missing from the exchange response.
         """
+        required_fields = ("id", "status", "type", "side")
+        missing = [f for f in required_fields if not raw_order_result.get(f)]
+        if missing:
+            raise DataFetchError(f"Exchange response missing required fields: {', '.join(missing)}")
+
         return Order(
-            identifier=raw_order_result.get("id", ""),
-            status=OrderStatus(raw_order_result.get("status", "unknown").lower()),
-            order_type=OrderType(raw_order_result.get("type", "unknown").lower()),
-            side=OrderSide(raw_order_result.get("side", "unknown").lower()),
+            identifier=raw_order_result["id"],
+            status=OrderStatus(raw_order_result["status"].lower()),
+            order_type=OrderType(raw_order_result["type"].lower()),
+            side=OrderSide(raw_order_result["side"].lower()),
             price=raw_order_result.get("price", 0.0),
             average=raw_order_result.get("average"),
             amount=raw_order_result.get("amount", 0.0),

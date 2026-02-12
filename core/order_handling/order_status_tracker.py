@@ -2,6 +2,9 @@ import asyncio
 import logging
 
 from core.bot_management.event_bus import EventBus, Events
+from core.order_handling.execution_strategy.order_execution_strategy_interface import (
+    OrderExecutionStrategyInterface,
+)
 from core.order_handling.order import Order, OrderStatus
 from core.order_handling.order_book import OrderBook
 
@@ -15,7 +18,7 @@ class OrderStatusTracker:
     def __init__(
         self,
         order_book: OrderBook,
-        order_execution_strategy,
+        order_execution_strategy: OrderExecutionStrategyInterface,
         event_bus: EventBus,
         polling_interval: float = 15.0,
     ):
@@ -70,7 +73,7 @@ class OrderStatusTracker:
         """
         try:
             remote_order = await self.order_execution_strategy.get_order(local_order.identifier, local_order.symbol)
-            self._handle_order_status_change(remote_order)
+            await self._handle_order_status_change(remote_order)
 
         except Exception as error:
             self.logger.error(
@@ -78,7 +81,7 @@ class OrderStatusTracker:
                 exc_info=True,
             )
 
-    def _handle_order_status_change(
+    async def _handle_order_status_change(
         self,
         remote_order: Order,
     ) -> None:
@@ -97,11 +100,11 @@ class OrderStatusTracker:
                 raise ValueError("Order data from the exchange is missing the 'status' field.")
             elif remote_order.status == OrderStatus.CLOSED:
                 self.order_book.update_order_status(remote_order.identifier, OrderStatus.CLOSED)
-                self.event_bus.publish_sync(Events.ORDER_FILLED, remote_order)
+                await self.event_bus.publish(Events.ORDER_FILLED, remote_order)
                 self.logger.info(f"Order {remote_order.identifier} filled.")
             elif remote_order.status == OrderStatus.CANCELED:
                 self.order_book.update_order_status(remote_order.identifier, OrderStatus.CANCELED)
-                self.event_bus.publish_sync(Events.ORDER_CANCELLED, remote_order)
+                await self.event_bus.publish(Events.ORDER_CANCELLED, remote_order)
                 self.logger.warning(f"Order {remote_order.identifier} was canceled.")
             elif remote_order.status == OrderStatus.OPEN:  # Still open
                 if remote_order.filled > 0:

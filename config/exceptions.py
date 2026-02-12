@@ -20,7 +20,7 @@ class ConfigValidationError(ConfigError):
             details.append(f"Missing required fields - {', '.join(self.missing_fields)}")
         if self.invalid_fields:
             details.append(f"Invalid fields - {', '.join(self.invalid_fields)}")
-        self.message = f"{message}: {', '.join(details)}"
+        self.message = f"{message}: {'; '.join(details)}. Check your config.json against the example configuration."
         super().__init__(self.message)
 
 

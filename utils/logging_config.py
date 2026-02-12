@@ -16,7 +16,7 @@ def setup_logging(
     Args:
         log_level (int): The logging level (e.g., logging.INFO, logging.DEBUG).
         log_to_file (bool): Whether to log to a file.
-        config_name (Optional[str]): Name of the bot configuration to differentiate logs.
+        config_name (str | None): Name of the bot configuration to differentiate logs.
         max_file_size (int): Maximum size of log file in bytes before rotation.
         backup_count (int): Number of backup log files to keep.
     """
