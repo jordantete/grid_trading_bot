@@ -26,7 +26,7 @@ from strategies.plotter import Plotter
 from strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
 
 if TYPE_CHECKING:
-    from strategies.strategy_type import StrategyType
+    from core.domain.strategy_type import StrategyType
 
 from .notification.notification_handler import NotificationHandler
 

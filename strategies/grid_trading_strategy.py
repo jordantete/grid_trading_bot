@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import numpy as np
@@ -42,21 +43,24 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.trading_mode = trading_mode
         self.trading_pair = trading_pair
         self.plotter = plotter
-        self.data = self._initialize_historical_data()
+        self.data: pd.DataFrame | None = None
         self.live_trading_metrics = []
         self._running = True
 
-    def _initialize_historical_data(self) -> pd.DataFrame | None:
+    async def _initialize_historical_data(self) -> pd.DataFrame | None:
         """
         Initializes historical market data (OHLCV).
         In LIVE or PAPER_TRADING mode returns None.
+        Uses asyncio.to_thread to avoid blocking the event loop during I/O.
         """
         if self.trading_mode != TradingMode.BACKTEST:
             return None
 
         try:
             timeframe, start_date, end_date = self._extract_config()
-            return self.exchange_service.fetch_ohlcv(self.trading_pair, timeframe, start_date, end_date)
+            return await asyncio.to_thread(
+                self.exchange_service.fetch_ohlcv, self.trading_pair, timeframe, start_date, end_date
+            )
         except Exception as e:
             self.logger.error(f"Failed to initialize data for backtest trading mode: {e}")
             return None
@@ -112,6 +116,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             Exception: If any error occurs during the trading session.
         """
         self._running = True
+        self.data = await self._initialize_historical_data()
         trigger_price = self.grid_manager.get_trigger_price()
 
         if self.trading_mode == TradingMode.BACKTEST:

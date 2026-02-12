@@ -40,6 +40,7 @@ grafana-data/
 
 # Claude Code
 .claude/
+PROJECT_INDEX.md
 
 # Project specific
 /data/

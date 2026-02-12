@@ -1,7 +1,7 @@
 import logging
 
-from strategies.spacing_type import SpacingType
-from strategies.strategy_type import StrategyType
+from core.domain.spacing_type import SpacingType
+from core.domain.strategy_type import StrategyType
 
 from .exceptions import ConfigValidationError
 from .trading_mode import TradingMode

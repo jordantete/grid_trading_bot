@@ -5,10 +5,10 @@ import pytest
 from config.trading_mode import TradingMode
 from core.bot_management.event_bus import EventBus, Events
 from core.bot_management.notification.notification_content import NotificationType
+from core.domain.strategy_type import StrategyType
 from core.order_handling.exceptions import OrderExecutionFailedError
 from core.order_handling.order import OrderSide, OrderStatus, OrderType
 from core.order_handling.order_manager import OrderManager
-from strategies.strategy_type import StrategyType
 
 
 class TestOrderManager:
