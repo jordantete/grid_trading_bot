@@ -3,12 +3,12 @@ from unittest.mock import Mock, mock_open, patch
 
 import pytest
 
-from config.config_manager import ConfigManager
-from config.config_validator import ConfigValidator
-from config.exceptions import ConfigFileNotFoundError, ConfigParseError
-from config.trading_mode import TradingMode
-from core.domain.spacing_type import SpacingType
-from core.domain.strategy_type import StrategyType
+from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.config.config_validator import ConfigValidator
+from grid_trading_bot.config.exceptions import ConfigFileNotFoundError, ConfigParseError
+from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.domain.spacing_type import SpacingType
+from grid_trading_bot.core.domain.strategy_type import StrategyType
 
 
 class TestConfigManager:

@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from utils.arg_parser import parse_and_validate_console_args
+from grid_trading_bot.cli import parse_and_validate_console_args
 
 
 @pytest.mark.parametrize(
@@ -27,7 +27,7 @@ def test_parse_and_validate_console_args_save_performance_results_exists(mock_ex
 def test_parse_and_validate_console_args_save_performance_results_dir_does_not_exist():
     with (
         patch("os.path.exists", side_effect=lambda path: path == "config.json"),
-        patch("utils.arg_parser.logging.error") as mock_log,
+        patch("grid_trading_bot.cli.logging.error") as mock_log,
     ):
         with pytest.raises(RuntimeError, match="Argument validation failed."):
             parse_and_validate_console_args(
@@ -49,14 +49,14 @@ def test_parse_and_validate_console_args_profile(mock_exists):
     assert result.profile is True
 
 
-@patch("utils.arg_parser.logging.error")
+@patch("grid_trading_bot.cli.logging.error")
 def test_parse_and_validate_console_args_argument_error(mock_log):
     with pytest.raises(RuntimeError, match="Failed to parse arguments. Please check your inputs."):
         parse_and_validate_console_args(["--config"])
     mock_log.assert_called_once()
 
 
-@patch("utils.arg_parser.logging.error")
+@patch("grid_trading_bot.cli.logging.error")
 def test_parse_and_validate_console_args_unexpected_error(mock_log):
     with patch("os.path.exists", side_effect=Exception("Unexpected error")):
         with pytest.raises(RuntimeError, match="An unexpected error occurred during argument parsing."):

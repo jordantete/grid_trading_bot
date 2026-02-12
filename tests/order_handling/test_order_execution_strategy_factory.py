@@ -2,18 +2,18 @@ from unittest.mock import Mock
 
 import pytest
 
-from config.config_manager import ConfigManager
-from config.trading_mode import TradingMode
-from core.order_handling.execution_strategy.backtest_order_execution_strategy import (
+from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.order_handling.execution_strategy.backtest_order_execution_strategy import (
     BacktestOrderExecutionStrategy,
 )
-from core.order_handling.execution_strategy.live_order_execution_strategy import (
+from grid_trading_bot.core.order_handling.execution_strategy.live_order_execution_strategy import (
     LiveOrderExecutionStrategy,
 )
-from core.order_handling.execution_strategy.order_execution_strategy_factory import (
+from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_factory import (
     OrderExecutionStrategyFactory,
 )
-from core.services.exchange_interface import ExchangeInterface
+from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
 
 class TestOrderExecutionStrategyFactory:

@@ -5,10 +5,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pytest
 
-from core.grid_management.grid_manager import GridManager
-from core.order_handling.order import Order, OrderSide, OrderType
-from core.order_handling.order_book import OrderBook
-from strategies.plotter import Plotter
+from grid_trading_bot.core.grid_management.grid_manager import GridManager
+from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderType
+from grid_trading_bot.core.order_handling.order_book import OrderBook
+from grid_trading_bot.strategies.plotter import Plotter
 
 
 class TestPlotter:

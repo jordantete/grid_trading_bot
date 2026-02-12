@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from utils.logging_config import setup_logging
+from grid_trading_bot.utils.logging_config import setup_logging
 
 
 @pytest.fixture

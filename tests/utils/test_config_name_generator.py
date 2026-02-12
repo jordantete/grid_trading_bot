@@ -2,7 +2,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from utils.config_name_generator import generate_config_name
+from grid_trading_bot.utils.config_name_generator import generate_config_name
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def mock_config_manager():
     return mock_manager
 
 
-@patch("utils.config_name_generator.datetime")
+@patch("grid_trading_bot.utils.config_name_generator.datetime")
 def test_generate_config_name(mock_datetime, mock_config_manager):
     mock_datetime.now.return_value.strftime.return_value = "20241220_1200"
 

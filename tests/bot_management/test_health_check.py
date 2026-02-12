@@ -4,11 +4,11 @@ from datetime import UTC, datetime, timedelta
 import unittest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-from core.bot_management.event_bus import EventBus
-from core.bot_management.grid_trading_bot import GridTradingBot
-from core.bot_management.health_check import HealthCheck, ResourceMetrics
-from core.bot_management.notification.notification_content import NotificationType
-from core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.bot_management.event_bus import EventBus
+from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
+from grid_trading_bot.core.bot_management.health_check import HealthCheck, ResourceMetrics
+from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
+from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 
 
 class TestHealthCheck(unittest.IsolatedAsyncioTestCase):

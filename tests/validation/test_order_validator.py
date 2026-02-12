@@ -1,11 +1,11 @@
 import pytest
 
-from core.validation.exceptions import (
+from grid_trading_bot.core.validation.exceptions import (
     InsufficientBalanceError,
     InsufficientCryptoBalanceError,
     InvalidOrderQuantityError,
 )
-from core.validation.order_validator import OrderValidator
+from grid_trading_bot.core.validation.order_validator import OrderValidator
 
 
 class TestOrderValidator:

@@ -2,9 +2,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from core.bot_management.event_bus import EventBus, Events
-from core.order_handling.order import OrderSide, OrderStatus
-from core.order_handling.order_simulator import OrderSimulator
+from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus
+from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 
 
 class TestOrderSimulator:

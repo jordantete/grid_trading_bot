@@ -27,11 +27,8 @@ jobs:
       - name: Install the project
         run: uv sync --all-extras --dev
 
-      - name: Set PYTHONPATH
-        run: echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-
       - name: Run tests and upload coverage
-        run: uv run pytest --cov=core --cov=config --cov=strategies --cov=utils --cov-report=xml:coverage.xml --cov-report=term
+        run: uv run pytest --cov=grid_trading_bot --cov-report=xml:coverage.xml --cov-report=term
         continue-on-error: true
 
       - name: Upload coverage reports to Codecov

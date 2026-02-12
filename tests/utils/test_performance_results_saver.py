@@ -3,7 +3,7 @@ from unittest.mock import mock_open, patch
 
 import pytest
 
-from utils.performance_results_saver import save_or_append_performance_results
+from grid_trading_bot.utils.performance_results_saver import save_or_append_performance_results
 
 
 @pytest.fixture
@@ -45,7 +45,7 @@ def test_save_or_append_performance_results_invalid_json(new_results_fixture):
     with (
         patch("builtins.open", mock_open(read_data="INVALID_JSON")) as mocked_file,
         patch("os.path.exists", return_value=True),
-        patch("utils.performance_results_saver.logging.warning") as mock_logger_warning,
+        patch("grid_trading_bot.utils.performance_results_saver.logging.warning") as mock_logger_warning,
     ):
         save_or_append_performance_results(new_results_fixture, "results.json")
 
@@ -57,7 +57,7 @@ def test_save_or_append_performance_results_invalid_json(new_results_fixture):
 def test_save_or_append_performance_results_os_error(new_results_fixture):
     with (
         patch("builtins.open", side_effect=OSError("Test OS Error")),
-        patch("utils.performance_results_saver.logging.error") as mock_logger_error,
+        patch("grid_trading_bot.utils.performance_results_saver.logging.error") as mock_logger_error,
     ):
         save_or_append_performance_results(new_results_fixture, "results.json")
 
@@ -67,7 +67,7 @@ def test_save_or_append_performance_results_os_error(new_results_fixture):
 def test_save_or_append_performance_results_unexpected_exception(new_results_fixture):
     with (
         patch("builtins.open", side_effect=Exception("Unexpected Error")),
-        patch("utils.performance_results_saver.logging.error") as mock_logger_error,
+        patch("grid_trading_bot.utils.performance_results_saver.logging.error") as mock_logger_error,
     ):
         save_or_append_performance_results(new_results_fixture, "results.json")
 

@@ -2,9 +2,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from core.grid_management.grid_level import GridLevel
-from core.order_handling.order import Order, OrderSide, OrderStatus
-from core.order_handling.order_book import OrderBook
+from grid_trading_bot.core.grid_management.grid_level import GridLevel
+from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus
+from grid_trading_bot.core.order_handling.order_book import OrderBook
 
 
 class TestOrderBook:

@@ -2,12 +2,12 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from config.trading_mode import TradingMode
-from core.bot_management.event_bus import EventBus, Events
-from core.order_handling.balance_tracker import BalanceTracker
-from core.order_handling.fee_calculator import FeeCalculator
-from core.order_handling.order import OrderSide
-from core.validation.exceptions import (
+from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
+from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
+from grid_trading_bot.core.order_handling.order import OrderSide
+from grid_trading_bot.core.validation.exceptions import (
     InsufficientBalanceError,
     InsufficientCryptoBalanceError,
 )

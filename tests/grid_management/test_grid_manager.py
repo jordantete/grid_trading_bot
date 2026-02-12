@@ -3,12 +3,12 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from config.config_manager import ConfigManager
-from core.domain.spacing_type import SpacingType
-from core.domain.strategy_type import StrategyType
-from core.grid_management.grid_level import GridCycleState, GridLevel
-from core.grid_management.grid_manager import GridManager
-from core.order_handling.order import Order, OrderSide
+from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.core.domain.spacing_type import SpacingType
+from grid_trading_bot.core.domain.strategy_type import StrategyType
+from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
+from grid_trading_bot.core.grid_management.grid_manager import GridManager
+from grid_trading_bot.core.order_handling.order import Order, OrderSide
 
 
 class TestGridManager:

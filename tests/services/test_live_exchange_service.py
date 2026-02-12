@@ -4,15 +4,15 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import ccxt
 import pytest
 
-from config.config_manager import ConfigManager
-from config.trading_mode import TradingMode
-from core.services.exceptions import (
+from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     MissingEnvironmentVariableError,
     OrderCancellationError,
     UnsupportedExchangeError,
 )
-from core.services.live_exchange_service import LiveExchangeService
+from grid_trading_bot.core.services.live_exchange_service import LiveExchangeService
 
 
 class TestLiveExchangeService:
@@ -37,8 +37,8 @@ class TestLiveExchangeService:
         monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
         monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
 
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_initialization_with_env_vars(self, mock_getattr, mock_ccxtpropro, config_manager, setup_env_vars):
         mock_exchange_instance = Mock()
         mock_ccxtpropro.binance.return_value = mock_exchange_instance
@@ -52,7 +52,7 @@ class TestLiveExchangeService:
         assert service.exchange == mock_exchange_instance
         assert service.exchange.enableRateLimit, "Expected rate limiting to be enabled for live mode"
 
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_missing_secret_key_raises_error(self, config_manager, monkeypatch):
         monkeypatch.delenv("EXCHANGE_SECRET_KEY", raising=False)
         monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
@@ -63,7 +63,7 @@ class TestLiveExchangeService:
         ):
             LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_missing_api_key_raises_error(self, config_manager, monkeypatch):
         monkeypatch.delenv("EXCHANGE_API_KEY", raising=False)
         monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
@@ -74,8 +74,8 @@ class TestLiveExchangeService:
         ):
             LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_sandbox_mode_initialization(self, mock_getattr, mock_ccxtpropro, config_manager, setup_env_vars):
         config_manager.get_trading_mode.return_value = TradingMode.PAPER_TRADING
 
@@ -90,7 +90,7 @@ class TestLiveExchangeService:
         expected_sandbox_url = "https://testnet.binance.vision/api"
         assert mock_exchange_instance.urls["api"] == expected_sandbox_url, "Sandbox URL not correctly set for Binance."
 
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_unsupported_exchange_raises_error(self, mock_getattr, config_manager, setup_env_vars):
         config_manager.get_exchange_name.return_value = "unsupported_exchange"
         mock_getattr.side_effect = AttributeError
@@ -98,8 +98,8 @@ class TestLiveExchangeService:
         with pytest.raises(UnsupportedExchangeError, match="The exchange 'unsupported_exchange' is not supported."):
             LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     @pytest.mark.asyncio
     async def test_place_order_successful(
         self,
@@ -117,8 +117,8 @@ class TestLiveExchangeService:
 
         mock_exchange_instance.create_order.assert_called_once_with("BTC/USD", "limit", "buy", 1, 50000.0)
 
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     @pytest.mark.asyncio
     async def test_place_order_unexpected_error(
         self,
@@ -137,8 +137,8 @@ class TestLiveExchangeService:
             await service.place_order("BTC/USD", "market", "buy", 1, 50000.0)
         mock_exchange_instance.create_order.assert_awaited_once_with("BTC/USD", "market", "buy", 1, 50000.0)
 
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     @pytest.mark.asyncio
     async def test_get_current_price_successful(
         self,
@@ -157,8 +157,8 @@ class TestLiveExchangeService:
         assert result == 50000.0
         mock_exchange_instance.fetch_ticker.assert_called_once_with("BTC/USD")
 
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     @pytest.mark.asyncio
     async def test_cancel_order_successful(
         self,
@@ -178,8 +178,8 @@ class TestLiveExchangeService:
         mock_exchange_instance.cancel_order.assert_called_once_with("order123", "BTC/USD")
 
     @pytest.mark.asyncio
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     async def test_cancel_order_unexpected_error(
         self,
         mock_getattr,
@@ -201,8 +201,8 @@ class TestLiveExchangeService:
         mock_exchange_instance.cancel_order.assert_awaited_once_with("order123", "BTC/USD")
 
     @pytest.mark.asyncio
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     async def test_cancel_order_network_error(
         self,
         mock_getattr,
@@ -221,8 +221,8 @@ class TestLiveExchangeService:
             await service.cancel_order("order123", "BTC/USD")
         mock_exchange_instance.cancel_order.assert_awaited_once_with("order123", "BTC/USD")
 
-    @patch("core.services.live_exchange_service.getattr")
-    @patch("core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     def test_fetch_ohlcv_not_implemented(self, mock_ccxtpro, mock_getattr, setup_env_vars, config_manager):
         mock_exchange_instance = Mock()
         mock_ccxtpro.binance.return_value = mock_exchange_instance
@@ -233,8 +233,8 @@ class TestLiveExchangeService:
         with pytest.raises(NotImplementedError, match="fetch_ohlcv is not used in live or paper trading mode."):
             service.fetch_ohlcv("BTC/USD", "1m", "start_date", "end_date")
 
-    @patch("core.services.live_exchange_service.getattr")
-    @patch("core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @pytest.mark.asyncio
     async def test_get_exchange_status_ok(self, mock_ccxtpro, mock_getattr, setup_env_vars, config_manager):
         mock_exchange_instance = Mock()
@@ -263,8 +263,8 @@ class TestLiveExchangeService:
             "info": "All systems operational.",
         }
 
-    @patch("core.services.live_exchange_service.getattr")
-    @patch("core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @pytest.mark.asyncio
     async def test_get_exchange_status_unsupported(self, mock_ccxtpro, mock_getattr, setup_env_vars, config_manager):
         mock_exchange_instance = Mock()
@@ -281,8 +281,8 @@ class TestLiveExchangeService:
             "info": "fetch_status not supported by this exchange.",
         }
 
-    @patch("core.services.live_exchange_service.getattr")
-    @patch("core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @pytest.mark.asyncio
     async def test_get_exchange_status_error(self, mock_ccxtpro, mock_getattr, setup_env_vars, config_manager):
         mock_exchange_instance = Mock()
@@ -299,8 +299,8 @@ class TestLiveExchangeService:
         assert "Network error" in result["info"]
 
     @pytest.mark.asyncio
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     async def test_close_connection(
         self,
         mock_getattr,
@@ -319,8 +319,8 @@ class TestLiveExchangeService:
         assert service.connection_active is False
 
     @pytest.fixture
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def setup_websocket_test(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance):
         mock_getattr.return_value = mock_ccxtpro.binance
         mock_ccxtpro.binance.return_value = mock_exchange_instance
@@ -347,9 +347,9 @@ class TestLiveExchangeService:
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(2)
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
-    @patch("core.services.live_exchange_service.asyncio.sleep", new_callable=AsyncMock)
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.asyncio.sleep", new_callable=AsyncMock)
     async def test_subscribe_to_ticker_updates_network_error(
         self,
         mock_sleep,
@@ -385,8 +385,8 @@ class TestLiveExchangeService:
         assert mock_exchange_instance.watch_ticker.await_count == 1
 
     @pytest.mark.asyncio
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     async def test_subscribe_to_ticker_updates_max_retries_exceeded(
         self,
         mock_getattr,
@@ -409,8 +409,8 @@ class TestLiveExchangeService:
         assert mock_exchange_instance.watch_ticker.await_count == 2
 
     @pytest.mark.asyncio
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     async def test_subscribe_to_ticker_updates_close_error(
         self,
         mock_getattr,
@@ -442,8 +442,8 @@ class TestLiveExchangeService:
             ("unknown", None),
         ],
     )
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_enable_sandbox_mode_all_exchanges(
         self,
         mock_getattr,
@@ -470,8 +470,8 @@ class TestLiveExchangeService:
             assert mock_exchange_instance.urls["api"] == "default_url"
 
     @pytest.mark.asyncio
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     async def test_place_order_network_error(
         self,
         mock_getattr,
@@ -490,8 +490,8 @@ class TestLiveExchangeService:
             await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
 
     @pytest.mark.asyncio
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     async def test_fetch_order_network_error(
         self,
         mock_getattr,

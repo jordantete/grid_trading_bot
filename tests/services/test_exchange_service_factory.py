@@ -2,11 +2,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from config.config_manager import ConfigManager
-from config.trading_mode import TradingMode
-from core.services.backtest_exchange_service import BacktestExchangeService
-from core.services.exchange_service_factory import ExchangeServiceFactory
-from core.services.live_exchange_service import LiveExchangeService
+from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.services.backtest_exchange_service import BacktestExchangeService
+from grid_trading_bot.core.services.exchange_service_factory import ExchangeServiceFactory
+from grid_trading_bot.core.services.live_exchange_service import LiveExchangeService
 
 
 class TestExchangeServiceFactory:
@@ -17,8 +17,8 @@ class TestExchangeServiceFactory:
         config_manager.get_exchange_name.return_value = "binance"
         return config_manager
 
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_create_live_exchange_service_with_env_vars(self, mock_getattr, mock_ccxtpro, config_manager, monkeypatch):
         monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
         monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
@@ -39,15 +39,15 @@ class TestExchangeServiceFactory:
             },
         )
 
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_create_backtest_exchange_service(self, mock_getattr, mock_ccxtpro, config_manager):
         config_manager.get_trading_mode.return_value = TradingMode.BACKTEST
         service = ExchangeServiceFactory.create_exchange_service(config_manager, TradingMode.BACKTEST)
         assert isinstance(service, BacktestExchangeService), "Expected a BacktestExchangeService instance"
 
-    @patch("core.services.live_exchange_service.ccxtpro")
-    @patch("core.services.live_exchange_service.getattr")
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_create_paper_trading_exchange_service(self, mock_getattr, mock_ccxtpro, config_manager, monkeypatch):
         monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
         monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")

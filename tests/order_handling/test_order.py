@@ -1,6 +1,6 @@
 import pytest
 
-from core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 
 
 class TestOrder:

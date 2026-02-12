@@ -5,17 +5,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from config.config_manager import ConfigManager
-from config.trading_mode import TradingMode
-from core.bot_management.event_bus import EventBus
-from core.grid_management.grid_manager import GridManager
-from core.order_handling.balance_tracker import BalanceTracker
-from core.order_handling.order_manager import OrderManager
-from core.order_handling.order_simulator import OrderSimulator
-from core.services.exchange_interface import ExchangeInterface
-from strategies.grid_trading_strategy import GridTradingStrategy
-from strategies.plotter import Plotter
-from strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
+from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.bot_management.event_bus import EventBus
+from grid_trading_bot.core.grid_management.grid_manager import GridManager
+from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
+from grid_trading_bot.core.order_handling.order_manager import OrderManager
+from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
+from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
+from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
+from grid_trading_bot.strategies.plotter import Plotter
+from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
 
 
 class TestGridTradingStrategy:

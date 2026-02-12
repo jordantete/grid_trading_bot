@@ -6,6 +6,12 @@ authors = [{ name = "Jordan TETE", email = "tetej171@gmail.com" }]
 readme = "README.md"
 license = { file = "LICENSE.txt" }
 requires-python = ">=3.12"
+keywords = ["grid-trading", "trading-bot", "cryptocurrency", "backtesting", "ccxt"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
     "pandas==2.2.3",
     "numpy==2.1.3",
@@ -19,6 +25,9 @@ dependencies = [
     "python-dotenv==1.2.1",
     "click>=8.1"
 ]
+
+[project.scripts]
+grid_trading_bot = "grid_trading_bot.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -36,6 +45,7 @@ discussions = "https://github.com/jordantete/grid_trading_bot/discussions"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["src"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
@@ -51,6 +61,7 @@ markers = [
 ]
 
 [tool.coverage.run]
+source = ["grid_trading_bot"]
 omit = [
     "*/interface*.py"
 ]
@@ -58,7 +69,7 @@ omit = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-src = ["core", "strategies", "config", "utils", "tests"]
+src = ["src/grid_trading_bot", "tests"]
 
 [tool.ruff.lint]
 select = [
@@ -94,7 +105,7 @@ line-ending = "auto"
 docstring-code-format = true
 
 [tool.ruff.lint.isort]
-known-first-party = ["core", "strategies", "config", "utils"]
+known-first-party = ["grid_trading_bot"]
 force-sort-within-sections = true
 
 [build-system]
@@ -102,8 +113,7 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["."]
-exclude = ["logs", "data"]
+where = ["src"]
 
 [tool.setuptools]
 include-package-data = true

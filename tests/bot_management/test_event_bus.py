@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 
 
 class TestEventBus:

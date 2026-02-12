@@ -1,7 +1,7 @@
 import pytest
 
-from config.config_validator import ConfigValidator
-from config.exceptions import ConfigValidationError
+from grid_trading_bot.config.config_validator import ConfigValidator
+from grid_trading_bot.config.exceptions import ConfigValidationError
 
 
 class TestConfigValidator:

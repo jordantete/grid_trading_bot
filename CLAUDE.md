@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A cryptocurrency grid trading bot supporting backtesting, paper trading, and live trading. Uses CCXT for exchange integration, with an event-driven architecture and strategy pattern for extensibility. Python 3.12+, managed with `uv`.
+A cryptocurrency grid trading bot supporting backtesting, paper trading, and live trading. Uses CCXT for exchange integration, with an event-driven architecture and strategy pattern for extensibility. Python 3.12+, managed with `uv`. Packaged as a src layout (`src/grid_trading_bot/`) and installable via `pip install grid_trading_bot`.
 
 ## Common Commands
 
@@ -13,10 +13,16 @@ A cryptocurrency grid trading bot supporting backtesting, paper trading, and liv
 uv sync --all-extras --dev
 
 # Run the bot (backtest mode by default via config)
-uv run python main.py --config config/config.json
+uv run grid_trading_bot run --config config/config.json
+
+# Alternative: run via python -m
+uv run python -m grid_trading_bot run --config config/config.json
+
+# Show version
+uv run grid_trading_bot --version
 
 # Run all tests with coverage (unit + integration, excludes sandbox)
-uv run python -m pytest --cov=core --cov=config --cov=strategies --cov=utils --cov-report=term
+uv run python -m pytest --cov=grid_trading_bot --cov-report=term
 
 # Run a single test file
 uv run python -m pytest tests/order_handling/test_order_manager.py
@@ -46,9 +52,13 @@ docker-compose up -d
 
 ## Architecture
 
+### Package Layout
+
+The project uses a **src layout**: all source code lives under `src/grid_trading_bot/`. Tests stay at the repo root under `tests/`. Runtime config files are in `config/`.
+
 ### Entry Point
 
-`main.py` parses CLI args, creates a `GridTradingBot` per config file, and runs them concurrently via `asyncio.gather`. In live/paper mode, `BotController` (CLI commands) and `HealthCheck` (system monitoring) run as concurrent tasks.
+`cli.py` is the Click-based CLI entry point (registered as `grid_trading_bot` console script). It parses CLI args via the `run` subcommand, creates a `GridTradingBot` per config file, and runs them concurrently via `asyncio.gather`. In live/paper mode, `BotController` (CLI commands) and `HealthCheck` (system monitoring) run as concurrent tasks. Supports `python -m grid_trading_bot` via `__main__.py`.
 
 ### Core Modules
 
@@ -68,7 +78,7 @@ docker-compose up -d
 ### Config & Utils
 
 - **`config/`** — `ConfigManager` (accessor methods for nested JSON), `ConfigValidator` (schema validation), `TradingMode` enum, custom `ConfigError` exceptions
-- **`utils/`** — CLI arg parsing, logging setup, config name generation, performance results I/O
+- **`utils/`** — Logging setup, config name generation, performance results I/O
 
 ### Key Design Patterns
 
@@ -88,7 +98,7 @@ Configured via `exchange.trading_mode` in `config.json`:
 
 Tests mirror the source structure under `tests/`. Async tests use `pytest-asyncio` with `asyncio_mode = "auto"`. The `conftest.py` provides a `valid_config` fixture with a complete config dict. Coverage excludes interface files (`*/interface*.py`).
 
-**Important:** Use `uv run python -m pytest` (not `uv run pytest`) to ensure the correct virtualenv Python is used.
+All imports use the full package path: `from grid_trading_bot.config.X import Y`. The `pythonpath = ["src"]` setting in `pyproject.toml` allows pytest to resolve these imports.
 
 ### Unit Tests
 
@@ -106,8 +116,6 @@ Located in `tests/integration/`. **Zero mocks** — the full bot stack runs agai
 
 - `integration` — E2E backtest tests
 - `sandbox` — Tests requiring network access (excluded by default via `addopts`)
-
-PYTHONPATH must include the project root (CI sets this explicitly).
 
 ## Linting & Formatting
 

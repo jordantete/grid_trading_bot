@@ -2,12 +2,12 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from core.order_handling.exceptions import OrderExecutionFailedError
-from core.order_handling.execution_strategy.live_order_execution_strategy import (
+from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
+from grid_trading_bot.core.order_handling.execution_strategy.live_order_execution_strategy import (
     LiveOrderExecutionStrategy,
 )
-from core.order_handling.order import OrderSide, OrderStatus, OrderType
-from core.services.exceptions import DataFetchError
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.services.exceptions import DataFetchError
 
 
 @pytest.mark.asyncio

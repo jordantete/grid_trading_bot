@@ -3,9 +3,9 @@ from unittest.mock import Mock, patch
 import pandas as pd
 import pytest
 
-from config.config_manager import ConfigManager
-from core.services.backtest_exchange_service import BacktestExchangeService
-from core.services.exceptions import (
+from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.core.services.backtest_exchange_service import BacktestExchangeService
+from grid_trading_bot.core.services.exceptions import (
     HistoricalMarketDataFileNotFoundError,
     UnsupportedExchangeError,
     UnsupportedPairError,
@@ -25,7 +25,7 @@ class TestBacktestExchangeService:
     def backtest_service(self, config_manager):
         return BacktestExchangeService(config_manager)
 
-    @patch("core.services.backtest_exchange_service.ccxt.binance")
+    @patch("grid_trading_bot.core.services.backtest_exchange_service.ccxt.binance")
     def test_initialization_supported_exchange(self, mock_ccxt, config_manager):
         service = BacktestExchangeService(config_manager)
         mock_ccxt.assert_called_once()
@@ -66,7 +66,7 @@ class TestBacktestExchangeService:
         with pytest.raises(HistoricalMarketDataFileNotFoundError, match="Failed to load OHLCV data from file"):
             service.fetch_ohlcv("BTC/USD", "1d", "2023-01-01", "2023-01-05")
 
-    @patch("core.services.backtest_exchange_service.ccxt.binance")
+    @patch("grid_trading_bot.core.services.backtest_exchange_service.ccxt.binance")
     @patch.object(BacktestExchangeService, "_is_pair_supported", return_value=True)
     def test_fetch_ohlcv_single_batch(self, mock_is_pair_supported, mock_ccxt, config_manager):
         # Mock the exchange instance and returned data
@@ -87,7 +87,7 @@ class TestBacktestExchangeService:
         assert df.iloc[0]["close"] == 34500
         assert df.iloc[1]["close"] == 35000
 
-    @patch("core.services.backtest_exchange_service.ccxt.binance")
+    @patch("grid_trading_bot.core.services.backtest_exchange_service.ccxt.binance")
     @patch.object(BacktestExchangeService, "_is_pair_supported", return_value=True)
     def test_fetch_ohlcv_in_chunks(self, mock_is_pair_supported, mock_ccxt, config_manager):
         mock_exchange = mock_ccxt.return_value
@@ -112,8 +112,8 @@ class TestBacktestExchangeService:
         assert df.iloc[0]["close"] == 34500
         assert df.iloc[1]["close"] == 35000
 
-    @patch("core.services.backtest_exchange_service.time.sleep", return_value=None)
-    @patch("core.services.backtest_exchange_service.ccxt.binance")
+    @patch("grid_trading_bot.core.services.backtest_exchange_service.time.sleep", return_value=None)
+    @patch("grid_trading_bot.core.services.backtest_exchange_service.ccxt.binance")
     def test_fetch_with_retry(self, mock_ccxt, mock_sleep, config_manager):
         mock_exchange = mock_ccxt.return_value
         mock_exchange.timeframes = {"1d": "1d"}
@@ -130,7 +130,7 @@ class TestBacktestExchangeService:
         assert len(df) == 1, "Expected 1 row of data in DataFrame"
         mock_sleep.assert_called_once()
 
-    @patch("core.services.backtest_exchange_service.ccxt.binance")
+    @patch("grid_trading_bot.core.services.backtest_exchange_service.ccxt.binance")
     @patch.object(BacktestExchangeService, "_is_pair_supported", return_value=False)
     def test_unsupported_pair_error(self, mock_is_pair_supported, mock_ccxt, config_manager):
         mock_exchange = mock_ccxt.return_value
@@ -142,7 +142,7 @@ class TestBacktestExchangeService:
         with pytest.raises(UnsupportedPairError):
             service.fetch_ohlcv("UNSUPPORTED/PAIR", "1d", "2021-06-01", "2021-06-02")
 
-    @patch("core.services.backtest_exchange_service.ccxt.binance")
+    @patch("grid_trading_bot.core.services.backtest_exchange_service.ccxt.binance")
     @patch.object(BacktestExchangeService, "_is_pair_supported", return_value=True)
     def test_unsupported_timeframe_error(self, mock_is_pair_supported, mock_ccxt, config_manager):
         mock_exchange = mock_ccxt.return_value

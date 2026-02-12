@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from core.bot_management.event_bus import Events
-from core.order_handling.order import OrderStatus
-from core.order_handling.order_status_tracker import OrderStatusTracker
+from grid_trading_bot.core.bot_management.event_bus import Events
+from grid_trading_bot.core.order_handling.order import OrderStatus
+from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
 
 
 class TestOrderStatusTracker:

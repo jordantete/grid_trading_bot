@@ -2,13 +2,13 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from config.trading_mode import TradingMode
-from core.bot_management.event_bus import EventBus
-from core.bot_management.notification.notification_content import NotificationType
-from core.domain.strategy_type import StrategyType
-from core.order_handling.exceptions import OrderExecutionFailedError
-from core.order_handling.order import OrderSide, OrderType
-from core.order_handling.order_manager import OrderManager
+from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.bot_management.event_bus import EventBus
+from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
+from grid_trading_bot.core.domain.strategy_type import StrategyType
+from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
+from grid_trading_bot.core.order_handling.order_manager import OrderManager
 
 
 class TestOrderManager:

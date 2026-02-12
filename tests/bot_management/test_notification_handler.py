@@ -2,11 +2,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from config.trading_mode import TradingMode
-from core.bot_management.event_bus import EventBus, Events
-from core.bot_management.notification.notification_content import NotificationType
-from core.bot_management.notification.notification_handler import NotificationHandler
-from core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
+from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
+from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 
 
 class TestNotificationHandler:

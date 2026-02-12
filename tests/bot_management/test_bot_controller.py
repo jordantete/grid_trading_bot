@@ -4,9 +4,9 @@ from unittest.mock import Mock, call, patch
 
 import pytest
 
-from core.bot_management.bot_controller.bot_controller import BotController
-from core.bot_management.event_bus import EventBus, Events
-from core.bot_management.grid_trading_bot import GridTradingBot
+from grid_trading_bot.core.bot_management.bot_controller.bot_controller import BotController
+from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 
 
 @pytest.mark.asyncio

@@ -4,9 +4,9 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
-from core.grid_management.grid_level import GridLevel
-from core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
-from strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
+from grid_trading_bot.core.grid_management.grid_level import GridLevel
+from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
+from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
 
 
 class TestPerformanceAnalyzer:

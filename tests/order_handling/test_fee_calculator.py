@@ -2,7 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from core.order_handling.fee_calculator import FeeCalculator
+from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
 
 
 class TestFeeCalculator:

@@ -7,7 +7,7 @@ Only the plotting is disabled.
 
 import pytest
 
-from core.grid_management.grid_level import GridCycleState
+from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 
 from .snapshot_utils import (
     compare_snapshots,

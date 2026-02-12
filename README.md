@@ -274,31 +274,31 @@ To run the bot, use the following command:
 
 ### Basic Usage:
   ```sh
-  uv run python main.py --config config/config.json
+  uv run grid_trading_bot run --config config/config.json
   ```
 
 ### Multiple Configurations:
 If you want to run the bot with multiple configuration files simultaneously, you can specify them all:
   ```sh
-  uv run python main.py --config config/config1.json --config config/config2.json --config config/config3.json
+  uv run grid_trading_bot run --config config/config1.json --config config/config2.json --config config/config3.json
   ```
 
 ### Saving Performance Results:
 To save the performance results to a file, use the **--save_performance_results** option:
   ```sh
-  uv run python main.py --config config/config.json --save_performance_results results.json
+  uv run grid_trading_bot run --config config/config.json --save_performance_results results.json
   ```
 
 ### Disabling Plots:
 To run the bot without displaying the end-of-simulation plots, use the **--no-plot** flag:
   ```sh
-  uv run python main.py --config config/config.json --no-plot
+  uv run grid_trading_bot run --config config/config.json --no-plot
   ```
 
 ### Combining Options:
 You can combine multiple options to customize how the bot runs. For example:
   ```sh
-  uv run python main.py --config config/config1.json --config config/config2.json --save_performance_results combined_results.json --no-plot
+  uv run grid_trading_bot run --config config/config1.json --config config/config2.json --save_performance_results combined_results.json --no-plot
   ```
 
 ### Available Command-Line Arguments:
