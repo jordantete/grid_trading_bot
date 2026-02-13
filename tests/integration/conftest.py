@@ -10,8 +10,7 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CSV_DATA_FILE = str(PROJECT_ROOT / "data" / "SOL_USDT" / "2024" / "1m.csv")
+CSV_DATA_FILE = str(Path(__file__).resolve().parent / "fixtures" / "SOL_USDT_1m.csv")
 
 # Short period for fast tests (~2880 candles at 1m)
 # CSV data ranges from 2024-01-01 to 2024-10-21, SOL/USDT prices ~150-173 in Aug 2024
