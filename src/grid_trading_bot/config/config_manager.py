@@ -1,23 +1,25 @@
 import json
 import logging
 import os
+from typing import Any
 
 from grid_trading_bot.core.domain.spacing_type import SpacingType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 
+from .config_validator import ConfigValidator
 from .exceptions import ConfigFileNotFoundError, ConfigParseError
 from .trading_mode import TradingMode
 
 
 class ConfigManager:
-    def __init__(self, config_file, config_validator):
+    def __init__(self, config_file: str, config_validator: ConfigValidator) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.config_file = config_file
         self.config_validator = config_validator
-        self.config = None
+        self.config: dict[str, Any] = {}
         self.load_config()
 
-    def load_config(self):
+    def load_config(self) -> None:
         if not os.path.exists(self.config_file):
             self.logger.error(f"Config file {self.config_file} does not exist.")
             raise ConfigFileNotFoundError(self.config_file)
@@ -30,18 +32,18 @@ class ConfigManager:
                 self.logger.error(f"Failed to parse config file {self.config_file}: {e}")
                 raise ConfigParseError(self.config_file, e) from e
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: Any = None) -> Any:
         return self.config.get(key, default)
 
     # --- General Accessor Methods ---
-    def get_exchange(self):
+    def get_exchange(self) -> dict:
         return self.config.get("exchange", {})
 
-    def get_exchange_name(self):
+    def get_exchange_name(self) -> str | None:
         exchange = self.get_exchange()
         return exchange.get("name", None)
 
-    def get_trading_fee(self):
+    def get_trading_fee(self) -> float:
         exchange = self.get_exchange()
         return exchange.get("trading_fee", 0)
 
@@ -52,46 +54,46 @@ class ConfigManager:
         if trading_mode:
             return TradingMode.from_string(trading_mode)
 
-    def get_pair(self):
+    def get_pair(self) -> dict:
         return self.config.get("pair", {})
 
-    def get_base_currency(self):
+    def get_base_currency(self) -> str | None:
         pair = self.get_pair()
         return pair.get("base_currency", None)
 
-    def get_quote_currency(self):
+    def get_quote_currency(self) -> str | None:
         pair = self.get_pair()
         return pair.get("quote_currency", None)
 
-    def get_trading_settings(self):
+    def get_trading_settings(self) -> dict:
         return self.config.get("trading_settings", {})
 
-    def get_timeframe(self):
+    def get_timeframe(self) -> str:
         trading_settings = self.get_trading_settings()
         return trading_settings.get("timeframe", "1h")
 
-    def get_period(self):
+    def get_period(self) -> dict:
         trading_settings = self.get_trading_settings()
         return trading_settings.get("period", {})
 
-    def get_start_date(self):
+    def get_start_date(self) -> str | None:
         period = self.get_period()
         return period.get("start_date", None)
 
-    def get_end_date(self):
+    def get_end_date(self) -> str | None:
         period = self.get_period()
         return period.get("end_date", None)
 
-    def get_initial_balance(self):
+    def get_initial_balance(self) -> float:
         trading_settings = self.get_trading_settings()
         return trading_settings.get("initial_balance", 10000)
 
-    def get_historical_data_file(self):
+    def get_historical_data_file(self) -> str | None:
         trading_settings = self.get_trading_settings()
         return trading_settings.get("historical_data_file", None)
 
     # --- Grid Accessor Methods ---
-    def get_grid_settings(self):
+    def get_grid_settings(self) -> dict:
         return self.config.get("grid_strategy", {})
 
     def get_strategy_type(self) -> StrategyType | None:
@@ -108,47 +110,47 @@ class ConfigManager:
         if spacing_type:
             return SpacingType.from_string(spacing_type)
 
-    def get_num_grids(self):
+    def get_num_grids(self) -> int | None:
         grid_settings = self.get_grid_settings()
         return grid_settings.get("num_grids", None)
 
-    def get_grid_range(self):
+    def get_grid_range(self) -> dict:
         grid_settings = self.get_grid_settings()
         return grid_settings.get("range", {})
 
-    def get_top_range(self):
+    def get_top_range(self) -> float | None:
         grid_range = self.get_grid_range()
         return grid_range.get("top", None)
 
-    def get_bottom_range(self):
+    def get_bottom_range(self) -> float | None:
         grid_range = self.get_grid_range()
         return grid_range.get("bottom", None)
 
     # --- Risk management (Take Profit / Stop Loss) Accessor Methods ---
-    def get_risk_management(self):
+    def get_risk_management(self) -> dict:
         return self.config.get("risk_management", {})
 
-    def get_take_profit(self):
+    def get_take_profit(self) -> dict:
         risk_management = self.get_risk_management()
         return risk_management.get("take_profit", {})
 
-    def is_take_profit_enabled(self):
+    def is_take_profit_enabled(self) -> bool:
         take_profit = self.get_take_profit()
         return take_profit.get("enabled", False)
 
-    def get_take_profit_threshold(self):
+    def get_take_profit_threshold(self) -> float | None:
         take_profit = self.get_take_profit()
         return take_profit.get("threshold", None)
 
-    def get_stop_loss(self):
+    def get_stop_loss(self) -> dict:
         risk_management = self.get_risk_management()
         return risk_management.get("stop_loss", {})
 
-    def is_stop_loss_enabled(self):
+    def is_stop_loss_enabled(self) -> bool:
         stop_loss = self.get_stop_loss()
         return stop_loss.get("enabled", False)
 
-    def get_stop_loss_threshold(self):
+    def get_stop_loss_threshold(self) -> float | None:
         stop_loss = self.get_stop_loss()
         return stop_loss.get("threshold", None)
 

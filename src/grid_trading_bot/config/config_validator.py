@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from grid_trading_bot.core.domain.spacing_type import SpacingType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
@@ -8,12 +9,12 @@ from .trading_mode import TradingMode
 
 
 class ConfigValidator:
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def validate(self, config):
-        missing_fields = []
-        invalid_fields = []
+    def validate(self, config: dict[str, Any]) -> None:
+        missing_fields: list[str] = []
+        invalid_fields: list[str] = []
         missing_fields += self._validate_required_fields(config)
         invalid_fields += self._validate_exchange(config)
         missing_fields += self._validate_pair(config)
@@ -34,15 +35,15 @@ class ConfigValidator:
         if missing_fields or invalid_fields:
             raise ConfigValidationError(missing_fields=missing_fields, invalid_fields=invalid_fields)
 
-    def _validate_required_fields(self, config):
+    def _validate_required_fields(self, config: dict[str, Any]) -> list[str]:
         required_fields = ["exchange", "pair", "trading_settings", "grid_strategy", "risk_management", "logging"]
         missing_fields = [field for field in required_fields if field not in config]
         if missing_fields:
             self.logger.error(f"Missing required fields: {missing_fields}")
         return missing_fields
 
-    def _validate_exchange(self, config):
-        invalid_fields = []
+    def _validate_exchange(self, config: dict[str, Any]) -> list[str]:
+        invalid_fields: list[str] = []
         exchange = config.get("exchange", {})
 
         if not exchange.get("name"):
@@ -65,8 +66,8 @@ class ConfigValidator:
 
         return invalid_fields
 
-    def _validate_pair(self, config):
-        missing_fields = []
+    def _validate_pair(self, config: dict[str, Any]) -> list[str]:
+        missing_fields: list[str] = []
         pair = config.get("pair", {})
 
         if not pair.get("base_currency"):
@@ -79,9 +80,9 @@ class ConfigValidator:
 
         return missing_fields
 
-    def _validate_trading_settings(self, config):
-        missing_fields = []
-        invalid_fields = []
+    def _validate_trading_settings(self, config: dict[str, Any]) -> tuple[list[str], list[str]]:
+        missing_fields: list[str] = []
+        invalid_fields: list[str] = []
         trading_settings = config.get("trading_settings", {})
 
         if not trading_settings.get("initial_balance"):
@@ -106,9 +107,9 @@ class ConfigValidator:
 
         return missing_fields, invalid_fields
 
-    def _validate_grid_strategy(self, config):
-        missing_fields = []
-        invalid_fields = []
+    def _validate_grid_strategy(self, config: dict[str, Any]) -> tuple[list[str], list[str]]:
+        missing_fields: list[str] = []
+        invalid_fields: list[str] = []
         grid = config.get("grid_strategy", {})
 
         grid_type = grid.get("type")
@@ -160,8 +161,8 @@ class ConfigValidator:
 
         return missing_fields, invalid_fields
 
-    def _validate_limits(self, config):
-        invalid_fields = []
+    def _validate_limits(self, config: dict[str, Any]) -> list[str]:
+        invalid_fields: list[str] = []
         limits = config.get("risk_management", {})
         take_profit = limits.get("take_profit", {})
         stop_loss = limits.get("stop_loss", {})
@@ -186,8 +187,8 @@ class ConfigValidator:
 
         return invalid_fields
 
-    def _validate_execution(self, config):
-        invalid_fields = []
+    def _validate_execution(self, config: dict[str, Any]) -> list[str]:
+        invalid_fields: list[str] = []
         execution = config.get("execution", {})
 
         int_fields = {
@@ -216,9 +217,9 @@ class ConfigValidator:
 
         return invalid_fields
 
-    def _validate_logging(self, config):
-        missing_fields = []
-        invalid_fields = []
+    def _validate_logging(self, config: dict[str, Any]) -> tuple[list[str], list[str]]:
+        missing_fields: list[str] = []
+        invalid_fields: list[str] = []
         logging_settings = config.get("logging", {})
 
         # Validate log level
