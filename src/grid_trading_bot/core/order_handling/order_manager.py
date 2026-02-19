@@ -46,6 +46,11 @@ class OrderManager:
         self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
 
+    def cleanup(self) -> None:
+        """Unsubscribes from all EventBus events."""
+        self.event_bus.unsubscribe(Events.ORDER_FILLED, self._on_order_filled)
+        self.event_bus.unsubscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
+
     async def initialize_grid_orders(
         self,
         current_price: float,

@@ -93,7 +93,7 @@ class GridTradingBot:
                 event_bus=self.event_bus,
             )
 
-            order_manager = OrderManager(
+            self.order_manager = OrderManager(
                 grid_manager,
                 order_validator,
                 self.balance_tracker,
@@ -113,7 +113,7 @@ class GridTradingBot:
                 self.event_bus,
                 self.exchange_service,
                 grid_manager,
-                order_manager,
+                self.order_manager,
                 self.balance_tracker,
                 trading_performance_analyzer,
                 self.trading_mode,
@@ -176,12 +176,21 @@ class GridTradingBot:
         try:
             await self.order_status_tracker.stop_tracking()
             await self.strategy.stop()
+            self._cleanup_subscriptions()
             self.is_running = False
 
         except Exception as e:
             self.logger.error(f"Error while stopping components: {e}", exc_info=True)
 
         self.logger.info("Grid Trading Bot has been stopped.")
+
+    def _cleanup_subscriptions(self) -> None:
+        """Unsubscribes all components from EventBus events."""
+        self.event_bus.unsubscribe(Events.STOP_BOT, self._handle_stop_bot_event)
+        self.event_bus.unsubscribe(Events.START_BOT, self._handle_start_bot_event)
+        self.order_manager.cleanup()
+        self.balance_tracker.cleanup()
+        self.notification_handler.cleanup()
 
     async def restart(self) -> None:
         if self.is_running:

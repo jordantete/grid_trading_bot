@@ -243,6 +243,11 @@ class HealthCheck:
                 alert_details=" | ".join(alerts),
             )
 
+    def cleanup(self) -> None:
+        """Unsubscribes from all EventBus events."""
+        self.event_bus.unsubscribe(Events.STOP_BOT, self._handle_stop)
+        self.event_bus.unsubscribe(Events.START_BOT, self._handle_start)
+
     def _handle_stop(self, reason: str) -> None:
         """
         Handles the STOP_BOT event to stop the HealthCheck.

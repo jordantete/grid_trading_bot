@@ -38,6 +38,11 @@ class NotificationHandler:
             for url in urls:
                 self.apprise_instance.add(url)
 
+    def cleanup(self) -> None:
+        """Unsubscribes from all EventBus events."""
+        if self.enabled:
+            self.event_bus.unsubscribe(Events.ORDER_FILLED, self._send_notification_on_order_filled)
+
     _formatter = string.Formatter()
 
     def send_notification(
