@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import logging
 
 import psutil
@@ -36,6 +36,7 @@ class HealthCheck:
         event_bus: EventBus,
         check_interval: int = 60,
         metrics_history_size: int = 60,  # Keep 1 hour of metrics at 1-minute intervals
+        alert_cooldown: int = 900,  # 15 minutes between duplicate alerts
     ):
         """
         Initializes the HealthCheck.
@@ -46,17 +47,20 @@ class HealthCheck:
             event_bus: The EventBus instance for listening to bot lifecycle events.
             check_interval: Time interval (in seconds) between health checks.
             metrics_history_size: Number of metrics to keep in the history.
+            alert_cooldown: Minimum seconds between duplicate alerts for the same key.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.bot = bot
         self.notification_handler = notification_handler
         self.event_bus = event_bus
         self.check_interval = check_interval
+        self.alert_cooldown = alert_cooldown
         self._is_running = False
         self._stop_event = asyncio.Event()
         self.process = psutil.Process()
         self._metrics_history: list[ResourceMetrics] = []
         self.metrics_history_size = metrics_history_size
+        self._last_alert_times: dict[str, datetime] = {}
         self.process.cpu_percent()  # First call to initialize CPU monitoring
         self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop)
         self.event_bus.subscribe(Events.START_BOT, self._handle_start)
@@ -93,10 +97,28 @@ class HealthCheck:
                 error_details=f"Health check encountered an error: {e}",
             )
 
+    def _should_send_alert(self, alert_key: str) -> bool:
+        """Returns True if the alert is new or the cooldown has elapsed since the last send."""
+        now = datetime.now(tz=UTC)
+        last_sent = self._last_alert_times.get(alert_key)
+        if last_sent and (now - last_sent).total_seconds() < self.alert_cooldown:
+            return False
+        self._last_alert_times[alert_key] = now
+        return True
+
+    def _purge_stale_alerts(self) -> None:
+        """Removes alert entries older than 2x the cooldown to keep the dict bounded."""
+        now = datetime.now(tz=UTC)
+        cutoff = timedelta(seconds=self.alert_cooldown * 2)
+        stale_keys = [key for key, ts in self._last_alert_times.items() if (now - ts) > cutoff]
+        for key in stale_keys:
+            del self._last_alert_times[key]
+
     async def _perform_checks(self):
         """
         Performs bot health and resource usage checks.
         """
+        self._purge_stale_alerts()
         self.logger.info("Starting health checks for bot and system resources.")
 
         bot_health = await self.bot.get_bot_health_status()
@@ -117,12 +139,14 @@ class HealthCheck:
         alerts = []
 
         if not health_status["strategy"]:
-            alerts.append("Trading strategy has encountered issues.")
             self.logger.warning("Trading strategy is not functioning properly.")
+            if self._should_send_alert("bot_health:strategy"):
+                alerts.append("Trading strategy has encountered issues.")
 
         if health_status["exchange_status"] != "ok":
-            alerts.append(f"Exchange status is not ok: {health_status['exchange_status']}")
             self.logger.warning(f"Exchange status issue detected: {health_status['exchange_status']}")
+            if self._should_send_alert("bot_health:exchange_status"):
+                alerts.append(f"Exchange status is not ok: {health_status['exchange_status']}")
 
         if alerts:
             self.logger.info(f"Bot health alerts generated: {alerts}")
@@ -223,7 +247,7 @@ class HealthCheck:
         # Check current values against thresholds
         for resource, threshold in RESOURCE_THRESHOLDS.items():
             current_value = usage.get(resource, 0)
-            if current_value > threshold:
+            if current_value > threshold and self._should_send_alert(f"resource:{resource}"):
                 trend = trends.get(f"{resource}_trend", 0)
                 trend_direction = "increasing" if trend > 1 else "decreasing" if trend < -1 else "stable"
                 message = (
@@ -233,7 +257,7 @@ class HealthCheck:
                 alerts.append(message)
 
         # Check for CPU spikes
-        if trends.get("bot_cpu_trend", 0) > 10:  # %/hour
+        if trends.get("bot_cpu_trend", 0) > 10 and self._should_send_alert("resource:bot_cpu_trend"):
             alerts.append(f"High CPU usage trend: Bot CPU usage increasing by {trends['bot_cpu_trend']:.1f}%/hour")
 
         if alerts:
