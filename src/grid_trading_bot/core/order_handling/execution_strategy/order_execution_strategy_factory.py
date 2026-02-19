@@ -23,6 +23,8 @@ class OrderExecutionStrategyFactory:
                 max_slippage=config_manager.get_max_slippage(),
             )
         elif trading_mode == TradingMode.BACKTEST:
-            return BacktestOrderExecutionStrategy()
+            return BacktestOrderExecutionStrategy(
+                slippage=config_manager.get_backtest_slippage(),
+            )
         else:
             raise ValueError(f"Unknown trading mode: {trading_mode}")

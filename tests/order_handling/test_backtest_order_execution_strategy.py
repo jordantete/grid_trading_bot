@@ -60,6 +60,34 @@ class TestBacktestOrderExecutionStrategy:
         assert order.time_in_force == "GTC"
         assert order.timestamp == 0
 
+    @patch("time.time", return_value=1680000000)
+    async def test_execute_market_buy_order_with_slippage(self, mock_time):
+        strategy = BacktestOrderExecutionStrategy(slippage=0.001)
+        order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000)
+
+        assert order is not None
+        assert order.price == 30000
+        assert order.average == 30000 * 1.001
+        assert order.side == OrderSide.BUY
+
+    @patch("time.time", return_value=1680000000)
+    async def test_execute_market_sell_order_with_slippage(self, mock_time):
+        strategy = BacktestOrderExecutionStrategy(slippage=0.001)
+        order = await strategy.execute_market_order(OrderSide.SELL, "BTC/USDT", 0.5, 30000)
+
+        assert order is not None
+        assert order.price == 30000
+        assert order.average == 30000 * 0.999
+        assert order.side == OrderSide.SELL
+
+    @patch("time.time", return_value=1680000000)
+    async def test_execute_market_order_no_slippage_by_default(self, mock_time):
+        strategy = BacktestOrderExecutionStrategy()
+        order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000)
+
+        assert order.price == 30000
+        assert order.average == 30000
+
     async def test_get_order(self, setup_strategy):
         strategy = setup_strategy
         order_id = "test-order-1"

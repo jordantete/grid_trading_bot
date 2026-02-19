@@ -204,6 +204,7 @@ class ConfigValidator:
             "max_slippage": (0.0001, 0.1),
             "order_polling_interval": (1.0, 300.0),
             "circuit_breaker_recovery_timeout": (1.0, 600.0),
+            "backtest_slippage": (0.0, 0.1),
         }
 
         for field, (min_val, max_val) in int_fields.items():

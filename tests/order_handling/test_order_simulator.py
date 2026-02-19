@@ -60,3 +60,68 @@ class TestOrderSimulator:
         assert mock_order.status == OrderStatus.CLOSED
         assert mock_order.last_trade_timestamp == timestamp
         event_bus.publish.assert_awaited_with(Events.ORDER_FILLED, mock_order)
+
+    @pytest.mark.asyncio
+    async def test_simulate_fill_buy_with_slippage(self):
+        order_book = Mock()
+        grid_manager = Mock()
+        event_bus = Mock(spec=EventBus)
+        event_bus.publish = AsyncMock()
+
+        simulator = OrderSimulator(
+            order_book=order_book,
+            grid_manager=grid_manager,
+            event_bus=event_bus,
+            slippage=0.001,
+        )
+        mock_order = Mock(
+            amount=1.0,
+            side=OrderSide.BUY,
+            price=50000.0,
+        )
+
+        await simulator.simulate_fill(mock_order, 1234567890)
+
+        assert mock_order.average == 50000.0 * 1.001
+        assert mock_order.filled == mock_order.amount
+        assert mock_order.status == OrderStatus.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_simulate_fill_sell_with_slippage(self):
+        order_book = Mock()
+        grid_manager = Mock()
+        event_bus = Mock(spec=EventBus)
+        event_bus.publish = AsyncMock()
+
+        simulator = OrderSimulator(
+            order_book=order_book,
+            grid_manager=grid_manager,
+            event_bus=event_bus,
+            slippage=0.001,
+        )
+        mock_order = Mock(
+            amount=1.0,
+            side=OrderSide.SELL,
+            price=50000.0,
+        )
+
+        await simulator.simulate_fill(mock_order, 1234567890)
+
+        assert mock_order.average == 50000.0 * 0.999
+        assert mock_order.filled == mock_order.amount
+        assert mock_order.status == OrderStatus.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_simulate_fill_no_slippage_by_default(self, setup_order_simulator):
+        simulator, _, _, _ = setup_order_simulator
+        mock_order = Mock(
+            amount=1.0,
+            side=OrderSide.BUY,
+            price=50000.0,
+            average=50000.0,
+        )
+
+        await simulator.simulate_fill(mock_order, 1234567890)
+
+        # average should not be reassigned when slippage is 0
+        assert mock_order.average == 50000.0
