@@ -294,6 +294,65 @@ class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
 
         self.health_check.logger.warning.assert_called_once_with("HealthCheck is not running.")
 
+    async def test_alert_cooldown_suppresses_duplicate(self):
+        """Test that the same alert is suppressed within the cooldown window."""
+        health_status = {"strategy": False, "exchange_status": "ok"}
+
+        await self.health_check._check_and_alert_bot_health(health_status)
+        self.notification_handler.async_send_notification.assert_awaited_once()
+
+        self.notification_handler.async_send_notification.reset_mock()
+        await self.health_check._check_and_alert_bot_health(health_status)
+        self.notification_handler.async_send_notification.assert_not_awaited()
+
+    async def test_alert_resent_after_cooldown_expires(self):
+        """Test that the same alert is re-sent once the cooldown has elapsed."""
+        health_status = {"strategy": False, "exchange_status": "ok"}
+
+        await self.health_check._check_and_alert_bot_health(health_status)
+        self.notification_handler.async_send_notification.assert_awaited_once()
+
+        # Simulate cooldown expiration
+        self.health_check._last_alert_times["bot_health:strategy"] = datetime.now(tz=UTC) - timedelta(seconds=901)
+
+        self.notification_handler.async_send_notification.reset_mock()
+        await self.health_check._check_and_alert_bot_health(health_status)
+        self.notification_handler.async_send_notification.assert_awaited_once()
+
+    async def test_different_alerts_not_suppressed(self):
+        """Test that different alert keys are independent."""
+        health_status = {"strategy": False, "exchange_status": "maintenance"}
+
+        await self.health_check._check_and_alert_bot_health(health_status)
+        call_args = self.notification_handler.async_send_notification.await_args[1]
+        assert "Trading strategy" in call_args["alert_details"]
+        assert "Exchange status" in call_args["alert_details"]
+
+    async def test_resource_alert_cooldown(self):
+        """Test that resource alerts respect cooldown."""
+        self.health_check._metrics_history = []
+        usage = {"cpu": 95, "memory": 85, "disk": 10}
+
+        await self.health_check._check_and_alert_resource_usage(usage)
+        self.notification_handler.async_send_notification.assert_awaited_once()
+
+        self.notification_handler.async_send_notification.reset_mock()
+        await self.health_check._check_and_alert_resource_usage(usage)
+        self.notification_handler.async_send_notification.assert_not_awaited()
+
+    def test_purge_stale_alerts(self):
+        """Test that stale alert entries are cleaned up."""
+        now = datetime.now(tz=UTC)
+        self.health_check._last_alert_times = {
+            "old_alert": now - timedelta(seconds=self.health_check.alert_cooldown * 3),
+            "recent_alert": now - timedelta(seconds=10),
+        }
+
+        self.health_check._purge_stale_alerts()
+
+        assert "old_alert" not in self.health_check._last_alert_times
+        assert "recent_alert" in self.health_check._last_alert_times
+
     async def asyncTearDown(self):
         """Clean up any pending tasks after each test"""
         tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
