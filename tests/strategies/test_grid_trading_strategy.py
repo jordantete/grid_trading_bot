@@ -12,6 +12,7 @@ from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
+from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
 from grid_trading_bot.strategies.plotter import Plotter
@@ -229,7 +230,7 @@ class TestGridTradingStrategy:
         strategy = create_strategy(TradingMode.BACKTEST)
 
         # Mock the exchange service to raise an exception
-        exchange_service.fetch_ohlcv.side_effect = Exception("Failed to fetch data")
+        exchange_service.fetch_ohlcv.side_effect = DataFetchError("Failed to fetch data")
 
         with caplog.at_level(logging.ERROR):
             result = await strategy._initialize_historical_data()

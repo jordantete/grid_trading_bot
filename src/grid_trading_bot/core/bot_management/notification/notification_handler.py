@@ -86,7 +86,7 @@ class NotificationHandler:
                     loop.run_in_executor(self._executor, lambda: self.send_notification(content, **kwargs)),
                     timeout=5,
                 )
-            except Exception as e:
+            except (TimeoutError, OSError, RuntimeError) as e:
                 self.logger.error(f"Failed to send notification: {e!s}")
 
     async def _send_notification_on_order_filled(self, order: Order) -> None:

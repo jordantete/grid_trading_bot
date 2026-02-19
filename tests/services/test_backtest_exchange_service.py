@@ -1,5 +1,6 @@
 from unittest.mock import Mock, patch
 
+import ccxt
 import pandas as pd
 import pytest
 
@@ -118,7 +119,7 @@ class TestBacktestExchangeService:
         mock_exchange = mock_ccxt.return_value
         mock_exchange.timeframes = {"1d": "1d"}
         mock_exchange.fetch_ohlcv.side_effect = [
-            Exception("Network Error"),
+            ccxt.BaseError("Network Error"),
             [[1622505600000, 34000, 35000, 33000, 34500, 1000]],
         ]
 

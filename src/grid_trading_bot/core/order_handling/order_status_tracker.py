@@ -7,6 +7,7 @@ from grid_trading_bot.core.order_handling.execution_strategy.order_execution_str
 )
 from grid_trading_bot.core.order_handling.order import Order, OrderStatus
 from grid_trading_bot.core.order_handling.order_book import OrderBook
+from grid_trading_bot.core.services.exceptions import DataFetchError
 
 
 class OrderStatusTracker:
@@ -75,7 +76,7 @@ class OrderStatusTracker:
             remote_order = await self.order_execution_strategy.get_order(local_order.identifier, local_order.symbol)
             await self._handle_order_status_change(remote_order)
 
-        except Exception as error:
+        except (DataFetchError, ValueError) as error:
             self.logger.error(
                 f"Failed to query remote order with identifier {local_order.identifier}: {error}",
                 exc_info=True,
@@ -119,7 +120,7 @@ class OrderStatusTracker:
                     f"Unhandled order status '{remote_order.status}' for order {remote_order.identifier}.",
                 )
 
-        except Exception as e:
+        except (ValueError, KeyError) as e:
             self.logger.error(f"Error handling order status change: {e}", exc_info=True)
 
     def _create_task(self, coro):

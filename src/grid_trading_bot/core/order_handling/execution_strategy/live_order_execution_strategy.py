@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from grid_trading_bot.core.services.exceptions import DataFetchError
+from grid_trading_bot.core.services.exceptions import DataFetchError, OrderCancellationError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
 from ..exceptions import OrderExecutionFailedError
@@ -51,7 +51,7 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
                 self.logger.info(f"Retrying order. Attempt {attempt + 1}/{self.max_retries}.")
                 price = await self._adjust_price(order_side, price, attempt)
 
-            except Exception as e:
+            except DataFetchError as e:
                 self.logger.error(f"Attempt {attempt + 1} failed with error: {e!s}")
                 await asyncio.sleep(self.retry_delay)
 
@@ -93,17 +93,6 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
                 price,
             ) from e
 
-        except Exception as e:
-            self.logger.error(f"Unexpected error in execute_limit_order: {e}")
-            raise OrderExecutionFailedError(
-                f"Unexpected error during order execution: {e}",
-                order_side,
-                OrderType.LIMIT,
-                pair,
-                quantity,
-                price,
-            ) from e
-
     async def get_order(
         self,
         order_id: str,
@@ -116,9 +105,6 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
 
         except DataFetchError:
             raise
-
-        except Exception as e:
-            raise DataFetchError(f"Unexpected error during order status retrieval: {e!s}") from e
 
     async def _parse_order_result(
         self,
@@ -196,7 +182,7 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
 
                 self.logger.warning(f"Cancel attempt {cancel_attempt + 1} for order {order_id} failed.")
 
-            except Exception as e:
+            except OrderCancellationError as e:
                 self.logger.warning(f"Error during cancel attempt {cancel_attempt + 1} for order {order_id}: {e!s}")
 
             await asyncio.sleep(self.retry_delay)

@@ -136,10 +136,10 @@ class TestLiveExchangeService:
     ):
         mock_getattr.return_value = mock_ccxtpro.binance
         mock_ccxtpro.binance.return_value = mock_exchange_instance
-        mock_exchange_instance.create_order.side_effect = Exception("Unexpected error")
+        mock_exchange_instance.create_order.side_effect = ccxt.BaseError("Exchange error")
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
-        with pytest.raises(DataFetchError, match="Unexpected error placing order"):
+        with pytest.raises(DataFetchError, match="Error placing order"):
             await service.place_order("BTC/USD", "market", "buy", 1, 50000.0)
         mock_exchange_instance.create_order.assert_awaited_once_with("BTC/USD", "market", "buy", 1, 50000.0)
 
@@ -196,12 +196,12 @@ class TestLiveExchangeService:
     ):
         mock_getattr.return_value = mock_ccxtpro.binance
         mock_ccxtpro.binance.return_value = mock_exchange_instance
-        mock_exchange_instance.cancel_order.side_effect = Exception("Unexpected error")
+        mock_exchange_instance.cancel_order.side_effect = ccxt.BaseError("Exchange error")
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
         with pytest.raises(
             OrderCancellationError,
-            match="Unexpected error while canceling order order123: Unexpected error",
+            match="Exchange error while canceling order order123: Exchange error",
         ):
             await service.cancel_order("order123", "BTC/USD")
         mock_exchange_instance.cancel_order.assert_awaited_once_with("order123", "BTC/USD")

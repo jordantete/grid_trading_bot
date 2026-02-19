@@ -54,7 +54,7 @@ class TestLiveOrderExecutionStrategy:
         quantity = 0.5
         price = 30000
 
-        exchange_service.place_order = AsyncMock(side_effect=Exception("Order failed"))
+        exchange_service.place_order = AsyncMock(side_effect=DataFetchError("Order failed"))
 
         with pytest.raises(OrderExecutionFailedError):
             await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
