@@ -67,5 +67,5 @@ def save_or_append_performance_results(
     except OSError as e:
         logging.error(f"Failed to save performance metrics to {file_path}: {e}")
 
-    except Exception as e:
+    except (TypeError, ValueError, AttributeError, KeyError) as e:
         logging.error(f"An unexpected error occurred while saving performance metrics: {e}")

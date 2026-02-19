@@ -190,9 +190,6 @@ class LiveExchangeService(ExchangeInterface):
         except BaseError as e:
             raise DataFetchError(f"Error placing order: {e!s}") from e
 
-        except Exception as e:
-            raise DataFetchError(f"Unexpected error placing order: {e!s}") from e
-
     async def fetch_order(
         self,
         order_id: str,
@@ -209,9 +206,6 @@ class LiveExchangeService(ExchangeInterface):
 
         except BaseError as e:
             raise DataFetchError(f"Exchange-specific error occurred: {e!s}") from e
-
-        except Exception as e:
-            raise DataFetchError(f"Failed to fetch order status: {e!s}") from e
 
     async def cancel_order(
         self,
@@ -242,9 +236,6 @@ class LiveExchangeService(ExchangeInterface):
 
         except BaseError as e:
             raise OrderCancellationError(f"Exchange error while canceling order {order_id}: {e!s}") from e
-
-        except Exception as e:
-            raise OrderCancellationError(f"Unexpected error while canceling order {order_id}: {e!s}") from e
 
     async def get_exchange_status(self) -> dict:
         try:

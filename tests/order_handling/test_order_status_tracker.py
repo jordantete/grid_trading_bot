@@ -7,6 +7,7 @@ import pytest
 from grid_trading_bot.core.bot_management.event_bus import Events
 from grid_trading_bot.core.order_handling.order import OrderStatus
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
+from grid_trading_bot.core.services.exceptions import DataFetchError
 
 
 class TestOrderStatusTracker:
@@ -44,7 +45,7 @@ class TestOrderStatusTracker:
         mock_order = Mock(identifier="order_1", symbol="BTC/USDT", status=OrderStatus.OPEN)
 
         order_book.get_open_orders.return_value = [mock_order]
-        order_execution_strategy.get_order = AsyncMock(side_effect=Exception("Failed to fetch order"))
+        order_execution_strategy.get_order = AsyncMock(side_effect=DataFetchError("Failed to fetch order"))
 
         with patch.object(tracker.logger, "error") as mock_logger_error:
             await tracker._process_open_orders()

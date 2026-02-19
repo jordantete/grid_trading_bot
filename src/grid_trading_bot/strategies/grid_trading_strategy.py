@@ -12,6 +12,7 @@ from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
+from grid_trading_bot.core.services.exceptions import DataFetchError, HistoricalMarketDataFileNotFoundError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 from grid_trading_bot.strategies.plotter import Plotter
 from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
@@ -67,7 +68,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             return await asyncio.to_thread(
                 self.exchange_service.fetch_ohlcv, self.trading_pair, timeframe, start_date, end_date
             )
-        except Exception as e:
+        except (DataFetchError, HistoricalMarketDataFileNotFoundError) as e:
             self.logger.error(f"Failed to initialize data for backtest trading mode: {e}")
             return None
 

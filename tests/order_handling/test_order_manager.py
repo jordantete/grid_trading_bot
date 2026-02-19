@@ -8,6 +8,7 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
+from grid_trading_bot.core.services.exceptions import DataFetchError
 
 
 class TestOrderManager:
@@ -201,7 +202,7 @@ class TestOrderManager:
         manager, _, _, _, order_book, _, _, _ = setup_order_manager
         mock_order = Mock()
         order_book.get_grid_level_for_order.return_value = Mock()
-        manager._handle_order_completion = AsyncMock(side_effect=Exception("Unexpected error"))
+        manager._handle_order_completion = AsyncMock(side_effect=DataFetchError("Unexpected error"))
 
         await manager._on_order_filled(mock_order)
 
@@ -484,7 +485,7 @@ class TestOrderManager:
         manager, grid_manager, _, _, _, _, order_execution_strategy, notification_handler = setup_order_manager
         grid_manager.get_initial_order_quantity.return_value = 0.01
         order_execution_strategy.execute_market_order = AsyncMock(
-            side_effect=RuntimeError("Network error"),
+            side_effect=DataFetchError("Network error"),
         )
         notification_handler.async_send_notification = AsyncMock()
 
@@ -572,7 +573,7 @@ class TestOrderManager:
         balance_tracker.crypto_balance = 0.5
 
         order_execution_strategy.execute_market_order = AsyncMock(
-            side_effect=RuntimeError("Connection lost"),
+            side_effect=DataFetchError("Connection lost"),
         )
         notification_handler.async_send_notification = AsyncMock()
 

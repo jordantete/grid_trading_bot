@@ -66,7 +66,7 @@ def test_save_or_append_performance_results_os_error(new_results_fixture):
 
 def test_save_or_append_performance_results_unexpected_exception(new_results_fixture):
     with (
-        patch("builtins.open", side_effect=Exception("Unexpected Error")),
+        patch("builtins.open", side_effect=TypeError("Unexpected Error")),
         patch("grid_trading_bot.utils.performance_results_saver.logging.error") as mock_logger_error,
     ):
         save_or_append_performance_results(new_results_fixture, "results.json")

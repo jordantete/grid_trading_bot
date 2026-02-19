@@ -80,8 +80,6 @@ class BacktestExchangeService(ExchangeInterface):
             raise DataFetchError(f"Network issue occurred while fetching OHLCV data: {e!s}") from e
         except ccxt.BaseError as e:
             raise DataFetchError(f"Exchange-specific error occurred: {e!s}") from e
-        except Exception as e:
-            raise DataFetchError(f"Failed to fetch OHLCV data {e!s}.") from e
 
     def _load_ohlcv_from_file(
         self,
@@ -99,7 +97,7 @@ class BacktestExchangeService(ExchangeInterface):
             self.logger.debug(f"Loaded {len(filtered_df)} rows of OHLCV data from file.")
             return filtered_df
 
-        except Exception as e:
+        except (FileNotFoundError, pd.errors.ParserError, pd.errors.EmptyDataError, KeyError, ValueError) as e:
             raise DataFetchError(f"Failed to load OHLCV data from file: {e!s}") from e
 
     def _fetch_ohlcv_single_batch(
@@ -160,7 +158,7 @@ class BacktestExchangeService(ExchangeInterface):
         for attempt in range(retries):
             try:
                 return method(*args, **kwargs)
-            except Exception as e:
+            except ccxt.BaseError as e:
                 if attempt < retries - 1:
                     backoff_delay = delay * (attempt + 1)
                     self.logger.warning(f"Attempt {attempt + 1} failed. Retrying in {backoff_delay} seconds...")

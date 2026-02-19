@@ -4,6 +4,7 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.services.exceptions import DataFetchError
 
 from ..grid_management.grid_level import GridLevel
 from ..grid_management.grid_manager import GridManager
@@ -181,7 +182,7 @@ class OrderManager:
                 error_details=f"Failed handling filled order. {e}",
             )
 
-        except Exception as e:
+        except (DataFetchError, ValueError) as e:
             self.logger.error(f"Error while handling filled order {order.identifier}: {e}", exc_info=True)
             await self.notification_handler.async_send_notification(
                 NotificationType.ORDER_FAILED,
@@ -339,7 +340,7 @@ class OrderManager:
                 error_details=f"Error while performing initial purchase. {e}",
             )
 
-        except Exception as e:
+        except (DataFetchError, ValueError) as e:
             self.logger.error(
                 f"Failed to perform initial purchase at current_price: {current_price} - error: {e}",
                 exc_info=True,
@@ -400,7 +401,7 @@ class OrderManager:
                 error_details=f"Failed to place {event} order: {e}",
             )
 
-        except Exception as e:
+        except (DataFetchError, ValueError) as e:
             self.logger.error(f"Failed to execute {event} sell order at {current_price}: {e}")
             await self.notification_handler.async_send_notification(
                 NotificationType.ERROR_OCCURRED,

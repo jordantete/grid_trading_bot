@@ -124,14 +124,7 @@ class TestNotificationHandler:
     async def test_async_send_notification_success(self, notification_handler_enabled):
         handler = notification_handler_enabled
 
-        # Mock both the executor and send_notification
-        with (
-            patch.object(handler, "_executor", create=True) as mock_executor,
-            patch.object(handler, "send_notification") as mock_send,
-        ):
-            # Configure the mock executor to run the function directly
-            mock_executor.submit = lambda f, *args, **kwargs: f(*args, **kwargs)
-
+        with patch.object(handler, "send_notification") as mock_send:
             await handler.async_send_notification(
                 NotificationType.ORDER_FILLED,
                 order_details="test",

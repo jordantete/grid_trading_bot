@@ -148,5 +148,8 @@ class BotController:
         except ValueError:
             raise CommandParsingError("Invalid pause duration. Please specify in seconds.") from None
 
+        except CommandParsingError:
+            raise
+
         except Exception as e:
             raise StrategyControlError(f"Error during pause operation: {e}") from e
