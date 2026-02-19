@@ -10,7 +10,9 @@ import pandas as pd
 
 from grid_trading_bot.config.config_manager import ConfigManager
 
+from .circuit_breaker import CircuitBreaker
 from .exceptions import (
+    CircuitBreakerOpenError,
     DataFetchError,
     MissingEnvironmentVariableError,
     OrderCancellationError,
@@ -35,6 +37,11 @@ class LiveExchangeService(ExchangeInterface):
         self.connection_active = False
         self.websocket_max_retries: int = self.config_manager.get_websocket_max_retries()
         self.websocket_retry_base_delay: int = self.config_manager.get_websocket_retry_base_delay()
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=self.config_manager.get_circuit_breaker_failure_threshold(),
+            recovery_timeout=self.config_manager.get_circuit_breaker_recovery_timeout(),
+            half_open_max_calls=self.config_manager.get_circuit_breaker_half_open_max_calls(),
+        )
 
     def _get_env_variable(self, key: str) -> str:
         value = os.getenv(key)
@@ -141,16 +148,21 @@ class LiveExchangeService(ExchangeInterface):
 
     async def get_balance(self) -> dict[str, Any]:
         try:
-            balance = await self.exchange.fetch_balance()
-            return balance
+            return await self.circuit_breaker.call(self.exchange.fetch_balance)
+
+        except CircuitBreakerOpenError as e:
+            raise DataFetchError(f"Circuit breaker open: {e!s}") from e
 
         except BaseError as e:
             raise DataFetchError(f"Error fetching balance: {e!s}") from e
 
     async def get_current_price(self, pair: str) -> float:
         try:
-            ticker = await self.exchange.fetch_ticker(pair)
+            ticker = await self.circuit_breaker.call(self.exchange.fetch_ticker, pair)
             return ticker["last"]
+
+        except CircuitBreakerOpenError as e:
+            raise DataFetchError(f"Circuit breaker open: {e!s}") from e
 
         except BaseError as e:
             raise DataFetchError(f"Error fetching current price: {e!s}") from e
@@ -164,8 +176,13 @@ class LiveExchangeService(ExchangeInterface):
         price: float | None = None,
     ) -> dict[str, str | float]:
         try:
-            order = await self.exchange.create_order(pair, order_type, order_side, amount, price)
+            order = await self.circuit_breaker.call(
+                self.exchange.create_order, pair, order_type, order_side, amount, price
+            )
             return order
+
+        except CircuitBreakerOpenError as e:
+            raise DataFetchError(f"Circuit breaker open: {e!s}") from e
 
         except NetworkError as e:
             raise DataFetchError(f"Network issue occurred while placing order: {e!s}") from e
@@ -182,7 +199,10 @@ class LiveExchangeService(ExchangeInterface):
         pair: str,
     ) -> dict[str, str | float]:
         try:
-            return await self.exchange.fetch_order(order_id, pair)
+            return await self.circuit_breaker.call(self.exchange.fetch_order, order_id, pair)
+
+        except CircuitBreakerOpenError as e:
+            raise DataFetchError(f"Circuit breaker open: {e!s}") from e
 
         except NetworkError as e:
             raise DataFetchError(f"Network issue occurred while fetching order status: {e!s}") from e
@@ -200,7 +220,7 @@ class LiveExchangeService(ExchangeInterface):
     ) -> dict:
         try:
             self.logger.info(f"Attempting to cancel order {order_id} for pair {pair}")
-            cancellation_result = await self.exchange.cancel_order(order_id, pair)
+            cancellation_result = await self.circuit_breaker.call(self.exchange.cancel_order, order_id, pair)
 
             if cancellation_result["status"] in ["canceled", "closed"]:
                 self.logger.info(f"Order {order_id} successfully canceled.")
@@ -208,6 +228,9 @@ class LiveExchangeService(ExchangeInterface):
             else:
                 self.logger.warning(f"Order {order_id} cancellation status: {cancellation_result['status']}")
                 return cancellation_result
+
+        except CircuitBreakerOpenError as e:
+            raise OrderCancellationError(f"Circuit breaker open: {e!s}") from e
 
         except OrderNotFound:
             raise OrderCancellationError(

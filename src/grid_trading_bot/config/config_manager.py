@@ -179,6 +179,15 @@ class ConfigManager:
     def get_health_check_interval(self) -> int:
         return self.get_execution_settings().get("health_check_interval", 60)
 
+    def get_circuit_breaker_failure_threshold(self) -> int:
+        return self.get_execution_settings().get("circuit_breaker_failure_threshold", 5)
+
+    def get_circuit_breaker_recovery_timeout(self) -> float:
+        return self.get_execution_settings().get("circuit_breaker_recovery_timeout", 60.0)
+
+    def get_circuit_breaker_half_open_max_calls(self) -> int:
+        return self.get_execution_settings().get("circuit_breaker_half_open_max_calls", 1)
+
     # --- Logging Accessor Methods ---
     def get_logging(self):
         return self.config.get("logging", {})

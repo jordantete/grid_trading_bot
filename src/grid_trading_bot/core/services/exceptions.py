@@ -34,6 +34,12 @@ class OrderCancellationError(Exception):
     pass
 
 
+class CircuitBreakerOpenError(Exception):
+    """Raised when the circuit breaker is open and all API calls are blocked."""
+
+    pass
+
+
 class MissingEnvironmentVariableError(Exception):
     """Raised when env variable are missing (EXCHANGE_API_KEY and/or EXCHANGE_SECRET_KEY)."""
 
