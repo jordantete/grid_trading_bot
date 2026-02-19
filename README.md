@@ -192,6 +192,19 @@ The bot is configured via a JSON file `config/config.json` to suit your trading 
       "threshold": 150
     }
   },
+  "execution": {
+    "max_retries": 3,
+    "retry_delay": 1.0,
+    "max_slippage": 0.01,
+    "backtest_slippage": 0.001,
+    "order_polling_interval": 15.0,
+    "websocket_max_retries": 5,
+    "websocket_retry_base_delay": 5,
+    "health_check_interval": 60,
+    "circuit_breaker_failure_threshold": 5,
+    "circuit_breaker_recovery_timeout": 60.0,
+    "circuit_breaker_half_open_max_calls": 1
+  },
   "logging": {
     "log_level": "INFO",
     "log_to_file": true
@@ -237,6 +250,19 @@ The bot is configured via a JSON file `config/config.json` to suit your trading 
   - **stop_loss**: Settings for stopping loss.
     - **enabled**: Whether the stop loss is active.
     - **threshold**: The price at which to stop loss.
+
+- **execution** *(optional)*: Fine-tunes order execution behavior. All fields are optional and have sensible defaults.
+  - **max_retries**: Maximum retry attempts for failed order placement in live/paper mode. Integer, `1`–`20`. Default: `3`.
+  - **retry_delay**: Delay in seconds between retries. Float, `0.1`–`60.0`. Default: `1.0`.
+  - **max_slippage**: Maximum acceptable slippage for live/paper order execution (e.g., `0.01` = 1%). Float, `0.0001`–`0.1`. Default: `0.01`.
+  - **backtest_slippage**: Fixed slippage percentage applied to every simulated fill during backtesting (e.g., `0.001` = 0.1%). Buys fill at a slightly higher price, sells at a slightly lower price. Useful for stress-testing strategy profitability. Float, `0.0`–`0.1`. Default: `0.0` (no slippage).
+  - **order_polling_interval**: Interval in seconds for polling open order status in live/paper mode. Float, `1.0`–`300.0`. Default: `15.0`.
+  - **websocket_max_retries**: Maximum reconnection attempts for the WebSocket feed. Integer, `1`–`50`. Default: `5`.
+  - **websocket_retry_base_delay**: Base delay in seconds for WebSocket reconnection backoff. Integer, `1`–`120`. Default: `5`.
+  - **health_check_interval**: Interval in seconds between health check pings. Integer, `10`–`3600`. Default: `60`.
+  - **circuit_breaker_failure_threshold**: Number of consecutive exchange API failures before the circuit breaker opens. Integer, `1`–`50`. Default: `5`.
+  - **circuit_breaker_recovery_timeout**: Seconds to wait before attempting recovery after circuit breaker opens. Float, `1.0`–`600.0`. Default: `60.0`.
+  - **circuit_breaker_half_open_max_calls**: Maximum test calls allowed in half-open state. Integer, `1`–`10`. Default: `1`.
 
 - **logging**: Configures logging settings.
   - **log_level**: The logging level (e.g., `INFO`, `DEBUG`).
