@@ -196,11 +196,14 @@ class ConfigValidator:
             "websocket_max_retries": (1, 50),
             "websocket_retry_base_delay": (1, 120),
             "health_check_interval": (10, 3600),
+            "circuit_breaker_failure_threshold": (1, 50),
+            "circuit_breaker_half_open_max_calls": (1, 10),
         }
         float_fields = {
             "retry_delay": (0.1, 60.0),
             "max_slippage": (0.0001, 0.1),
             "order_polling_interval": (1.0, 300.0),
+            "circuit_breaker_recovery_timeout": (1.0, 600.0),
         }
 
         for field, (min_val, max_val) in int_fields.items():

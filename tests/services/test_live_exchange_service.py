@@ -6,6 +6,7 @@ import pytest
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.services.circuit_breaker import CircuitState
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     MissingEnvironmentVariableError,
@@ -23,6 +24,9 @@ class TestLiveExchangeService:
         config_manager.get_trading_mode.return_value = TradingMode.LIVE
         config_manager.get_websocket_max_retries.return_value = 5
         config_manager.get_websocket_retry_base_delay.return_value = 5
+        config_manager.get_circuit_breaker_failure_threshold.return_value = 5
+        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
+        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
         return config_manager
 
     @pytest.fixture
@@ -512,3 +516,182 @@ class TestLiveExchangeService:
 
         with pytest.raises(DataFetchError, match="Network issue occurred while fetching order status: Network error"):
             await service.fetch_order("BTC/USD", "123")
+
+
+class TestLiveExchangeServiceCircuitBreaker:
+    @pytest.fixture
+    def config_manager(self):
+        config_manager = Mock(spec=ConfigManager)
+        config_manager.get_exchange_name.return_value = "binance"
+        config_manager.get_trading_mode.return_value = TradingMode.LIVE
+        config_manager.get_websocket_max_retries.return_value = 5
+        config_manager.get_websocket_retry_base_delay.return_value = 5
+        config_manager.get_circuit_breaker_failure_threshold.return_value = 2
+        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
+        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+        return config_manager
+
+    @pytest.fixture
+    def mock_exchange_instance(self):
+        exchange = AsyncMock()
+        exchange.fetch_balance.return_value = {"total": {"USD": 1000}}
+        exchange.fetch_ticker.return_value = {"last": 50000.0}
+        exchange.fetch_order.return_value = {"status": "closed"}
+        exchange.cancel_order.return_value = {"status": "canceled"}
+        return exchange
+
+    @pytest.fixture
+    def setup_env_vars(self, monkeypatch):
+        monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
+        monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
+
+    @pytest.mark.asyncio
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    async def test_circuit_breaker_opens_after_consecutive_failures(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.fetch_balance.side_effect = ccxt.NetworkError("API down")
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        # 2 failures should trip the breaker (threshold=2)
+        for _ in range(2):
+            with pytest.raises(DataFetchError, match="Error fetching balance"):
+                await service.get_balance()
+
+        assert service.circuit_breaker.state == CircuitState.OPEN
+
+        # Next call should be rejected by circuit breaker
+        with pytest.raises(DataFetchError, match="Circuit breaker open"):
+            await service.get_balance()
+
+        # Underlying exchange method should not have been called a 3rd time
+        assert mock_exchange_instance.fetch_balance.await_count == 2
+
+    @pytest.mark.asyncio
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    async def test_circuit_breaker_shared_across_methods(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.fetch_balance.side_effect = ccxt.NetworkError("API down")
+        mock_exchange_instance.fetch_ticker.side_effect = ccxt.NetworkError("API down")
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        # 1 failure from get_balance
+        with pytest.raises(DataFetchError):
+            await service.get_balance()
+
+        # 1 failure from get_current_price — should trip the shared breaker
+        with pytest.raises(DataFetchError):
+            await service.get_current_price("BTC/USD")
+
+        assert service.circuit_breaker.state == CircuitState.OPEN
+
+        # All wrapped methods should now fail with circuit breaker open
+        with pytest.raises(DataFetchError, match="Circuit breaker open"):
+            await service.get_balance()
+
+        with pytest.raises(DataFetchError, match="Circuit breaker open"):
+            await service.get_current_price("BTC/USD")
+
+        with pytest.raises(DataFetchError, match="Circuit breaker open"):
+            await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+
+        with pytest.raises(DataFetchError, match="Circuit breaker open"):
+            await service.fetch_order("order123", "BTC/USD")
+
+        with pytest.raises(OrderCancellationError, match="Circuit breaker open"):
+            await service.cancel_order("order123", "BTC/USD")
+
+    @pytest.mark.asyncio
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    async def test_circuit_breaker_cancel_order_open_raises_cancellation_error(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.cancel_order.side_effect = ccxt.NetworkError("API down")
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        for _ in range(2):
+            with pytest.raises(OrderCancellationError):
+                await service.cancel_order("order123", "BTC/USD")
+
+        # Circuit is now open — should raise OrderCancellationError, not DataFetchError
+        with pytest.raises(OrderCancellationError, match="Circuit breaker open"):
+            await service.cancel_order("order123", "BTC/USD")
+
+    @pytest.mark.asyncio
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    async def test_circuit_breaker_does_not_wrap_get_exchange_status(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.fetch_balance.side_effect = ccxt.NetworkError("API down")
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        # Trip the breaker
+        for _ in range(2):
+            with pytest.raises(DataFetchError):
+                await service.get_balance()
+
+        assert service.circuit_breaker.state == CircuitState.OPEN
+
+        # get_exchange_status should still work — it's not wrapped
+        service.exchange.fetch_status = AsyncMock(
+            return_value={"status": "ok", "updated": None, "eta": None, "url": None, "info": "ok"},
+        )
+        result = await service.get_exchange_status()
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    async def test_circuit_breaker_initialized_from_config(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        assert service.circuit_breaker.failure_threshold == 2
+        assert service.circuit_breaker.recovery_timeout == 60.0
+        assert service.circuit_breaker.half_open_max_calls == 1
