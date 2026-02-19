@@ -33,6 +33,8 @@ class LiveExchangeService(ExchangeInterface):
         self.secret_key = self._get_env_variable("EXCHANGE_SECRET_KEY")
         self.exchange = self._initialize_exchange()
         self.connection_active = False
+        self.websocket_max_retries: int = self.config_manager.get_websocket_max_retries()
+        self.websocket_retry_base_delay: int = self.config_manager.get_websocket_retry_base_delay()
 
     def _get_env_variable(self, key: str) -> str:
         value = os.getenv(key)
@@ -75,7 +77,6 @@ class LiveExchangeService(ExchangeInterface):
         pair: str,
         on_ticker_update: Callable[[float], None],
         update_interval: float,
-        max_retries: int = 5,
     ) -> None:
         self.connection_active = True
         retry_count = 0
@@ -95,13 +96,13 @@ class LiveExchangeService(ExchangeInterface):
 
             except (NetworkError, ExchangeError) as e:
                 retry_count += 1
-                retry_interval = min(retry_count * 5, 60)
+                retry_interval = min(retry_count * self.websocket_retry_base_delay, 60)
                 self.logger.error(
                     f"Error connecting to WebSocket for {pair}: {e}. "
-                    f"Retrying in {retry_interval} seconds ({retry_count}/{max_retries}).",
+                    f"Retrying in {retry_interval} seconds ({retry_count}/{self.websocket_max_retries}).",
                 )
 
-                if retry_count >= max_retries:
+                if retry_count >= self.websocket_max_retries:
                     self.logger.error("Max retries reached. Stopping WebSocket connection.")
                     self.connection_active = False
                     break

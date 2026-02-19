@@ -104,7 +104,9 @@ async def run_bot(
         no_plot,
     )
     bot_controller = BotController(bot, event_bus)
-    health_check = HealthCheck(bot, notification_handler, event_bus)
+    health_check = HealthCheck(
+        bot, notification_handler, event_bus, check_interval=config_manager.get_health_check_interval()
+    )
 
     if profile:
         import cProfile

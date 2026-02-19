@@ -152,6 +152,31 @@ class ConfigManager:
         stop_loss = self.get_stop_loss()
         return stop_loss.get("threshold", None)
 
+    # --- Execution Settings Accessor Methods ---
+    def get_execution_settings(self) -> dict:
+        return self.config.get("execution", {})
+
+    def get_max_retries(self) -> int:
+        return self.get_execution_settings().get("max_retries", 3)
+
+    def get_retry_delay(self) -> float:
+        return self.get_execution_settings().get("retry_delay", 1.0)
+
+    def get_max_slippage(self) -> float:
+        return self.get_execution_settings().get("max_slippage", 0.01)
+
+    def get_order_polling_interval(self) -> float:
+        return self.get_execution_settings().get("order_polling_interval", 15.0)
+
+    def get_websocket_max_retries(self) -> int:
+        return self.get_execution_settings().get("websocket_max_retries", 5)
+
+    def get_websocket_retry_base_delay(self) -> int:
+        return self.get_execution_settings().get("websocket_retry_base_delay", 5)
+
+    def get_health_check_interval(self) -> int:
+        return self.get_execution_settings().get("health_check_interval", 60)
+
     # --- Logging Accessor Methods ---
     def get_logging(self):
         return self.config.get("logging", {})

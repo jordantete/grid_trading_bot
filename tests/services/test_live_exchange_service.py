@@ -21,6 +21,8 @@ class TestLiveExchangeService:
         config_manager = Mock(spec=ConfigManager)
         config_manager.get_exchange_name.return_value = "binance"
         config_manager.get_trading_mode.return_value = TradingMode.LIVE
+        config_manager.get_websocket_max_retries.return_value = 5
+        config_manager.get_websocket_retry_base_delay.return_value = 5
         return config_manager
 
     @pytest.fixture
@@ -371,9 +373,10 @@ class TestLiveExchangeService:
         on_ticker_update = AsyncMock()
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
         service.connection_active = True
+        service.websocket_max_retries = 1
 
         with patch.object(service.logger, "error") as mock_logger_error:
-            await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1, max_retries=1)
+            await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
 
             mock_logger_error.assert_any_call(
                 "Error connecting to WebSocket for BTC/USD: Network issue. Retrying in 5 seconds (1/1).",
@@ -401,9 +404,10 @@ class TestLiveExchangeService:
 
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
         service.connection_active = True
+        service.websocket_max_retries = 2
         on_ticker_update = AsyncMock()
 
-        await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1, max_retries=2)
+        await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
 
         assert not service.connection_active
         assert mock_exchange_instance.watch_ticker.await_count == 2

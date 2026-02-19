@@ -54,9 +54,9 @@ class OrderSimulator:
             if (order.side == OrderSide.BUY and order.price in crossed_buy_levels) or (
                 order.side == OrderSide.SELL and order.price in crossed_sell_levels
             ):
-                await self._simulate_fill(order, timestamp_val)
+                await self.simulate_fill(order, timestamp_val)
 
-    async def _simulate_fill(
+    async def simulate_fill(
         self,
         order: Order,
         timestamp: int,

@@ -4,7 +4,6 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
-from grid_trading_bot.core.domain.strategy_type import StrategyType
 
 from ..grid_management.grid_level import GridLevel
 from ..grid_management.grid_manager import GridManager
@@ -32,7 +31,6 @@ class OrderManager:
         order_simulator: OrderSimulator,
         trading_mode: TradingMode,
         trading_pair: str,
-        strategy_type: StrategyType,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.grid_manager = grid_manager
@@ -45,7 +43,6 @@ class OrderManager:
         self.order_simulator = order_simulator
         self.trading_mode: TradingMode = trading_mode
         self.trading_pair = trading_pair
-        self.strategy_type: StrategyType = strategy_type
         self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
 
@@ -56,53 +53,17 @@ class OrderManager:
         """
         Places initial buy and sell orders for grid levels around the current price.
         """
-        await self._initialize_buy_orders(current_price)
-        await self._initialize_sell_orders(current_price)
+        await self._initialize_orders(OrderSide.BUY, current_price)
+        await self._initialize_orders(OrderSide.SELL, current_price)
 
-    async def _initialize_buy_orders(self, current_price: float) -> None:
-        for price in self.grid_manager.sorted_buy_grids:
-            if price >= current_price:
+    async def _initialize_orders(self, side: OrderSide, current_price: float) -> None:
+        grids = self.grid_manager.sorted_buy_grids if side == OrderSide.BUY else self.grid_manager.sorted_sell_grids
+
+        for price in grids:
+            if side == OrderSide.BUY and price >= current_price:
                 self.logger.info(f"Skipping grid level at price: {price} for BUY order: Above current price.")
                 continue
-
-            grid_level = self.grid_manager.grid_levels[price]
-            total_balance_value = self.balance_tracker.get_total_balance_value(current_price)
-            order_quantity = self.grid_manager.get_order_size_for_grid_level(total_balance_value, current_price)
-
-            if self.grid_manager.can_place_order(grid_level, OrderSide.BUY):
-                try:
-                    adjusted_buy_order_quantity = self.order_validator.adjust_and_validate_buy_quantity(
-                        balance=self.balance_tracker.balance,
-                        order_quantity=order_quantity,
-                        price=price,
-                    )
-
-                    self.logger.info(
-                        f"Placing initial buy limit order at grid level {price} for "
-                        f"{adjusted_buy_order_quantity} {self.trading_pair}.",
-                    )
-                    order = await self.order_execution_strategy.execute_limit_order(
-                        OrderSide.BUY,
-                        self.trading_pair,
-                        adjusted_buy_order_quantity,
-                        price,
-                    )
-
-                    if order is None:
-                        raise OrderExecutionFailedError(
-                            f"Buy order at {price} returned None",
-                        )
-
-                    await self.balance_tracker.reserve_funds_for_buy(adjusted_buy_order_quantity * price)
-                    self.grid_manager.mark_order_pending(grid_level, order)
-                    self.order_book.add_order(order, grid_level)
-
-                except (OrderExecutionFailedError, Exception) as e:
-                    await self._handle_order_init_error("buy", price, e)
-
-    async def _initialize_sell_orders(self, current_price: float) -> None:
-        for price in self.grid_manager.sorted_sell_grids:
-            if price <= current_price:
+            if side == OrderSide.SELL and price <= current_price:
                 self.logger.info(
                     f"Skipping grid level at price: {price} for SELL order: Below or equal to current price.",
                 )
@@ -112,51 +73,63 @@ class OrderManager:
             total_balance_value = self.balance_tracker.get_total_balance_value(current_price)
             order_quantity = self.grid_manager.get_order_size_for_grid_level(total_balance_value, current_price)
 
-            if self.grid_manager.can_place_order(grid_level, OrderSide.SELL):
+            if self.grid_manager.can_place_order(grid_level, side):
                 try:
-                    adjusted_sell_order_quantity = self.order_validator.adjust_and_validate_sell_quantity(
-                        crypto_balance=self.balance_tracker.crypto_balance,
-                        order_quantity=order_quantity,
-                    )
+                    adjusted_quantity = self._validate_order_quantity(side, order_quantity, price)
 
                     self.logger.info(
-                        f"Placing initial sell limit order at grid level {price} for "
-                        f"{adjusted_sell_order_quantity} {self.trading_pair}.",
+                        f"Placing initial {side.value} limit order at grid level {price} for "
+                        f"{adjusted_quantity} {self.trading_pair}.",
                     )
                     order = await self.order_execution_strategy.execute_limit_order(
-                        OrderSide.SELL,
+                        side,
                         self.trading_pair,
-                        adjusted_sell_order_quantity,
+                        adjusted_quantity,
                         price,
                     )
 
                     if order is None:
                         raise OrderExecutionFailedError(
-                            f"Sell order at {price} returned None",
+                            f"{side.value.capitalize()} order at {price} returned None",
                         )
 
-                    await self.balance_tracker.reserve_funds_for_sell(adjusted_sell_order_quantity)
+                    await self._reserve_funds(side, adjusted_quantity, price)
                     self.grid_manager.mark_order_pending(grid_level, order)
                     self.order_book.add_order(order, grid_level)
 
                 except (OrderExecutionFailedError, Exception) as e:
-                    await self._handle_order_init_error("sell", price, e)
+                    await self._handle_order_error(e, f"Error while placing initial {side.value} order")
 
-    async def _handle_order_init_error(self, side: str, price: float, error: Exception) -> None:
+    def _validate_order_quantity(self, side: OrderSide, order_quantity: float, price: float) -> float:
+        if side == OrderSide.BUY:
+            return self.order_validator.adjust_and_validate_buy_quantity(
+                balance=self.balance_tracker.balance,
+                order_quantity=order_quantity,
+                price=price,
+            )
+        return self.order_validator.adjust_and_validate_sell_quantity(
+            crypto_balance=self.balance_tracker.crypto_balance,
+            order_quantity=order_quantity,
+        )
+
+    async def _reserve_funds(self, side: OrderSide, quantity: float, price: float) -> None:
+        if side == OrderSide.BUY:
+            await self.balance_tracker.reserve_funds_for_buy(quantity * price)
+        else:
+            await self.balance_tracker.reserve_funds_for_sell(quantity)
+
+    async def _handle_order_error(self, error: Exception, context: str) -> None:
         if isinstance(error, OrderExecutionFailedError):
-            self.logger.error(f"Failed to initialize {side} order at grid level {price} - {error!s}", exc_info=True)
+            self.logger.error(f"{context} - {error!s}", exc_info=True)
             await self.notification_handler.async_send_notification(
                 NotificationType.ORDER_FAILED,
-                error_details=f"Error while placing initial {side} order. {error}",
+                error_details=f"{context}. {error}",
             )
         else:
-            self.logger.error(
-                f"Unexpected error during {side} order initialization at grid level {price}: {error}",
-                exc_info=True,
-            )
+            self.logger.error(f"Unexpected error: {context}: {error}", exc_info=True)
             await self.notification_handler.async_send_notification(
                 NotificationType.ERROR_OCCURRED,
-                error_details=f"Error while placing initial {side} order: {error!s}",
+                error_details=f"{context}: {error!s}",
             )
 
     async def _on_order_cancelled(
@@ -265,37 +238,12 @@ class OrderManager:
         """
         self.logger.info(f"Sell order completed at grid level {grid_level}.")
         self.grid_manager.complete_order(grid_level, OrderSide.SELL)
-        paired_buy_level = self._get_or_create_paired_buy_level(grid_level)
+        paired_buy_level = self.grid_manager.get_or_create_paired_buy_level(grid_level)
 
         if paired_buy_level:
             await self._place_order(OrderSide.BUY, grid_level, paired_buy_level, order.filled)
         else:
             self.logger.error(f"Failed to find or create a paired buy grid level for grid level {grid_level}.")
-
-    def _get_or_create_paired_buy_level(self, sell_grid_level: GridLevel) -> GridLevel | None:
-        """
-        Retrieves or creates a paired buy grid level for the given sell grid level.
-
-        Args:
-            sell_grid_level: The sell grid level to find a paired buy level for.
-
-        Returns:
-            The paired buy grid level, or None if a valid level cannot be found.
-        """
-        paired_buy_level = sell_grid_level.paired_buy_level
-
-        if paired_buy_level and self.grid_manager.can_place_order(paired_buy_level, OrderSide.BUY):
-            self.logger.info(f"Found valid paired buy level {paired_buy_level} for sell level {sell_grid_level}.")
-            return paired_buy_level
-
-        fallback_buy_level = self.grid_manager.get_grid_level_below(sell_grid_level)
-
-        if fallback_buy_level:
-            self.logger.info(f"Paired fallback buy level {fallback_buy_level} with sell level {sell_grid_level}.")
-            return fallback_buy_level
-
-        self.logger.warning(f"No valid fallback buy level found below sell level {sell_grid_level}.")
-        return None
 
     async def _place_order(
         self,
@@ -313,17 +261,7 @@ class OrderManager:
             target_grid_level: The grid level to place the order on.
             quantity: The quantity of the order.
         """
-        if order_side == OrderSide.BUY:
-            adjusted_quantity = self.order_validator.adjust_and_validate_buy_quantity(
-                self.balance_tracker.balance,
-                quantity,
-                target_grid_level.price,
-            )
-        else:
-            adjusted_quantity = self.order_validator.adjust_and_validate_sell_quantity(
-                self.balance_tracker.crypto_balance,
-                quantity,
-            )
+        adjusted_quantity = self._validate_order_quantity(order_side, quantity, target_grid_level.price)
 
         order = await self.order_execution_strategy.execute_limit_order(
             order_side,
@@ -335,10 +273,7 @@ class OrderManager:
         if order:
             pairing_type = "buy" if order_side == OrderSide.BUY else "sell"
             self.grid_manager.pair_grid_levels(source_grid_level, target_grid_level, pairing_type=pairing_type)
-            if order_side == OrderSide.BUY:
-                await self.balance_tracker.reserve_funds_for_buy(order.amount * target_grid_level.price)
-            else:
-                await self.balance_tracker.reserve_funds_for_sell(order.amount)
+            await self._reserve_funds(order_side, order.amount, target_grid_level.price)
             self.grid_manager.mark_order_pending(target_grid_level, order)
             self.order_book.add_order(order, target_grid_level)
             await self.notification_handler.async_send_notification(
@@ -387,7 +322,7 @@ class OrderManager:
             )
 
             if self.trading_mode == TradingMode.BACKTEST:
-                await self.order_simulator._simulate_fill(buy_order, buy_order.timestamp)
+                await self.order_simulator.simulate_fill(buy_order, buy_order.timestamp)
             else:
                 # Update fiat and crypto balance in LIVE & PAPER_TRADING modes without simulating it
                 await self.balance_tracker.update_after_initial_purchase(initial_order=buy_order)

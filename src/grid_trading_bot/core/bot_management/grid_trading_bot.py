@@ -84,7 +84,7 @@ class GridTradingBot:
                 order_book=order_book,
                 order_execution_strategy=order_execution_strategy,
                 event_bus=self.event_bus,
-                polling_interval=5.0,
+                polling_interval=self.config_manager.get_order_polling_interval(),
             )
 
             order_simulator = OrderSimulator(
@@ -104,7 +104,6 @@ class GridTradingBot:
                 order_simulator,
                 self.trading_mode,
                 trading_pair,
-                strategy_type,
             )
 
             trading_performance_analyzer = TradingPerformanceAnalyzer(self.config_manager, order_book)
