@@ -131,10 +131,12 @@ async def run_bot(
 
     finally:
         try:
+            bot_controller.cleanup()
+            health_check.cleanup()
             await event_bus.shutdown()
 
         except Exception as e:
-            logging.error(f"Error during EventBus shutdown: {e}", exc_info=True)
+            logging.error(f"Error during shutdown: {e}", exc_info=True)
 
 
 async def cleanup_tasks():

@@ -84,6 +84,10 @@ class BotController:
         else:
             raise CommandParsingError(f"Unknown command: {command}")
 
+    def cleanup(self) -> None:
+        """Unsubscribes from all EventBus events."""
+        self.event_bus.unsubscribe(Events.STOP_BOT, self._handle_stop_event)
+
     def _stop_listener(self):
         """
         Stops the command listener loop.

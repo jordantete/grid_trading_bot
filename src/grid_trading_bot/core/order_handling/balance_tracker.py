@@ -50,6 +50,10 @@ class BalanceTracker:
 
         self.event_bus.subscribe(Events.ORDER_FILLED, self._update_balance_on_order_completion)
 
+    def cleanup(self) -> None:
+        """Unsubscribes from all EventBus events."""
+        self.event_bus.unsubscribe(Events.ORDER_FILLED, self._update_balance_on_order_completion)
+
     @property
     def balance(self) -> float:
         return self._balance
