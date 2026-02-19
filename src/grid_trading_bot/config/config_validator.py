@@ -28,6 +28,9 @@ class ConfigValidator:
         missing_fields += missing_logging_settings
         invalid_fields += invalid_logging_settings
 
+        if "execution" in config:
+            invalid_fields += self._validate_execution(config)
+
         if missing_fields or invalid_fields:
             raise ConfigValidationError(missing_fields=missing_fields, invalid_fields=invalid_fields)
 
@@ -180,6 +183,36 @@ class ConfigValidator:
         if stop_loss.get("threshold") is None or not isinstance(stop_loss.get("threshold"), float | int):
             self.logger.error("Invalid or missing stop loss threshold.")
             invalid_fields.append("risk_management.stop_loss.threshold")
+
+        return invalid_fields
+
+    def _validate_execution(self, config):
+        invalid_fields = []
+        execution = config.get("execution", {})
+
+        int_fields = {
+            "max_retries": (1, 20),
+            "websocket_max_retries": (1, 50),
+            "websocket_retry_base_delay": (1, 120),
+            "health_check_interval": (10, 3600),
+        }
+        float_fields = {
+            "retry_delay": (0.1, 60.0),
+            "max_slippage": (0.0001, 0.1),
+            "order_polling_interval": (1.0, 300.0),
+        }
+
+        for field, (min_val, max_val) in int_fields.items():
+            value = execution.get(field)
+            if value is not None and (not isinstance(value, int) or value < min_val or value > max_val):
+                self.logger.error(f"execution.{field} must be an integer between {min_val} and {max_val}.")
+                invalid_fields.append(f"execution.{field}")
+
+        for field, (min_val, max_val) in float_fields.items():
+            value = execution.get(field)
+            if value is not None and (not isinstance(value, int | float) or value < min_val or value > max_val):
+                self.logger.error(f"execution.{field} must be a number between {min_val} and {max_val}.")
+                invalid_fields.append(f"execution.{field}")
 
         return invalid_fields
 

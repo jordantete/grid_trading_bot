@@ -12,6 +12,8 @@ from ..validation.exceptions import (
 from .fee_calculator import FeeCalculator
 from .order import Order, OrderSide, OrderStatus
 
+_BALANCE_PRECISION = 8  # Decimal places for balance rounding to prevent floating-point drift
+
 
 class BalanceTracker:
     def __init__(
@@ -150,14 +152,14 @@ class BalanceTracker:
         fee = self.fee_calculator.calculate_fee(quantity * price)
         total_cost = quantity * price + fee
 
-        self._reserved_fiat -= total_cost
+        self._reserved_fiat = round(self._reserved_fiat - total_cost, _BALANCE_PRECISION)
         if self._reserved_fiat < 0:
             overflow = -self._reserved_fiat
-            self._balance -= overflow
-            self._reserved_fiat = 0
+            self._balance = round(self._balance - overflow, _BALANCE_PRECISION)
+            self._reserved_fiat = 0.0
 
-        self._crypto_balance += quantity
-        self.total_fees += fee
+        self._crypto_balance = round(self._crypto_balance + quantity, _BALANCE_PRECISION)
+        self.total_fees = round(self.total_fees + fee, _BALANCE_PRECISION)
         self.logger.info(f"Buy order completed: {quantity} crypto purchased at {price}.")
 
     def _update_after_sell_order_filled(
@@ -178,15 +180,15 @@ class BalanceTracker:
         """
         fee = self.fee_calculator.calculate_fee(quantity * price)
         sale_proceeds = quantity * price - fee
-        self._reserved_crypto -= quantity
+        self._reserved_crypto = round(self._reserved_crypto - quantity, _BALANCE_PRECISION)
 
         if self._reserved_crypto < 0:
             overflow = -self._reserved_crypto
-            self._crypto_balance += overflow
-            self._reserved_crypto = 0
+            self._crypto_balance = round(self._crypto_balance + overflow, _BALANCE_PRECISION)
+            self._reserved_crypto = 0.0
 
-        self._balance += sale_proceeds
-        self.total_fees += fee
+        self._balance = round(self._balance + sale_proceeds, _BALANCE_PRECISION)
+        self.total_fees = round(self.total_fees + fee, _BALANCE_PRECISION)
         self.logger.info(f"Sell order completed: {quantity} crypto sold at {price}.")
 
     async def update_after_initial_purchase(self, initial_order: Order):
@@ -198,14 +200,14 @@ class BalanceTracker:
         """
         async with self._lock:
             if initial_order.status != OrderStatus.CLOSED:
-                raise ValueError(f"Order {initial_order.id} is not CLOSED. Cannot update balances.")
+                raise ValueError(f"Order {initial_order.identifier} is not CLOSED. Cannot update balances.")
 
             total_cost = initial_order.filled * initial_order.average
             fee = self.fee_calculator.calculate_fee(initial_order.amount * initial_order.average)
 
-            self._crypto_balance += initial_order.filled
-            self._balance -= total_cost + fee
-            self.total_fees += fee
+            self._crypto_balance = round(self._crypto_balance + initial_order.filled, _BALANCE_PRECISION)
+            self._balance = round(self._balance - total_cost - fee, _BALANCE_PRECISION)
+            self.total_fees = round(self.total_fees + fee, _BALANCE_PRECISION)
             self.logger.info(
                 f"Updated balances. Crypto balance: {self._crypto_balance}, "
                 f"Fiat balance: {self._balance}, Total fees: {self.total_fees}",
@@ -225,8 +227,8 @@ class BalanceTracker:
             if self._balance < amount:
                 raise InsufficientBalanceError(f"Insufficient fiat balance to reserve {amount}.")
 
-            self._reserved_fiat += amount
-            self._balance -= amount
+            self._reserved_fiat = round(self._reserved_fiat + amount, _BALANCE_PRECISION)
+            self._balance = round(self._balance - amount, _BALANCE_PRECISION)
             self.logger.info(f"Reserved {amount} fiat for a buy order. Remaining fiat balance: {self._balance}.")
 
     async def reserve_funds_for_sell(
@@ -243,8 +245,8 @@ class BalanceTracker:
             if self._crypto_balance < quantity:
                 raise InsufficientCryptoBalanceError(f"Insufficient crypto balance to reserve {quantity}.")
 
-            self._reserved_crypto += quantity
-            self._crypto_balance -= quantity
+            self._reserved_crypto = round(self._reserved_crypto + quantity, _BALANCE_PRECISION)
+            self._crypto_balance = round(self._crypto_balance - quantity, _BALANCE_PRECISION)
             self.logger.info(
                 f"Reserved {quantity} crypto for a sell order. Remaining crypto balance: {self._crypto_balance}.",
             )

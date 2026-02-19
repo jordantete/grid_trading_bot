@@ -53,7 +53,7 @@ class TestOrderSimulator:
         )
         timestamp = 1234567890
 
-        await simulator._simulate_fill(mock_order, timestamp)
+        await simulator.simulate_fill(mock_order, timestamp)
 
         assert mock_order.filled == mock_order.amount
         assert mock_order.remaining == 0.0

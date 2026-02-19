@@ -52,6 +52,27 @@ class EventBus:
         else:
             self.logger.info(f"Callback '{callback_name}' subscribed to event: {event_type}")
 
+    def unsubscribe(
+        self,
+        event_type: str,
+        callback: Callable[[Any], None] | Callable[[Any], Awaitable[None]],
+    ) -> None:
+        """
+        Unsubscribes a callback from a specific event type.
+
+        Args:
+            event_type: The type of event to unsubscribe from.
+            callback: The callback function to remove.
+        """
+        if event_type in self.subscribers:
+            try:
+                self.subscribers[event_type].remove(callback)
+                callback_name = getattr(callback, "__name__", str(callback))
+                self.logger.info(f"Callback '{callback_name}' unsubscribed from event: {event_type}")
+            except ValueError:
+                callback_name = getattr(callback, "__name__", str(callback))
+                self.logger.warning(f"Callback '{callback_name}' was not subscribed to event: {event_type}")
+
     async def publish(
         self,
         event_type: str,

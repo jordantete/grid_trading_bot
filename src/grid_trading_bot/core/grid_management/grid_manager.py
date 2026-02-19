@@ -164,6 +164,34 @@ class GridManager:
             self.logger.warning(f"No suitable sell level found for buy grid level {buy_grid_level}")
         return result
 
+    def get_or_create_paired_buy_level(self, sell_grid_level: GridLevel) -> GridLevel | None:
+        """
+        Retrieves or creates a paired buy grid level for the given sell grid level.
+
+        First checks the existing paired buy level. If not available or not ready,
+        falls back to the grid level immediately below the sell level.
+
+        Args:
+            sell_grid_level: The sell grid level to find a paired buy level for.
+
+        Returns:
+            The paired buy grid level, or None if a valid level cannot be found.
+        """
+        paired_buy_level = sell_grid_level.paired_buy_level
+
+        if paired_buy_level and self.can_place_order(paired_buy_level, OrderSide.BUY):
+            self.logger.info(f"Found valid paired buy level {paired_buy_level} for sell level {sell_grid_level}.")
+            return paired_buy_level
+
+        fallback_buy_level = self.get_grid_level_below(sell_grid_level)
+
+        if fallback_buy_level:
+            self.logger.info(f"Paired fallback buy level {fallback_buy_level} with sell level {sell_grid_level}.")
+            return fallback_buy_level
+
+        self.logger.warning(f"No valid fallback buy level found below sell level {sell_grid_level}.")
+        return None
+
     def get_grid_level_below(self, grid_level: GridLevel) -> GridLevel | None:
         """
         Returns the grid level immediately below the given grid level.

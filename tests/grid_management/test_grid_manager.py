@@ -210,6 +210,40 @@ class TestGridManager:
         assert grid_manager.can_place_order(buy_grid_level, OrderSide.BUY) is True
         assert grid_manager.can_place_order(sell_grid_level, OrderSide.SELL) is True
 
+    def test_get_or_create_paired_buy_level_with_valid_paired_level(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        sell_grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
+        buy_grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[-1]]
+
+        # Pair them manually
+        sell_grid_level.paired_buy_level = buy_grid_level
+
+        result = grid_manager.get_or_create_paired_buy_level(sell_grid_level)
+
+        assert result == buy_grid_level
+
+    def test_get_or_create_paired_buy_level_fallback(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        # Use second sell grid so there is a grid level below
+        sell_grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[1]]
+        sell_grid_level.paired_buy_level = None
+
+        result = grid_manager.get_or_create_paired_buy_level(sell_grid_level)
+
+        assert result is not None
+        assert result.price < sell_grid_level.price
+
+    def test_get_or_create_paired_buy_level_no_fallback(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        # Use the lowest grid level — nothing below it
+        lowest_price = grid_manager._sorted_prices[0]
+        lowest_level = grid_manager.grid_levels[lowest_price]
+        lowest_level.paired_buy_level = None
+
+        result = grid_manager.get_or_create_paired_buy_level(lowest_level)
+
+        assert result is None
+
     def test_calculate_price_grids_and_central_price_arithmetic(self, grid_manager):
         expected_grids = np.linspace(1000, 2000, 10)
         grids, central_price = grid_manager._calculate_price_grids_and_central_price()

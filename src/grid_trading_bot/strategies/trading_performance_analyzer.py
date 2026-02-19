@@ -112,7 +112,7 @@ class TradingPerformanceAnalyzer:
         Returns:
             float: The Sharpe ratio.
         """
-        returns = data["account_value"].pct_change(fill_method=None)
+        returns = data["account_value"].pct_change()
         excess_returns = returns - ANNUAL_RISK_FREE_RATE / 252  # Adjusted daily
         std_dev = excess_returns.std()
         if std_dev == 0:
@@ -130,7 +130,7 @@ class TradingPerformanceAnalyzer:
         Returns:
             float: The Sortino ratio.
         """
-        returns = data["account_value"].pct_change(fill_method=None)
+        returns = data["account_value"].pct_change()
         excess_returns = returns - ANNUAL_RISK_FREE_RATE / 252  # Adjusted daily
         downside_returns = excess_returns[excess_returns < 0]
 
