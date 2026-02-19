@@ -5,6 +5,9 @@ from .order_execution_strategy_interface import OrderExecutionStrategyInterface
 
 
 class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
+    def __init__(self, slippage: float = 0.0) -> None:
+        self.slippage = slippage
+
     async def execute_market_order(
         self,
         order_side: OrderSide,
@@ -14,13 +17,17 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
     ) -> Order | None:
         order_id = f"backtest-{int(time.time())}"
         timestamp = int(time.time() * 1000)
+        if self.slippage:
+            average = price * (1 + self.slippage) if order_side == OrderSide.BUY else price * (1 - self.slippage)
+        else:
+            average = price
         return Order(
             identifier=order_id,
             status=OrderStatus.OPEN,
             order_type=OrderType.MARKET,
             side=order_side,
             price=price,
-            average=price,
+            average=average,
             amount=quantity,
             filled=quantity,
             remaining=0,

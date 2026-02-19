@@ -18,11 +18,13 @@ class OrderSimulator:
         order_book: OrderBook,
         grid_manager: GridManager,
         event_bus: EventBus,
+        slippage: float = 0.0,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.order_book = order_book
         self.grid_manager = grid_manager
         self.event_bus = event_bus
+        self.slippage = slippage
 
     async def simulate_order_fills(
         self,
@@ -71,6 +73,10 @@ class OrderSimulator:
         order.filled = order.amount
         order.remaining = 0.0
         order.status = OrderStatus.CLOSED
+        if self.slippage:
+            order.average = (
+                order.price * (1 + self.slippage) if order.side == OrderSide.BUY else order.price * (1 - self.slippage)
+            )
         self.order_book.remove_open_order(order)
         order.timestamp = timestamp
         order.last_trade_timestamp = timestamp

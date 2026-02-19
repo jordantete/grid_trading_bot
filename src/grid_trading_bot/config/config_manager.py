@@ -188,6 +188,9 @@ class ConfigManager:
     def get_circuit_breaker_half_open_max_calls(self) -> int:
         return self.get_execution_settings().get("circuit_breaker_half_open_max_calls", 1)
 
+    def get_backtest_slippage(self) -> float:
+        return self.get_execution_settings().get("backtest_slippage", 0.0)
+
     # --- Logging Accessor Methods ---
     def get_logging(self):
         return self.config.get("logging", {})

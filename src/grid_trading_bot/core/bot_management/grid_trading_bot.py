@@ -91,6 +91,7 @@ class GridTradingBot:
                 order_book=order_book,
                 grid_manager=grid_manager,
                 event_bus=self.event_bus,
+                slippage=self.config_manager.get_backtest_slippage(),
             )
 
             self.order_manager = OrderManager(
