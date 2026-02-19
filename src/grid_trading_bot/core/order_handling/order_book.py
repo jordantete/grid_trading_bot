@@ -11,6 +11,7 @@ class OrderBook:
         self.non_grid_orders: list[Order] = []  # Orders that are not linked to any grid level
         self.order_to_grid_map: dict[Order, GridLevel] = {}  # Mapping of Order -> GridLevel
         self._open_orders: set[Order] = set()
+        self._orders_by_id: dict[str, Order] = {}  # Index by exchange order ID for O(1) lookups
 
     def add_order(
         self,
@@ -21,6 +22,10 @@ class OrderBook:
             self.buy_orders.append(order)
         else:
             self.sell_orders.append(order)
+
+        order_id = getattr(order, "identifier", None)
+        if order_id:
+            self._orders_by_id[order_id] = order
 
         if order.is_open():
             self._open_orders.add(order)
@@ -59,9 +64,8 @@ class OrderBook:
         order_id: str,
         new_status: OrderStatus,
     ) -> None:
-        for order in chain(self.buy_orders, self.sell_orders):
-            if order.identifier == order_id:
-                order.status = new_status
-                if not order.is_open():
-                    self._open_orders.discard(order)
-                break
+        order = self._orders_by_id.get(order_id)
+        if order:
+            order.status = new_status
+            if not order.is_open():
+                self._open_orders.discard(order)
