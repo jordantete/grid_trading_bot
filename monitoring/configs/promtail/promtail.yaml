@@ -22,23 +22,37 @@ scrape_configs:
 
     relabel_configs:
       - source_labels: [__path__]
-        regex: '.*/bot_(?P<base>[A-Z]+)_(?P<quote>[A-Z]+)_(?P<mode>[A-Z]+)_strategy(?P<strategy>[A-Z_]+)_spacing(?P<spacing>[A-Z]+)_size(?P<size>\d+)_range(?P<range>\d+-\d+)_.*\.log$'
-        target_label: filename
-
-      - source_labels: [base]
+        regex: '.*/bot_([A-Z]+)_([A-Z]+)_([A-Z_]+)_strategy([A-Z_]+)_spacing([A-Z]+)_size(\d+)_range(\d+-\d+)_.*\.log$'
         target_label: base_currency
-      - source_labels: [quote]
+        replacement: $1
+      - source_labels: [__path__]
+        regex: '.*/bot_([A-Z]+)_([A-Z]+)_([A-Z_]+)_strategy([A-Z_]+)_spacing([A-Z]+)_size(\d+)_range(\d+-\d+)_.*\.log$'
         target_label: quote_currency
-      - source_labels: [mode]
+        replacement: $2
+      - source_labels: [__path__]
+        regex: '.*/bot_([A-Z]+)_([A-Z]+)_([A-Z_]+)_strategy([A-Z_]+)_spacing([A-Z]+)_size(\d+)_range(\d+-\d+)_.*\.log$'
         target_label: trading_mode
-      - source_labels: [strategy]
+        replacement: $3
+      - source_labels: [__path__]
+        regex: '.*/bot_([A-Z]+)_([A-Z]+)_([A-Z_]+)_strategy([A-Z_]+)_spacing([A-Z]+)_size(\d+)_range(\d+-\d+)_.*\.log$'
         target_label: strategy_type
-      - source_labels: [spacing]
+        replacement: $4
+      - source_labels: [__path__]
+        regex: '.*/bot_([A-Z]+)_([A-Z]+)_([A-Z_]+)_strategy([A-Z_]+)_spacing([A-Z]+)_size(\d+)_range(\d+-\d+)_.*\.log$'
         target_label: spacing_type
-      - source_labels: [size]
+        replacement: $5
+      - source_labels: [__path__]
+        regex: '.*/bot_([A-Z]+)_([A-Z]+)_([A-Z_]+)_strategy([A-Z_]+)_spacing([A-Z]+)_size(\d+)_range(\d+-\d+)_.*\.log$'
         target_label: grid_size
-      - source_labels: [range]
+        replacement: $6
+      - source_labels: [__path__]
+        regex: '.*/bot_([A-Z]+)_([A-Z]+)_([A-Z_]+)_strategy([A-Z_]+)_spacing([A-Z]+)_size(\d+)_range(\d+-\d+)_.*\.log$'
         target_label: grid_range
+        replacement: $7
+      # Derived label: trading_pair = "SOL/USDT"
+      - source_labels: [base_currency, quote_currency]
+        separator: /
+        target_label: trading_pair
 
     pipeline_stages:
       - regex:
