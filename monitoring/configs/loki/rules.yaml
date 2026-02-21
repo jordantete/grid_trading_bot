@@ -3,7 +3,13 @@ groups:
       rules:
         - alert: HighCPUUsage
           expr: |
-            avg_over_time({job="grid_trading_bot"} | json | unwrap cpu [5m]) > 80
+            avg_over_time(
+              {job="grid_trading_bot"}
+                | service="HealthCheck"
+                |= "System resource usage"
+                | regexp "'cpu': (?P<cpu>[\\d.]+)"
+                | unwrap cpu [5m]
+            ) > 80
           for: 2m
           labels:
             severity: warning

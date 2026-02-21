@@ -1,93 +1,173 @@
 {
   "title": "Grid Trading Bot Dashboard",
-  "variables": [
-    {
-      "name": "trading_pair",
-      "type": "query",
-      "datasource": "Loki",
-      "query": "label_values(trading_pair)"
-    },
-    {
-      "name": "trading_mode",
-      "type": "query",
-      "datasource": "Loki",
-      "query": "label_values(trading_mode)"
-    },
-    {
-      "name": "strategy",
-      "type": "query",
-      "datasource": "Loki",
-      "query": "label_values(strategy_type)"
-    }
-  ],
+  "uid": "grid-trading-bot",
+  "schemaVersion": 36,
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "trading_pair",
+        "type": "query",
+        "datasource": "Loki",
+        "query": "label_values(trading_pair)",
+        "refresh": 2,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "trading_mode",
+        "type": "query",
+        "datasource": "Loki",
+        "query": "label_values(trading_mode)",
+        "refresh": 2,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "strategy",
+        "type": "query",
+        "datasource": "Loki",
+        "query": "label_values(strategy_type)",
+        "refresh": 2,
+        "includeAll": false,
+        "current": {}
+      }
+    ]
+  },
   "panels": [
     {
-      "title": "Strategy Overview",
-      "type": "stat",
-      "datasource": "Loki",
-      "targets": [
-        {
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\", trading_mode=\"$trading_mode\", strategy_type=\"$strategy\"} | json | line_format \"{{.grid_size}} grids, Range: {{.grid_range}}, Spacing: {{.spacing_type}}\""
-        }
-      ]
-    },
-    {
-      "title": "ROI Over Time",
+      "id": 1,
+      "title": "Price & Orders",
       "type": "timeseries",
       "datasource": "Loki",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\", trading_mode=\"$trading_mode\", strategy_type=\"$strategy\"} | regexp \"ROI\\s+\\|\\s+(?P<roi>[\\-\\d\\.]+)%\" | unwrap roi"
-        }
-      ]
-    },
-    {
-      "title": "Grid Level States",
-      "type": "table",
-      "datasource": "Loki",
-      "targets": [
-        {
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\", trading_mode=\"$trading_mode\", strategy_type=\"$strategy\"} | json | grid_price != \"\" and grid_state != \"\" | line_format \"{{.grid_price}} - {{.grid_state}}\""
-        }
-      ]
-    },
-    {
-      "title": "Order Flow",
-      "type": "timeseries",
-      "datasource": "Loki",
-      "targets": [
-        {
-          "expr": "sum(count_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\", trading_mode=\"$trading_mode\", strategy_type=\"$strategy\", order_side=\"BUY\"}[5m]))",
-          "legendFormat": "Buy Orders"
+          "refId": "A",
+          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"LiveExchangeService\" or service=\"BacktestExchangeService\" |= \"current price\" | regexp \"current price: (?P<price>[\\\\d.]+)\" | unwrap price",
+          "legendFormat": "Price"
         },
         {
-          "expr": "sum(count_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\", trading_mode=\"$trading_mode\", strategy_type=\"$strategy\", order_side=\"SELL\"}[5m]))",
-          "legendFormat": "Sell Orders"
-        }
-      ]
-    },
-    {
-      "title": "Balance History",
-      "type": "timeseries",
-      "datasource": "Loki",
-      "targets": [
+          "refId": "B",
+          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"OrderManager\" |= \"buy limit order\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price",
+          "legendFormat": "Buy Order"
+        },
         {
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\", trading_mode=\"$trading_mode\", strategy_type=\"$strategy\"} | regexp \"Balance: (?P<balance>[\\d\\.]+)\" | unwrap balance"
-        }
-      ]
-    },
-    {
-      "title": "System Health",
-      "type": "gauge",
-      "datasource": "Loki",
-      "targets": [
-        {
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | json | unwrap cpu"
+          "refId": "C",
+          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"OrderManager\" |= \"sell limit order\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price",
+          "legendFormat": "Sell Order"
         }
       ],
       "fieldConfig": {
         "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Price" },
+            "properties": [
+              { "id": "custom.drawStyle", "value": "line" },
+              { "id": "custom.lineWidth", "value": 2 },
+              { "id": "custom.showPoints", "value": "never" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Buy Order" },
+            "properties": [
+              { "id": "custom.drawStyle", "value": "points" },
+              { "id": "custom.pointSize", "value": 8 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sell Order" },
+            "properties": [
+              { "id": "custom.drawStyle", "value": "points" },
+              { "id": "custom.pointSize", "value": 8 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Balance History",
+      "type": "timeseries",
+      "datasource": "Loki",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"BalanceTracker\" |= \"Updated balances\" | regexp \"Fiat balance: (?P<fiat>[\\\\d.]+)\" | unwrap fiat",
+          "legendFormat": "Fiat ($trading_pair quote)"
+        },
+        {
+          "refId": "B",
+          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"BalanceTracker\" |= \"Updated balances\" | regexp \"Crypto balance: (?P<crypto>[\\\\d.]+)\" | unwrap crypto",
+          "legendFormat": "Crypto ($trading_pair base)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byFrameRefID", "options": "A" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "left" },
+              { "id": "custom.axisLabel", "value": "Fiat" }
+            ]
+          },
+          {
+            "matcher": { "id": "byFrameRefID", "options": "B" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "custom.axisLabel", "value": "Crypto" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 3,
+      "title": "System Health (CPU %)",
+      "type": "gauge",
+      "datasource": "Loki",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"HealthCheck\" |= \"System resource usage\" | regexp \"'cpu': (?P<cpu>[\\\\d.]+)\" | unwrap cpu"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
           "thresholds": {
+            "mode": "absolute",
             "steps": [
               { "value": 0, "color": "green" },
               { "value": 70, "color": "yellow" },
@@ -95,9 +175,37 @@
             ]
           }
         }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Strategy Overview",
+      "type": "stat",
+      "datasource": "Loki",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\", strategy_type=\"$strategy\"} | line_format \"{{.grid_size}} grids | Range: {{.grid_range}} | {{.spacing_type}}\""
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
+        "textMode": "value",
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        }
       }
     }
-  ],
-  "refresh": "10s",
-  "schemaVersion": 36
+  ]
 }
