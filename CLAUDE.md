@@ -117,6 +117,24 @@ Located in `tests/integration/`. **Zero mocks** — the full bot stack runs agai
 - `integration` — E2E backtest tests
 - `sandbox` — Tests requiring network access (excluded by default via `addopts`)
 
+## Documentation
+
+The project uses [Zensical](https://github.com/nicholasgriffintn/zensical) (Material for MkDocs successor) for web documentation, hosted on GitHub Pages.
+
+- **Config**: `zensical.toml` at repo root
+- **Source files**: `docs/` directory (Markdown + Mermaid diagrams)
+- **Build output**: `site/` (gitignored)
+
+```bash
+# Preview locally
+uv sync --extra docs && uv run zensical serve
+
+# Build static site
+uv run zensical build --clean
+```
+
+Deploy is automatic via GitHub Actions (`.github/workflows/docs.yml`) on push to `master`.
+
 ## Linting & Formatting
 
 Ruff is configured in `pyproject.toml` with 120-char line length, targeting Python 3.12. Pre-commit hooks run Ruff lint+format, plus checks for trailing whitespace, valid YAML/JSON/TOML, merge conflicts, debug statements, blanket `noqa`/`type: ignore`, and deprecated `log.warn()`.

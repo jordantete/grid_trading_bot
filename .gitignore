@@ -42,6 +42,9 @@ grafana-data/
 .claude/
 PROJECT_INDEX.md
 
+# Documentation build output
+site/
+
 # Project specific
 /data/
 logs/*

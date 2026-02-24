@@ -26,7 +26,7 @@ limits_config:
   ingestion_burst_size_mb: 500
   volume_enabled: true
   reject_old_samples: false
-  reject_old_samples_max_age: 2160h  # Accept logs up to 90 days old (adjust as needed)
+  reject_old_samples_max_age: 17520h  # Accept logs up to 2 years old
 
 query_range:
   results_cache:

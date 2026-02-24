@@ -42,9 +42,13 @@ dev = [
     "pytest-timeout==2.4.0",
     "pre-commit==4.5.1",
 ]
+docs = [
+    "zensical>=0.0.23",
+]
 
 [project.urls]
-repository= "https://github.com/jordantete/grid_trading_bot"
+repository = "https://github.com/jordantete/grid_trading_bot"
+documentation = "https://jordantete.github.io/grid_trading_bot/"
 issues = "https://github.com/jordantete/grid_trading_bot/issues"
 discussions = "https://github.com/jordantete/grid_trading_bot/discussions"
 
