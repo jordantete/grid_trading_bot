@@ -1,72 +1,36 @@
+[project]
 site_name = "Grid Trading Bot"
 site_url = "https://jordantete.github.io/grid_trading_bot/"
 repo_url = "https://github.com/jordantete/grid_trading_bot"
 repo_name = "jordantete/grid_trading_bot"
 site_description = "Open-source cryptocurrency grid trading bot for backtesting, paper trading, and live trading."
 
-[[nav]]
-title = "Home"
-path = "index.md"
+nav = [
+  {"Home" = "index.md"},
+  {"Quick Start" = "quick-start.md"},
+  {"Concepts" = [
+    "concepts/grid-trading.md"
+  ]},
+  {"Configuration" = [
+    "configuration/config-file.md",
+    "configuration/environment-variables.md"
+  ]},
+  {"Usage" = [
+    "usage/cli.md"
+  ]},
+  {"Monitoring" = [
+    "monitoring/setup.md",
+    "monitoring/grafana-dashboard.md"
+  ]},
+  {"Architecture" = [
+    "architecture/overview.md"
+  ]},
+  {"Contributing" = [
+    "contributing/guide.md"
+  ]}
+]
 
-[[nav]]
-title = "Quick Start"
-path = "quick-start.md"
-
-[[nav]]
-title = "Concepts"
-
-[[nav.children]]
-title = "Grid Trading"
-path = "concepts/grid-trading.md"
-
-[[nav]]
-title = "Configuration"
-
-[[nav.children]]
-title = "Config File"
-path = "configuration/config-file.md"
-
-[[nav.children]]
-title = "Environment Variables"
-path = "configuration/environment-variables.md"
-
-[[nav]]
-title = "Usage"
-
-[[nav.children]]
-title = "CLI Reference"
-path = "usage/cli.md"
-
-[[nav]]
-title = "Monitoring"
-
-[[nav.children]]
-title = "Setup"
-path = "monitoring/setup.md"
-
-[[nav.children]]
-title = "Grafana Dashboard"
-path = "monitoring/grafana-dashboard.md"
-
-[[nav]]
-title = "Architecture"
-
-[[nav.children]]
-title = "Overview"
-path = "architecture/overview.md"
-
-[[nav]]
-title = "Contributing"
-
-[[nav.children]]
-title = "Guide"
-path = "contributing/guide.md"
-
-[theme]
-name = "material"
-palette.scheme = "slate"
-palette.primary = "indigo"
-palette.accent = "amber"
+[project.theme]
 features = [
     "navigation.tabs",
     "navigation.sections",
@@ -75,40 +39,21 @@ features = [
     "content.code.copy",
 ]
 
-[theme.icon]
+[project.theme.palette]
+scheme = "slate"
+primary = "indigo"
+accent = "amber"
+
+[project.theme.icon]
 repo = "fontawesome/brands/github"
 
-[[markdown_extensions]]
-name = "admonition"
-
-[[markdown_extensions]]
-name = "toc"
-
-[markdown_extensions.config]
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.toc]
 permalink = true
-
-[[markdown_extensions]]
-name = "pymdownx.superfences"
-
-[[markdown_extensions.config.custom_fences]]
-name = "mermaid"
-class = "mermaid"
-format_name = "fence_mermaid"
-
-[[markdown_extensions]]
-name = "pymdownx.tabbed"
-
-[markdown_extensions.config]
-alternate_style = true
-
-[[markdown_extensions]]
-name = "pymdownx.highlight"
-
-[markdown_extensions.config]
+[project.markdown_extensions.pymdownx.highlight]
 anchor_linenums = true
-
-[[markdown_extensions]]
-name = "pymdownx.tasklist"
-
-[markdown_extensions.config]
+[project.markdown_extensions.pymdownx.superfences]
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+[project.markdown_extensions.pymdownx.tasklist]
 custom_checkbox = true
