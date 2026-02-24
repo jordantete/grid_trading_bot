@@ -20,6 +20,8 @@ In an arithmetic grid, price levels are spaced **equally**. The distance between
 
 Best for assets with **stable, linear** price fluctuations.
 
+![Arithmetic Grid](../assets/arithmetic_grid.svg)
+
 ### Geometric Grid
 
 In a geometric grid, price levels are spaced **proportionally** by a percentage. Intervals grow or shrink exponentially.
@@ -35,6 +37,8 @@ In a geometric grid, price levels are spaced **proportionally** by a percentage.
 | 1 | $2,700 |
 
 Best for assets with **significant, unpredictable volatility** and exponential price movements.
+
+![Geometric Grid](../assets/geometric_grid.svg)
 
 ### When to Use Each Type
 
@@ -54,6 +58,8 @@ Independent buy and sell grids. Each grid level operates standalone — profits 
 - Sell orders placed above the current price
 - When a buy fills, a corresponding sell is placed one level above
 - When a sell fills, a corresponding buy is placed one level below
+
+![Grid Trading Cycle](../assets/grid_trading_cycle.svg)
 
 ### Hedged Grid
 
