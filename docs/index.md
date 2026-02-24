@@ -23,10 +23,15 @@ An open-source cryptocurrency grid trading bot implemented in Python. Backtest s
 <div class="grid cards" markdown>
 
 - :material-rocket-launch: **[Quick Start](quick-start.md)** — Install and run your first backtest in under 2 minutes
+
 - :material-cog: **[Configuration](configuration/config-file.md)** — Full reference for `config.json` parameters
+
 - :material-chart-line: **[Concepts](concepts/grid-trading.md)** — Understand grid trading strategies
+
 - :material-monitor-dashboard: **[Monitoring](monitoring/setup.md)** — Set up Grafana dashboards for live bots
+
 - :material-file-tree: **[Architecture](architecture/overview.md)** — Explore the codebase design and patterns
+
 - :material-account-group: **[Contributing](contributing/guide.md)** — Help improve the project
 
 </div>
