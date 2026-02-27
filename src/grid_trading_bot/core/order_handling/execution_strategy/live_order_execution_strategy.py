@@ -30,13 +30,14 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         quantity: float,
         price: float,
     ) -> Order | None:
+        remaining_quantity = quantity
         for attempt in range(self.max_retries):
             try:
                 raw_order = await self.exchange_service.place_order(
                     pair,
                     OrderType.MARKET.value.lower(),
                     order_side.name.lower(),
-                    quantity,
+                    remaining_quantity,
                     price,
                 )
                 order_result = await self._parse_order_result(raw_order)
@@ -45,11 +46,14 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
                     return order_result  # Order fully filled
 
                 elif order_result.status == OrderStatus.OPEN:
-                    await self._handle_partial_fill(order_result, pair)
+                    remaining_quantity -= order_result.filled
+                    cancel_succeeded = await self._handle_partial_fill(order_result, pair)
+                    if not cancel_succeeded:
+                        return order_result  # Cannot cancel — return partial to avoid double-spend
 
                 await asyncio.sleep(self.retry_delay)
                 self.logger.info(f"Retrying order. Attempt {attempt + 1}/{self.max_retries}.")
-                price = await self._adjust_price(order_side, price, attempt)
+                price = await self._adjust_price(order_side, price, attempt + 1)
 
             except DataFetchError as e:
                 self.logger.error(f"Attempt {attempt + 1} failed with error: {e!s}")
@@ -161,11 +165,19 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         self,
         order: Order,
         pair: str,
-    ) -> dict | None:
-        self.logger.info(f"Order partially filled with {order.filled}. Attempting to cancel and retry full quantity.")
+    ) -> bool:
+        """
+        Handles a partially filled order by attempting to cancel it.
+
+        Returns:
+            True if the cancel succeeded, False otherwise.
+        """
+        self.logger.info(f"Order partially filled with {order.filled}. Attempting to cancel and retry remaining.")
 
         if not await self._retry_cancel_order(order.identifier, pair):
             self.logger.error(f"Unable to cancel partially filled order {order.identifier} after retries.")
+            return False
+        return True
 
     async def _retry_cancel_order(
         self,

@@ -18,6 +18,8 @@ def setup_order_manager():
     balance_tracker = Mock()
     balance_tracker.reserve_funds_for_buy = AsyncMock()
     balance_tracker.reserve_funds_for_sell = AsyncMock()
+    balance_tracker.release_reserved_fiat = AsyncMock()
+    balance_tracker.release_reserved_crypto = AsyncMock()
     balance_tracker.update_after_initial_purchase = AsyncMock()
     order_book = Mock()
     event_bus = Mock(spec=EventBus)

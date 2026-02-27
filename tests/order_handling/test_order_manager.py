@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -80,6 +81,8 @@ class TestOrderManager:
             NotificationType.ORDER_FAILED,
             error_details="Error while placing initial buy order. Test error",
         )
+        # Verify funds were released after failure
+        balance_tracker.release_reserved_fiat.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_initialize_grid_orders_insufficient_balance(self, setup_order_manager):
@@ -129,6 +132,35 @@ class TestOrderManager:
             NotificationType.ERROR_OCCURRED,
             error_details="Error while placing initial buy order: Something broke",
         )
+
+    @pytest.mark.asyncio
+    async def test_initialize_grid_orders_none_result_releases_funds(self, setup_order_manager):
+        (
+            manager,
+            grid_manager,
+            order_validator,
+            balance_tracker,
+            _,
+            _,
+            order_execution_strategy,
+            notification_handler,
+        ) = setup_order_manager
+
+        grid_manager.sorted_buy_grids = [48000]
+        grid_manager.sorted_sell_grids = []
+        grid_manager.grid_levels = {48000: Mock()}
+        grid_manager.can_place_order.return_value = True
+        grid_manager.get_order_size_for_grid_level.return_value = 0.1
+        order_validator.adjust_and_validate_buy_quantity.return_value = 0.1
+        balance_tracker.get_total_balance_value.return_value = 50000
+        order_execution_strategy.execute_limit_order = AsyncMock(return_value=None)
+        notification_handler.async_send_notification = AsyncMock()
+
+        await manager.initialize_grid_orders(50000)
+
+        # Funds should be reserved then released when order returns None
+        balance_tracker.reserve_funds_for_buy.assert_awaited()
+        balance_tracker.release_reserved_fiat.assert_awaited()
 
     # ── _on_order_filled ────────────────────────────────────────────────
 
@@ -190,6 +222,34 @@ class TestOrderManager:
             NotificationType.ORDER_FAILED,
             error_details="Failed handling filled order. Execution failed",
         )
+
+    @pytest.mark.asyncio
+    async def test_on_order_filled_concurrent_calls_serialized(self, setup_order_manager):
+        """Two concurrent _on_order_filled calls are serialized by the lock."""
+        manager, _, _, _, order_book, _, _, _ = setup_order_manager
+        call_order = []
+
+        async def mock_handle(order, grid_level):
+            call_order.append(f"start_{order.identifier}")
+            await asyncio.sleep(0.05)
+            call_order.append(f"end_{order.identifier}")
+
+        manager._handle_order_completion = mock_handle
+
+        order1 = Mock(side=OrderSide.BUY, price=50000, identifier="order1")
+        order2 = Mock(side=OrderSide.SELL, price=51000, identifier="order2")
+        order_book.get_grid_level_for_order.return_value = Mock()
+
+        await asyncio.gather(
+            manager._on_order_filled(order1),
+            manager._on_order_filled(order2),
+        )
+
+        # With the lock, calls should be serialized: start_X, end_X, start_Y, end_Y
+        assert call_order[0].startswith("start_")
+        assert call_order[1].startswith("end_")
+        assert call_order[2].startswith("start_")
+        assert call_order[3].startswith("end_")
 
     # ── _handle_order_completion ────────────────────────────────────────
 
@@ -285,12 +345,13 @@ class TestOrderManager:
 
         await manager._place_order(OrderSide.SELL, source_grid_level, target_grid_level, quantity)
 
+        # Reserve is called before placing the order
+        balance_tracker.reserve_funds_for_sell.assert_awaited_once_with(quantity)
         grid_manager.pair_grid_levels.assert_called_once_with(
             source_grid_level,
             target_grid_level,
             pairing_type="sell",
         )
-        balance_tracker.reserve_funds_for_sell.assert_awaited_once_with(quantity)
         grid_manager.mark_order_pending.assert_called_once_with(target_grid_level, mock_order)
         order_book.add_order.assert_called_once_with(mock_order, target_grid_level)
         notification_handler.async_send_notification.assert_awaited_once_with(
@@ -321,12 +382,13 @@ class TestOrderManager:
 
         await manager._place_order(OrderSide.BUY, source_grid_level, target_grid_level, quantity)
 
+        # Reserve is called before placing the order
+        balance_tracker.reserve_funds_for_buy.assert_awaited_once_with(quantity * 48000)
         grid_manager.pair_grid_levels.assert_called_once_with(
             source_grid_level,
             target_grid_level,
             pairing_type="buy",
         )
-        balance_tracker.reserve_funds_for_buy.assert_awaited_once_with(quantity * 48000)
         grid_manager.mark_order_pending.assert_called_once_with(target_grid_level, mock_order)
         order_book.add_order.assert_called_once_with(mock_order, target_grid_level)
 
@@ -344,8 +406,10 @@ class TestOrderManager:
 
         await manager._place_order(OrderSide.SELL, buy_grid_level, sell_grid_level, quantity)
 
+        # Reserve is called first, then released on failure
+        balance_tracker.reserve_funds_for_sell.assert_awaited_once_with(quantity)
+        balance_tracker.release_reserved_crypto.assert_awaited_once_with(quantity)
         grid_manager.pair_grid_levels.assert_not_called()
-        balance_tracker.reserve_funds_for_sell.assert_not_called()
         grid_manager.mark_order_pending.assert_not_called()
         order_book.add_order.assert_not_called()
 
@@ -363,10 +427,32 @@ class TestOrderManager:
 
         await manager._place_order(OrderSide.BUY, sell_grid_level, buy_grid_level, quantity)
 
+        # Reserve is called first, then released on failure
+        balance_tracker.reserve_funds_for_buy.assert_awaited_once_with(quantity * 48000)
+        balance_tracker.release_reserved_fiat.assert_awaited_once_with(quantity * 48000)
         grid_manager.pair_grid_levels.assert_not_called()
-        balance_tracker.reserve_funds_for_buy.assert_not_called()
         grid_manager.mark_order_pending.assert_not_called()
         order_book.add_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_place_order_exception_releases_funds(self, setup_order_manager):
+        manager, _, order_validator, balance_tracker, _, _, order_execution_strategy, _ = setup_order_manager
+        source_grid_level = Mock(price=48000)
+        target_grid_level = Mock(price=52000)
+        quantity = 0.01
+
+        order_validator.adjust_and_validate_sell_quantity.return_value = quantity
+        order_execution_strategy.execute_limit_order = AsyncMock(
+            side_effect=OrderExecutionFailedError(
+                "Exchange error", OrderSide.SELL, OrderType.LIMIT, "BTC/USDT", quantity, 52000
+            ),
+        )
+
+        with pytest.raises(OrderExecutionFailedError):
+            await manager._place_order(OrderSide.SELL, source_grid_level, target_grid_level, quantity)
+
+        balance_tracker.reserve_funds_for_sell.assert_awaited_once_with(quantity)
+        balance_tracker.release_reserved_crypto.assert_awaited_once_with(quantity)
 
     # ── perform_initial_purchase ────────────────────────────────────────
 

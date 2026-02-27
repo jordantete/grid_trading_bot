@@ -127,13 +127,97 @@ class TestLiveOrderExecutionStrategy:
         with pytest.raises(DataFetchError):
             await strategy.get_order(order_id, pair)
 
-    async def test_handle_partial_fill(self, setup_live_strategy):
+    async def test_handle_partial_fill_cancel_succeeds(self, setup_live_strategy):
         strategy, exchange_service = setup_live_strategy
         partial_order = Mock(identifier="partial-order", filled=0.5)
         exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
 
-        await strategy._handle_partial_fill(partial_order, "BTC/USDT")
+        result = await strategy._handle_partial_fill(partial_order, "BTC/USDT")
+
+        assert result is True
         exchange_service.cancel_order.assert_called_once_with("partial-order", "BTC/USDT")
+
+    async def test_handle_partial_fill_cancel_fails(self, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
+        partial_order = Mock(identifier="partial-order", filled=0.5)
+        exchange_service.cancel_order = AsyncMock(return_value={"status": "failed"})
+
+        result = await strategy._handle_partial_fill(partial_order, "BTC/USDT")
+
+        assert result is False
+
+    async def test_execute_market_order_partial_fill_cancel_succeeds_retries_remaining(self, setup_live_strategy):
+        """Partial fill → cancel succeeds → retry with remaining quantity."""
+        strategy, exchange_service = setup_live_strategy
+        strategy.retry_delay = 0  # Speed up test
+        pair = "BTC/USDT"
+        quantity = 1.0
+        price = 30000
+
+        partial_raw = {
+            "id": "partial-order",
+            "status": "open",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": quantity,
+            "filled": 0.3,
+            "remaining": 0.7,
+            "symbol": pair,
+        }
+        closed_raw = {
+            "id": "final-order",
+            "status": "closed",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": 0.7,
+            "filled": 0.7,
+            "remaining": 0,
+            "symbol": pair,
+        }
+
+        exchange_service.place_order = AsyncMock(side_effect=[partial_raw, closed_raw])
+        exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+
+        order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
+
+        assert order is not None
+        assert order.status == OrderStatus.CLOSED
+        # Second call should use remaining quantity (0.7)
+        second_call = exchange_service.place_order.call_args_list[1]
+        assert second_call[0][3] == pytest.approx(0.7)
+
+    async def test_execute_market_order_partial_fill_cancel_fails_returns_partial(self, setup_live_strategy):
+        """Partial fill → cancel fails → returns partial result (no double-spend)."""
+        strategy, exchange_service = setup_live_strategy
+        strategy.retry_delay = 0
+        pair = "BTC/USDT"
+        quantity = 1.0
+        price = 30000
+
+        partial_raw = {
+            "id": "partial-order",
+            "status": "open",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": quantity,
+            "filled": 0.3,
+            "remaining": 0.7,
+            "symbol": pair,
+        }
+
+        exchange_service.place_order = AsyncMock(return_value=partial_raw)
+        exchange_service.cancel_order = AsyncMock(return_value={"status": "failed"})
+
+        order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
+
+        assert order is not None
+        assert order.status == OrderStatus.OPEN
+        assert order.filled == 0.3
+        # Should have only placed ONE order (no retry after failed cancel)
+        assert exchange_service.place_order.call_count == 1
 
     async def test_retry_cancel_order(self, setup_live_strategy):
         strategy, exchange_service = setup_live_strategy
@@ -165,3 +249,11 @@ class TestLiveOrderExecutionStrategy:
         adjusted_price = await strategy._adjust_price(OrderSide.SELL, price, 1)
 
         assert adjusted_price < price
+
+    async def test_adjust_price_first_attempt_no_adjustment(self, setup_live_strategy):
+        """Attempt 0 should produce no adjustment."""
+        strategy, _ = setup_live_strategy
+        price = 30000
+        adjusted_price = await strategy._adjust_price(OrderSide.BUY, price, 0)
+
+        assert adjusted_price == price

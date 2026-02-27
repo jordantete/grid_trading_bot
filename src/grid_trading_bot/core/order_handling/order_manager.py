@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from grid_trading_bot.config.trading_mode import TradingMode
@@ -10,6 +11,10 @@ from ..grid_management.grid_level import GridLevel
 from ..grid_management.grid_manager import GridManager
 from ..order_handling.balance_tracker import BalanceTracker
 from ..order_handling.order_book import OrderBook
+from ..validation.exceptions import (
+    InsufficientBalanceError,
+    InsufficientCryptoBalanceError,
+)
 from ..validation.order_validator import OrderValidator
 from .exceptions import OrderExecutionFailedError
 from .execution_strategy.order_execution_strategy_interface import (
@@ -44,6 +49,7 @@ class OrderManager:
         self.order_simulator = order_simulator
         self.trading_mode: TradingMode = trading_mode
         self.trading_pair = trading_pair
+        self._lock = asyncio.Lock()
         self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
 
@@ -59,8 +65,9 @@ class OrderManager:
         """
         Places initial buy and sell orders for grid levels around the current price.
         """
-        await self._initialize_orders(OrderSide.BUY, current_price)
-        await self._initialize_orders(OrderSide.SELL, current_price)
+        async with self._lock:
+            await self._initialize_orders(OrderSide.BUY, current_price)
+            await self._initialize_orders(OrderSide.SELL, current_price)
 
     async def _initialize_orders(self, side: OrderSide, current_price: float) -> None:
         grids = self.grid_manager.sorted_buy_grids if side == OrderSide.BUY else self.grid_manager.sorted_sell_grids
@@ -83,23 +90,30 @@ class OrderManager:
                 try:
                     adjusted_quantity = self._validate_order_quantity(side, order_quantity, price)
 
+                    await self._reserve_funds(side, adjusted_quantity, price)
+
                     self.logger.info(
                         f"Placing initial {side.value} limit order at grid level {price} for "
                         f"{adjusted_quantity} {self.trading_pair}.",
                     )
-                    order = await self.order_execution_strategy.execute_limit_order(
-                        side,
-                        self.trading_pair,
-                        adjusted_quantity,
-                        price,
-                    )
 
-                    if order is None:
-                        raise OrderExecutionFailedError(
-                            f"{side.value.capitalize()} order at {price} returned None",
+                    try:
+                        order = await self.order_execution_strategy.execute_limit_order(
+                            side,
+                            self.trading_pair,
+                            adjusted_quantity,
+                            price,
                         )
 
-                    await self._reserve_funds(side, adjusted_quantity, price)
+                        if order is None:
+                            await self._release_funds(side, adjusted_quantity, price)
+                            raise OrderExecutionFailedError(
+                                f"{side.value.capitalize()} order at {price} returned None",
+                            )
+                    except OrderExecutionFailedError:
+                        await self._release_funds(side, adjusted_quantity, price)
+                        raise
+
                     self.grid_manager.mark_order_pending(grid_level, order)
                     self.order_book.add_order(order, grid_level)
 
@@ -123,6 +137,12 @@ class OrderManager:
             await self.balance_tracker.reserve_funds_for_buy(quantity * price)
         else:
             await self.balance_tracker.reserve_funds_for_sell(quantity)
+
+    async def _release_funds(self, side: OrderSide, quantity: float, price: float) -> None:
+        if side == OrderSide.BUY:
+            await self.balance_tracker.release_reserved_fiat(quantity * price)
+        else:
+            await self.balance_tracker.release_reserved_crypto(quantity)
 
     async def _handle_order_error(self, error: Exception, context: str) -> None:
         if isinstance(error, OrderExecutionFailedError):
@@ -148,11 +168,12 @@ class OrderManager:
         Args:
             order: The cancelled Order instance.
         """
-        self.logger.warning(f"Order cancelled at grid level — re-placement not yet implemented: {order}")
-        await self.notification_handler.async_send_notification(
-            NotificationType.ORDER_CANCELLED,
-            order_details=str(order),
-        )
+        async with self._lock:
+            self.logger.warning(f"Order cancelled at grid level — re-placement not yet implemented: {order}")
+            await self.notification_handler.async_send_notification(
+                NotificationType.ORDER_CANCELLED,
+                order_details=str(order),
+            )
 
     async def _on_order_filled(
         self,
@@ -164,30 +185,31 @@ class OrderManager:
         Args:
             order: The filled Order instance.
         """
-        try:
-            grid_level = self.order_book.get_grid_level_for_order(order)
+        async with self._lock:
+            try:
+                grid_level = self.order_book.get_grid_level_for_order(order)
 
-            if not grid_level:
-                self.logger.error(
-                    f"Could not handle Order completion - No grid level found for the given filled order {order}",
+                if not grid_level:
+                    self.logger.error(
+                        f"Could not handle Order completion - No grid level found for the given filled order {order}",
+                    )
+                    return
+
+                await self._handle_order_completion(order, grid_level)
+
+            except OrderExecutionFailedError as e:
+                self.logger.error(f"Failed while handling filled order - {e!s}", exc_info=True)
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ORDER_FAILED,
+                    error_details=f"Failed handling filled order. {e}",
                 )
-                return
 
-            await self._handle_order_completion(order, grid_level)
-
-        except OrderExecutionFailedError as e:
-            self.logger.error(f"Failed while handling filled order - {e!s}", exc_info=True)
-            await self.notification_handler.async_send_notification(
-                NotificationType.ORDER_FAILED,
-                error_details=f"Failed handling filled order. {e}",
-            )
-
-        except (DataFetchError, ValueError) as e:
-            self.logger.error(f"Error while handling filled order {order.identifier}: {e}", exc_info=True)
-            await self.notification_handler.async_send_notification(
-                NotificationType.ORDER_FAILED,
-                error_details=f"Failed handling filled order. {e}",
-            )
+            except (DataFetchError, ValueError) as e:
+                self.logger.error(f"Error while handling filled order {order.identifier}: {e}", exc_info=True)
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ORDER_FAILED,
+                    error_details=f"Failed handling filled order. {e}",
+                )
 
     async def _handle_order_completion(
         self,
@@ -269,17 +291,28 @@ class OrderManager:
         """
         adjusted_quantity = self._validate_order_quantity(order_side, quantity, target_grid_level.price)
 
-        order = await self.order_execution_strategy.execute_limit_order(
-            order_side,
-            self.trading_pair,
-            adjusted_quantity,
-            target_grid_level.price,
-        )
+        try:
+            await self._reserve_funds(order_side, adjusted_quantity, target_grid_level.price)
+        except (InsufficientBalanceError, InsufficientCryptoBalanceError) as e:
+            self.logger.error(
+                f"Failed to reserve funds for {order_side.value} order at {target_grid_level.price}: {e}",
+            )
+            return
+
+        try:
+            order = await self.order_execution_strategy.execute_limit_order(
+                order_side,
+                self.trading_pair,
+                adjusted_quantity,
+                target_grid_level.price,
+            )
+        except Exception:
+            await self._release_funds(order_side, adjusted_quantity, target_grid_level.price)
+            raise
 
         if order:
             pairing_type = "buy" if order_side == OrderSide.BUY else "sell"
             self.grid_manager.pair_grid_levels(source_grid_level, target_grid_level, pairing_type=pairing_type)
-            await self._reserve_funds(order_side, order.amount, target_grid_level.price)
             self.grid_manager.mark_order_pending(target_grid_level, order)
             self.order_book.add_order(order, target_grid_level)
             await self.notification_handler.async_send_notification(
@@ -287,6 +320,7 @@ class OrderManager:
                 order_details=str(order),
             )
         else:
+            await self._release_funds(order_side, adjusted_quantity, target_grid_level.price)
             self.logger.error(
                 f"Failed to place {order_side.value} order at grid level {target_grid_level}",
             )
@@ -301,54 +335,59 @@ class OrderManager:
         Args:
             current_price: The current price of the trading pair.
         """
-        initial_quantity = self.grid_manager.get_initial_order_quantity(
-            current_fiat_balance=self.balance_tracker.balance,
-            current_crypto_balance=self.balance_tracker.crypto_balance,
-            current_price=current_price,
-        )
-
-        if initial_quantity <= 0:
-            self.logger.warning("Initial purchase quantity is zero or negative. Skipping initial purchase.")
-            return
-
-        self.logger.info(f"Performing initial crypto purchase: {initial_quantity} at price {current_price}.")
-
-        try:
-            buy_order = await self.order_execution_strategy.execute_market_order(
-                OrderSide.BUY,
-                self.trading_pair,
-                initial_quantity,
-                current_price,
-            )
-            self.logger.info(f"Initial crypto purchase completed. Order details: {buy_order}")
-            self.order_book.add_order(buy_order)
-            await self.notification_handler.async_send_notification(
-                NotificationType.ORDER_PLACED,
-                order_details=f"Initial purchase done: {buy_order!s}",
+        buy_order = None
+        async with self._lock:
+            initial_quantity = self.grid_manager.get_initial_order_quantity(
+                current_fiat_balance=self.balance_tracker.balance,
+                current_crypto_balance=self.balance_tracker.crypto_balance,
+                current_price=current_price,
             )
 
-            if self.trading_mode == TradingMode.BACKTEST:
-                await self.order_simulator.simulate_fill(buy_order, buy_order.timestamp)
-            else:
-                # Update fiat and crypto balance in LIVE & PAPER_TRADING modes without simulating it
-                await self.balance_tracker.update_after_initial_purchase(initial_order=buy_order)
+            if initial_quantity <= 0:
+                self.logger.warning("Initial purchase quantity is zero or negative. Skipping initial purchase.")
+                return
 
-        except OrderExecutionFailedError as e:
-            self.logger.error(f"Failed while executing initial purchase - {e!s}", exc_info=True)
-            await self.notification_handler.async_send_notification(
-                NotificationType.ORDER_FAILED,
-                error_details=f"Error while performing initial purchase. {e}",
-            )
+            self.logger.info(f"Performing initial crypto purchase: {initial_quantity} at price {current_price}.")
 
-        except (DataFetchError, ValueError) as e:
-            self.logger.error(
-                f"Failed to perform initial purchase at current_price: {current_price} - error: {e}",
-                exc_info=True,
-            )
-            await self.notification_handler.async_send_notification(
-                NotificationType.ORDER_FAILED,
-                error_details=f"Error while performing initial purchase. {e}",
-            )
+            try:
+                buy_order = await self.order_execution_strategy.execute_market_order(
+                    OrderSide.BUY,
+                    self.trading_pair,
+                    initial_quantity,
+                    current_price,
+                )
+                self.logger.info(f"Initial crypto purchase completed. Order details: {buy_order}")
+                self.order_book.add_order(buy_order)
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ORDER_PLACED,
+                    order_details=f"Initial purchase done: {buy_order!s}",
+                )
+
+                if self.trading_mode != TradingMode.BACKTEST:
+                    # Update fiat and crypto balance in LIVE & PAPER_TRADING modes without simulating it
+                    await self.balance_tracker.update_after_initial_purchase(initial_order=buy_order)
+
+            except OrderExecutionFailedError as e:
+                self.logger.error(f"Failed while executing initial purchase - {e!s}", exc_info=True)
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ORDER_FAILED,
+                    error_details=f"Error while performing initial purchase. {e}",
+                )
+
+            except (DataFetchError, ValueError) as e:
+                self.logger.error(
+                    f"Failed to perform initial purchase at current_price: {current_price} - error: {e}",
+                    exc_info=True,
+                )
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ORDER_FAILED,
+                    error_details=f"Error while performing initial purchase. {e}",
+                )
+
+        # simulate_fill publishes ORDER_FILLED which re-enters _on_order_filled,
+        # so it must run outside the lock to avoid deadlock.
+        if buy_order and self.trading_mode == TradingMode.BACKTEST:
+            await self.order_simulator.simulate_fill(buy_order, buy_order.timestamp)
 
     async def execute_take_profit_or_stop_loss_order(
         self,
@@ -368,42 +407,45 @@ class OrderManager:
             take_profit_order (bool): Indicates whether this is a take-profit event.
             stop_loss_order (bool): Indicates whether this is a stop-loss event.
         """
-        if not (take_profit_order or stop_loss_order):
-            self.logger.warning("No take profit or stop loss action specified.")
-            return
+        async with self._lock:
+            if not (take_profit_order or stop_loss_order):
+                self.logger.warning("No take profit or stop loss action specified.")
+                return
 
-        event = "Take profit" if take_profit_order else "Stop loss"
-        try:
-            quantity = self.balance_tracker.crypto_balance
-            order = await self.order_execution_strategy.execute_market_order(
-                OrderSide.SELL,
-                self.trading_pair,
-                quantity,
-                current_price,
-            )
-
-            if not order:
-                raise OrderExecutionFailedError(
-                    f"{event} order execution returned None at price {current_price}",
+            event = "Take profit" if take_profit_order else "Stop loss"
+            try:
+                quantity = self.balance_tracker.crypto_balance
+                order = await self.order_execution_strategy.execute_market_order(
+                    OrderSide.SELL,
+                    self.trading_pair,
+                    quantity,
+                    current_price,
                 )
 
-            self.order_book.add_order(order)
-            await self.notification_handler.async_send_notification(
-                NotificationType.TAKE_PROFIT_TRIGGERED if take_profit_order else NotificationType.STOP_LOSS_TRIGGERED,
-                order_details=str(order),
-            )
-            self.logger.info(f"{event} triggered at {current_price} and sell order executed.")
+                if not order:
+                    raise OrderExecutionFailedError(
+                        f"{event} order execution returned None at price {current_price}",
+                    )
 
-        except OrderExecutionFailedError as e:
-            self.logger.error(f"Order execution failed: {e!s}")
-            await self.notification_handler.async_send_notification(
-                NotificationType.ORDER_FAILED,
-                error_details=f"Failed to place {event} order: {e}",
-            )
+                self.order_book.add_order(order)
+                await self.notification_handler.async_send_notification(
+                    NotificationType.TAKE_PROFIT_TRIGGERED
+                    if take_profit_order
+                    else NotificationType.STOP_LOSS_TRIGGERED,
+                    order_details=str(order),
+                )
+                self.logger.info(f"{event} triggered at {current_price} and sell order executed.")
 
-        except (DataFetchError, ValueError) as e:
-            self.logger.error(f"Failed to execute {event} sell order at {current_price}: {e}")
-            await self.notification_handler.async_send_notification(
-                NotificationType.ERROR_OCCURRED,
-                error_details=f"Failed to place {event} order: {e}",
-            )
+            except OrderExecutionFailedError as e:
+                self.logger.error(f"Order execution failed: {e!s}")
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ORDER_FAILED,
+                    error_details=f"Failed to place {event} order: {e}",
+                )
+
+            except (DataFetchError, ValueError) as e:
+                self.logger.error(f"Failed to execute {event} sell order at {current_price}: {e}")
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ERROR_OCCURRED,
+                    error_details=f"Failed to place {event} order: {e}",
+                )

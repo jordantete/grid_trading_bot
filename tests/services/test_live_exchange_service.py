@@ -353,6 +353,23 @@ class TestLiveExchangeService:
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(2)
+    async def test_subscribe_to_ticker_updates_skips_invalid_price(self, setup_websocket_test):
+        service, mock_exchange_instance, on_ticker_update = setup_websocket_test
+        mock_exchange_instance.watch_ticker = AsyncMock(
+            side_effect=[
+                {"last": None},
+                {"last": 50000.0},
+                asyncio.CancelledError(),
+            ],
+        )
+
+        await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
+
+        on_ticker_update.assert_awaited_once_with(50000.0)
+        assert not service.connection_active
+
+    @pytest.mark.asyncio
+    @pytest.mark.timeout(2)
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     @patch("grid_trading_bot.core.services.live_exchange_service.asyncio.sleep", new_callable=AsyncMock)
@@ -516,6 +533,101 @@ class TestLiveExchangeService:
 
         with pytest.raises(DataFetchError, match="Network issue occurred while fetching order status: Network error"):
             await service.fetch_order("BTC/USD", "123")
+
+    # ── _validate_price ────────────────────────────────────────────────
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_validate_price_valid(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
+        mock_ccxtpro.binance.return_value = Mock()
+        mock_getattr.return_value = mock_ccxtpro.binance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        result = service._validate_price(50000.0, "BTC/USD")
+        assert result == 50000.0
+        assert service._last_known_price == 50000.0
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_validate_price_none(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
+        mock_ccxtpro.binance.return_value = Mock()
+        mock_getattr.return_value = mock_ccxtpro.binance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        assert service._validate_price(None, "BTC/USD") is None
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_validate_price_nan(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
+        mock_ccxtpro.binance.return_value = Mock()
+        mock_getattr.return_value = mock_ccxtpro.binance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        assert service._validate_price(float("nan"), "BTC/USD") is None
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_validate_price_negative(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
+        mock_ccxtpro.binance.return_value = Mock()
+        mock_getattr.return_value = mock_ccxtpro.binance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        assert service._validate_price(-100.0, "BTC/USD") is None
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_validate_price_zero(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
+        mock_ccxtpro.binance.return_value = Mock()
+        mock_getattr.return_value = mock_ccxtpro.binance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        assert service._validate_price(0.0, "BTC/USD") is None
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_validate_price_infinity(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
+        mock_ccxtpro.binance.return_value = Mock()
+        mock_getattr.return_value = mock_ccxtpro.binance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        assert service._validate_price(float("inf"), "BTC/USD") is None
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_validate_price_excessive_deviation(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
+        mock_ccxtpro.binance.return_value = Mock()
+        mock_getattr.return_value = mock_ccxtpro.binance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        # Set a known price first
+        service._last_known_price = 50000.0
+
+        # 51% deviation should be rejected
+        assert service._validate_price(100000.0, "BTC/USD") is None
+
+        # 40% deviation should be accepted
+        result = service._validate_price(70000.0, "BTC/USD")
+        assert result == 70000.0
+
+    @pytest.mark.asyncio
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    async def test_get_current_price_invalid_raises_error(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.fetch_ticker.return_value = {"last": None}
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        with pytest.raises(DataFetchError, match="Invalid price received"):
+            await service.get_current_price("BTC/USD")
 
 
 class TestLiveExchangeServiceCircuitBreaker:

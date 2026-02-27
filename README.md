@@ -6,16 +6,23 @@
 [![PyPI version](https://img.shields.io/pypi/v/grid-trading-bot)](https://pypi.org/project/grid-trading-bot/)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://jordantete.github.io/grid_trading_bot/)
 
-Open-source cryptocurrency grid trading bot in Python. Backtest on historical data, paper trade on sandbox APIs, or go live — with full Grafana monitoring.
+**Backtest. Paper trade. Go live.**
+A modular Python engine for crypto grid trading with real-time Grafana monitoring.
+
+---
 
 ## Features
 
-- **Backtesting** on historical OHLCV data (CSV or fetched via CCXT)
-- **Paper Trading** and **Live Trading** with retry logic and circuit breakers
-- **Simple Grid** and **Hedged Grid** strategies with arithmetic or geometric spacing
-- **Risk Management** — configurable take-profit, stop-loss, and slippage
-- **Performance Metrics** — ROI, max drawdown, Sharpe ratio, interactive Plotly charts
-- **Monitoring** — Grafana dashboards with Loki log aggregation
+|                           |                                                                             |
+| ------------------------- | --------------------------------------------------------------------------- |
+| **Backtesting**           | Simulate grid strategies on historical OHLCV data (CSV or fetched via CCXT) |
+| **Paper Trading**         | Test against real market data using exchange sandbox APIs                   |
+| **Live Trading**          | Execute real trades with retry logic and circuit breakers                   |
+| **Grid Strategies**       | Simple grid and hedged grid with arithmetic or geometric spacing            |
+| **Risk Management**       | Configurable take-profit, stop-loss, and slippage controls                  |
+| **Performance Analytics** | ROI, max drawdown, Sharpe ratio, interactive Plotly charts                  |
+| **Monitoring**            | Grafana dashboards with Loki log aggregation                                |
+| **Multi-Exchange**        | Any exchange supported by CCXT                                              |
 
 ## Quick Start
 
@@ -26,13 +33,18 @@ uv sync --all-extras --dev
 uv run grid_trading_bot run --config config/config.json
 ```
 
+## Documentation
+
 > **[Full documentation](https://jordantete.github.io/grid_trading_bot/)** — Installation, configuration reference, CLI usage, monitoring setup, architecture guide, and more.
 
-## Donations
-
-If you find this project helpful, consider buying me a coffee!
-
-[![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/pownedj)
+| Resource                                                                                      | Description                             |
+| --------------------------------------------------------------------------------------------- | --------------------------------------- |
+| [Quick Start](https://jordantete.github.io/grid_trading_bot/quick-start/)                     | Install and run your first backtest     |
+| [Configuration](https://jordantete.github.io/grid_trading_bot/configuration/config-file/)     | Full `config.json` parameter reference  |
+| [Grid Trading Concepts](https://jordantete.github.io/grid_trading_bot/concepts/grid-trading/) | Understand grid trading strategies      |
+| [Monitoring Setup](https://jordantete.github.io/grid_trading_bot/monitoring/setup/)           | Set up Grafana dashboards for live bots |
+| [Architecture](https://jordantete.github.io/grid_trading_bot/architecture/overview/)          | Codebase design and patterns            |
+| [Contributing](https://jordantete.github.io/grid_trading_bot/contributing/guide/)             | Help improve the project                |
 
 ## License
 

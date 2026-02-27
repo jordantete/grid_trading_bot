@@ -1,4 +1,5 @@
 import asyncio
+from decimal import Decimal
 import logging
 
 from grid_trading_bot.config.trading_mode import TradingMode
@@ -12,7 +13,7 @@ from ..validation.exceptions import (
 from .fee_calculator import FeeCalculator
 from .order import Order, OrderSide, OrderStatus
 
-_BALANCE_PRECISION = 8  # Decimal places for balance rounding to prevent floating-point drift
+_QUANTIZE_EXP = Decimal("1e-8")
 
 
 class BalanceTracker:
@@ -41,14 +42,18 @@ class BalanceTracker:
         self.base_currency: str = base_currency
         self.quote_currency: str = quote_currency
 
-        self._balance: float = 0.0
-        self._crypto_balance: float = 0.0
-        self.total_fees: float = 0
-        self._reserved_fiat: float = 0.0
-        self._reserved_crypto: float = 0.0
+        self._balance: Decimal = Decimal("0")
+        self._crypto_balance: Decimal = Decimal("0")
+        self._total_fees: Decimal = Decimal("0")
+        self._reserved_fiat: Decimal = Decimal("0")
+        self._reserved_crypto: Decimal = Decimal("0")
         self._lock = asyncio.Lock()
 
         self.event_bus.subscribe(Events.ORDER_FILLED, self._update_balance_on_order_completion)
+
+    @staticmethod
+    def _to_decimal(value: float | int | Decimal) -> Decimal:
+        return Decimal(str(value))
 
     def cleanup(self) -> None:
         """Unsubscribes from all EventBus events."""
@@ -56,19 +61,23 @@ class BalanceTracker:
 
     @property
     def balance(self) -> float:
-        return self._balance
+        return float(self._balance)
 
     @property
     def crypto_balance(self) -> float:
-        return self._crypto_balance
+        return float(self._crypto_balance)
+
+    @property
+    def total_fees(self) -> float:
+        return float(self._total_fees)
 
     @property
     def reserved_fiat(self) -> float:
-        return self._reserved_fiat
+        return float(self._reserved_fiat)
 
     @property
     def reserved_crypto(self) -> float:
-        return self._reserved_crypto
+        return float(self._reserved_crypto)
 
     async def setup_balances(
         self,
@@ -88,15 +97,15 @@ class BalanceTracker:
             exchange_service: The exchange instance (required for live trading).
         """
         if self.trading_mode == TradingMode.BACKTEST or self.trading_mode == TradingMode.PAPER_TRADING:
-            self._balance = initial_balance
-            self._crypto_balance = initial_crypto_balance
+            self._balance = self._to_decimal(initial_balance)
+            self._crypto_balance = self._to_decimal(initial_crypto_balance)
         elif self.trading_mode == TradingMode.LIVE:
             self._balance, self._crypto_balance = await self._fetch_live_balances(exchange_service)
 
     async def _fetch_live_balances(
         self,
         exchange_service: ExchangeInterface,
-    ) -> tuple[float, float]:
+    ) -> tuple[Decimal, Decimal]:
         """
         Fetches live balances from the exchange asynchronously.
 
@@ -104,15 +113,15 @@ class BalanceTracker:
             exchange_service: The exchange instance.
 
         Returns:
-            tuple: The quote and base currency balances.
+            tuple: The quote and base currency balances as Decimal.
         """
         balances = await exchange_service.get_balance()
 
         if not balances or "free" not in balances:
             raise ValueError(f"Unexpected balance structure: {balances}")
 
-        quote_balance = float(balances.get("free", {}).get(self.quote_currency, 0.0))
-        base_balance = float(balances.get("free", {}).get(self.base_currency, 0.0))
+        quote_balance = self._to_decimal(balances.get("free", {}).get(self.quote_currency, 0.0))
+        base_balance = self._to_decimal(balances.get("free", {}).get(self.base_currency, 0.0))
         self.logger.info(
             f"Fetched balances - Quote: {self.quote_currency}: {quote_balance}, "
             f"Base: {self.base_currency}: {base_balance}",
@@ -153,17 +162,19 @@ class BalanceTracker:
             quantity: The quantity of crypto purchased.
             price: The price at which the crypto was purchased (per unit).
         """
-        fee = self.fee_calculator.calculate_fee(quantity * price)
-        total_cost = quantity * price + fee
+        d_quantity = self._to_decimal(quantity)
+        d_price = self._to_decimal(price)
+        fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price))
+        total_cost = (d_quantity * d_price + fee).quantize(_QUANTIZE_EXP)
 
-        self._reserved_fiat = round(self._reserved_fiat - total_cost, _BALANCE_PRECISION)
+        self._reserved_fiat = (self._reserved_fiat - total_cost).quantize(_QUANTIZE_EXP)
         if self._reserved_fiat < 0:
             overflow = -self._reserved_fiat
-            self._balance = round(self._balance - overflow, _BALANCE_PRECISION)
-            self._reserved_fiat = 0.0
+            self._balance = (self._balance - overflow).quantize(_QUANTIZE_EXP)
+            self._reserved_fiat = Decimal("0")
 
-        self._crypto_balance = round(self._crypto_balance + quantity, _BALANCE_PRECISION)
-        self.total_fees = round(self.total_fees + fee, _BALANCE_PRECISION)
+        self._crypto_balance = (self._crypto_balance + d_quantity).quantize(_QUANTIZE_EXP)
+        self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)
         self.logger.info(f"Buy order completed: {quantity} crypto purchased at {price}.")
         self._log_balance_update(price)
 
@@ -183,17 +194,19 @@ class BalanceTracker:
             quantity: The quantity of crypto sold.
             price: The price at which the crypto was sold (per unit).
         """
-        fee = self.fee_calculator.calculate_fee(quantity * price)
-        sale_proceeds = quantity * price - fee
-        self._reserved_crypto = round(self._reserved_crypto - quantity, _BALANCE_PRECISION)
+        d_quantity = self._to_decimal(quantity)
+        d_price = self._to_decimal(price)
+        fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price))
+        sale_proceeds = (d_quantity * d_price - fee).quantize(_QUANTIZE_EXP)
+        self._reserved_crypto = (self._reserved_crypto - d_quantity).quantize(_QUANTIZE_EXP)
 
         if self._reserved_crypto < 0:
             overflow = -self._reserved_crypto
-            self._crypto_balance = round(self._crypto_balance + overflow, _BALANCE_PRECISION)
-            self._reserved_crypto = 0.0
+            self._crypto_balance = (self._crypto_balance + overflow).quantize(_QUANTIZE_EXP)
+            self._reserved_crypto = Decimal("0")
 
-        self._balance = round(self._balance + sale_proceeds, _BALANCE_PRECISION)
-        self.total_fees = round(self.total_fees + fee, _BALANCE_PRECISION)
+        self._balance = (self._balance + sale_proceeds).quantize(_QUANTIZE_EXP)
+        self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)
         self.logger.info(f"Sell order completed: {quantity} crypto sold at {price}.")
         self._log_balance_update(price)
 
@@ -208,12 +221,15 @@ class BalanceTracker:
             if initial_order.status != OrderStatus.CLOSED:
                 raise ValueError(f"Order {initial_order.identifier} is not CLOSED. Cannot update balances.")
 
-            total_cost = initial_order.filled * initial_order.average
-            fee = self.fee_calculator.calculate_fee(initial_order.amount * initial_order.average)
+            d_filled = self._to_decimal(initial_order.filled)
+            d_average = self._to_decimal(initial_order.average)
 
-            self._crypto_balance = round(self._crypto_balance + initial_order.filled, _BALANCE_PRECISION)
-            self._balance = round(self._balance - total_cost - fee, _BALANCE_PRECISION)
-            self.total_fees = round(self.total_fees + fee, _BALANCE_PRECISION)
+            total_cost = (d_filled * d_average).quantize(_QUANTIZE_EXP)
+            fee = self._to_decimal(self.fee_calculator.calculate_fee(initial_order.amount * initial_order.average))
+
+            self._crypto_balance = (self._crypto_balance + d_filled).quantize(_QUANTIZE_EXP)
+            self._balance = (self._balance - total_cost - fee).quantize(_QUANTIZE_EXP)
+            self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)
             self._log_balance_update(initial_order.average)
 
     async def reserve_funds_for_buy(
@@ -227,11 +243,12 @@ class BalanceTracker:
             amount: The amount of fiat to reserve.
         """
         async with self._lock:
-            if self._balance < amount:
+            d_amount = self._to_decimal(amount)
+            if self._balance < d_amount:
                 raise InsufficientBalanceError(f"Insufficient fiat balance to reserve {amount}.")
 
-            self._reserved_fiat = round(self._reserved_fiat + amount, _BALANCE_PRECISION)
-            self._balance = round(self._balance - amount, _BALANCE_PRECISION)
+            self._reserved_fiat = (self._reserved_fiat + d_amount).quantize(_QUANTIZE_EXP)
+            self._balance = (self._balance - d_amount).quantize(_QUANTIZE_EXP)
             self.logger.info(f"Reserved {amount} fiat for a buy order. Remaining fiat balance: {self._balance}.")
 
     async def reserve_funds_for_sell(
@@ -245,24 +262,65 @@ class BalanceTracker:
             quantity: The quantity of crypto to reserve.
         """
         async with self._lock:
-            if self._crypto_balance < quantity:
+            d_quantity = self._to_decimal(quantity)
+            if self._crypto_balance < d_quantity:
                 raise InsufficientCryptoBalanceError(f"Insufficient crypto balance to reserve {quantity}.")
 
-            self._reserved_crypto = round(self._reserved_crypto + quantity, _BALANCE_PRECISION)
-            self._crypto_balance = round(self._crypto_balance - quantity, _BALANCE_PRECISION)
+            self._reserved_crypto = (self._reserved_crypto + d_quantity).quantize(_QUANTIZE_EXP)
+            self._crypto_balance = (self._crypto_balance - d_quantity).quantize(_QUANTIZE_EXP)
             self.logger.info(
                 f"Reserved {quantity} crypto for a sell order. Remaining crypto balance: {self._crypto_balance}.",
+            )
+
+    async def release_reserved_fiat(self, amount: float) -> None:
+        """
+        Releases reserved fiat back to available balance.
+
+        Args:
+            amount: The amount of fiat to release from reserved.
+        """
+        async with self._lock:
+            d_amount = self._to_decimal(amount)
+            if d_amount > self._reserved_fiat:
+                self.logger.warning(
+                    f"Attempted to release {amount} fiat but only {self._reserved_fiat} reserved. "
+                    f"Releasing all reserved fiat.",
+                )
+                d_amount = self._reserved_fiat
+
+            self._reserved_fiat = (self._reserved_fiat - d_amount).quantize(_QUANTIZE_EXP)
+            self._balance = (self._balance + d_amount).quantize(_QUANTIZE_EXP)
+            self.logger.info(f"Released {d_amount} reserved fiat. Available fiat balance: {self._balance}.")
+
+    async def release_reserved_crypto(self, quantity: float) -> None:
+        """
+        Releases reserved crypto back to available balance.
+
+        Args:
+            quantity: The quantity of crypto to release from reserved.
+        """
+        async with self._lock:
+            d_quantity = self._to_decimal(quantity)
+            if d_quantity > self._reserved_crypto:
+                self.logger.warning(
+                    f"Attempted to release {quantity} crypto but only {self._reserved_crypto} reserved. "
+                    f"Releasing all reserved crypto.",
+                )
+                d_quantity = self._reserved_crypto
+
+            self._reserved_crypto = (self._reserved_crypto - d_quantity).quantize(_QUANTIZE_EXP)
+            self._crypto_balance = (self._crypto_balance + d_quantity).quantize(_QUANTIZE_EXP)
+            self.logger.info(
+                f"Released {d_quantity} reserved crypto. Available crypto balance: {self._crypto_balance}.",
             )
 
     def _log_balance_update(self, price: float) -> None:
         """Logs a consistent balance snapshot after every balance-changing event."""
         fiat = self.get_adjusted_fiat_balance()
         crypto = self.get_adjusted_crypto_balance()
-        total_base = round(crypto + fiat / price, _BALANCE_PRECISION) if price > 0 else crypto
+        total_base = round(crypto + fiat / price, 8) if price > 0 else crypto
         self.logger.info(
-            f"Updated balances. Fiat balance: {fiat}, "
-            f"Crypto balance: {crypto}, "
-            f"Total base balance: {total_base}",
+            f"Updated balances. Fiat balance: {fiat}, Crypto balance: {crypto}, Total base balance: {total_base}",
         )
 
     def get_adjusted_fiat_balance(self) -> float:
@@ -272,7 +330,7 @@ class BalanceTracker:
         Returns:
             float: The total fiat balance including reserved funds.
         """
-        return self._balance + self._reserved_fiat
+        return float(self._balance + self._reserved_fiat)
 
     def get_adjusted_crypto_balance(self) -> float:
         """
@@ -281,7 +339,7 @@ class BalanceTracker:
         Returns:
             float: The total crypto balance including reserved funds.
         """
-        return self._crypto_balance + self._reserved_crypto
+        return float(self._crypto_balance + self._reserved_crypto)
 
     def get_total_balance_value(self, price: float) -> float:
         """

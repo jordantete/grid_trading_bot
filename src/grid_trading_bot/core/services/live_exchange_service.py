@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Callable
 import logging
+import math
 import os
 from typing import Any
 
@@ -42,6 +43,8 @@ class LiveExchangeService(ExchangeInterface):
             recovery_timeout=self.config_manager.get_circuit_breaker_recovery_timeout(),
             half_open_max_calls=self.config_manager.get_circuit_breaker_half_open_max_calls(),
         )
+        self._last_known_price: float | None = None
+        self._max_price_deviation: float = 0.50
 
     def _get_env_variable(self, key: str) -> str:
         value = os.getenv(key)
@@ -79,6 +82,42 @@ class LiveExchangeService(ExchangeInterface):
         else:
             self.logger.warning(f"No sandbox mode available for {self.exchange_name}. Running in live mode.")
 
+    def _validate_price(self, price_value: Any, pair: str) -> float | None:
+        """
+        Validates a price value from exchange data.
+
+        Returns the validated price as a float, or None if invalid.
+        """
+        if price_value is None:
+            self.logger.warning(f"Received None price for {pair}.")
+            return None
+
+        try:
+            price = float(price_value)
+        except (TypeError, ValueError):
+            self.logger.warning(f"Received non-numeric price for {pair}: {price_value}")
+            return None
+
+        if not math.isfinite(price):
+            self.logger.warning(f"Received non-finite price for {pair}: {price}")
+            return None
+
+        if price <= 0:
+            self.logger.warning(f"Received non-positive price for {pair}: {price}")
+            return None
+
+        if self._last_known_price is not None:
+            deviation = abs(price - self._last_known_price) / self._last_known_price
+            if deviation > self._max_price_deviation:
+                self.logger.warning(
+                    f"Price {price} for {pair} deviates {deviation:.1%} from last known price "
+                    f"{self._last_known_price} (max {self._max_price_deviation:.0%}). Rejecting.",
+                )
+                return None
+
+        self._last_known_price = price
+        return price
+
     async def _subscribe_to_ticker_updates(
         self,
         pair: str,
@@ -91,7 +130,11 @@ class LiveExchangeService(ExchangeInterface):
         while self.connection_active:
             try:
                 ticker = await self.exchange.watch_ticker(pair)
-                current_price: float = ticker["last"]
+                current_price = self._validate_price(ticker.get("last"), pair)
+
+                if current_price is None:
+                    continue
+
                 self.logger.info(f"Connected to WebSocket for {pair} ticker current price: {current_price}")
 
                 if not self.connection_active:
@@ -159,7 +202,12 @@ class LiveExchangeService(ExchangeInterface):
     async def get_current_price(self, pair: str) -> float:
         try:
             ticker = await self.circuit_breaker.call(self.exchange.fetch_ticker, pair)
-            return ticker["last"]
+            validated_price = self._validate_price(ticker.get("last"), pair)
+
+            if validated_price is None:
+                raise DataFetchError(f"Invalid price received for {pair}: {ticker.get('last')}")
+
+            return validated_price
 
         except CircuitBreakerOpenError as e:
             raise DataFetchError(f"Circuit breaker open: {e!s}") from e
