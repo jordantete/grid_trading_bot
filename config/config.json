@@ -35,6 +35,10 @@
       "threshold": 2830
     }
   },
+  "execution": {
+    "reconciliation_interval": 300.0,
+    "reconciliation_balance_tolerance": 0.01
+  },
   "logging": {
     "log_level": "INFO",
     "log_to_file": true

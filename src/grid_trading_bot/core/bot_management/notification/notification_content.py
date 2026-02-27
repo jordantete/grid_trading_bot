@@ -41,3 +41,11 @@ class NotificationType(Enum):
         title="Health Check Alert",
         message=("{alert_details}"),
     )
+    RECONCILIATION_ORDER_MISMATCH = NotificationContent(
+        title="Order Reconciliation Mismatch",
+        message="Order reconciliation detected mismatches:\n{alert_details}",
+    )
+    RECONCILIATION_BALANCE_DRIFT = NotificationContent(
+        title="Balance Reconciliation Drift",
+        message="Balance reconciliation detected drift:\n{alert_details}",
+    )

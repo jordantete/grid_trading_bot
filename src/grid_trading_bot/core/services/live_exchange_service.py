@@ -285,6 +285,16 @@ class LiveExchangeService(ExchangeInterface):
         except BaseError as e:
             raise OrderCancellationError(f"Exchange error while canceling order {order_id}: {e!s}") from e
 
+    async def fetch_open_orders(self, pair: str) -> list[dict[str, Any]]:
+        try:
+            return await self.circuit_breaker.call(self.exchange.fetch_open_orders, pair)
+
+        except CircuitBreakerOpenError as e:
+            raise DataFetchError(f"Circuit breaker open: {e!s}") from e
+
+        except BaseError as e:
+            raise DataFetchError(f"Error fetching open orders: {e!s}") from e
+
     async def get_exchange_status(self) -> dict:
         try:
             status = await self.exchange.fetch_status()

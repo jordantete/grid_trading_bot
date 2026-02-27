@@ -67,6 +67,11 @@ class ExchangeInterface(ABC):
         pass
 
     @abstractmethod
+    async def fetch_open_orders(self, pair: str) -> list[dict[str, Any]]:
+        """Fetches all open orders for the given trading pair from the exchange."""
+        pass
+
+    @abstractmethod
     async def close_connection(self) -> None:
         """Close current exchange connection."""
         pass

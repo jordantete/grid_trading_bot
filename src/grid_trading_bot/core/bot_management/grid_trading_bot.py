@@ -15,6 +15,7 @@ from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
+from grid_trading_bot.core.reconciliation.reconciliation_service import ReconciliationService
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     UnsupportedExchangeError,
@@ -94,6 +95,21 @@ class GridTradingBot:
                 slippage=self.config_manager.get_backtest_slippage(),
             )
 
+            self.reconciliation_service = None
+            if self.trading_mode == TradingMode.LIVE:
+                self.reconciliation_service = ReconciliationService(
+                    order_book=order_book,
+                    balance_tracker=self.balance_tracker,
+                    exchange_service=self.exchange_service,
+                    notification_handler=self.notification_handler,
+                    event_bus=self.event_bus,
+                    trading_pair=trading_pair,
+                    base_currency=base_currency,
+                    quote_currency=quote_currency,
+                    reconciliation_interval=self.config_manager.get_reconciliation_interval(),
+                    balance_tolerance=self.config_manager.get_reconciliation_balance_tolerance(),
+                )
+
             self.order_manager = OrderManager(
                 grid_manager,
                 order_validator,
@@ -143,6 +159,8 @@ class GridTradingBot:
             )
 
             self.order_status_tracker.start_tracking()
+            if self.reconciliation_service:
+                self.reconciliation_service.start()
             self.strategy.initialize_strategy()
             await self.strategy.run()
 
@@ -175,6 +193,8 @@ class GridTradingBot:
         self.logger.info("Stopping Grid Trading Bot...")
 
         try:
+            if self.reconciliation_service:
+                await self.reconciliation_service.stop()
             await self.order_status_tracker.stop_tracking()
             await self.strategy.stop()
             self._cleanup_subscriptions()
@@ -191,6 +211,8 @@ class GridTradingBot:
         self.event_bus.unsubscribe(Events.START_BOT, self._handle_start_bot_event)
         self.order_manager.cleanup()
         self.balance_tracker.cleanup()
+        if self.reconciliation_service:
+            self.reconciliation_service.cleanup()
         self.notification_handler.cleanup()
 
     async def restart(self) -> None:
@@ -203,6 +225,8 @@ class GridTradingBot:
 
         try:
             self.order_status_tracker.start_tracking()
+            if self.reconciliation_service:
+                self.reconciliation_service.start()
             await self.strategy.restart()
 
         except Exception as e:

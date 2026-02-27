@@ -54,7 +54,9 @@ The bot is configured via a JSON file (typically `config/config.json`). This pag
     "health_check_interval": 60,
     "circuit_breaker_failure_threshold": 5,
     "circuit_breaker_recovery_timeout": 60.0,
-    "circuit_breaker_half_open_max_calls": 1
+    "circuit_breaker_half_open_max_calls": 1,
+    "reconciliation_interval": 300.0,
+    "reconciliation_balance_tolerance": 0.01
   },
   "logging": {
     "log_level": "INFO",
@@ -126,6 +128,8 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 | `circuit_breaker_failure_threshold` | int | `5` | 1–50 | Consecutive API failures before circuit breaker opens. |
 | `circuit_breaker_recovery_timeout` | float | `60.0` | 1.0–600.0 | Seconds to wait before recovery attempt after circuit breaker opens. |
 | `circuit_breaker_half_open_max_calls` | int | `1` | 1–10 | Maximum test calls allowed in half-open state. |
+| `reconciliation_interval` | float | `300.0` | 60.0–3600.0 | Seconds between reconciliation cycles that audit local state vs exchange (live mode only). |
+| `reconciliation_balance_tolerance` | float | `0.01` | 0.0–100.0 | Minimum absolute difference to report a balance drift. Avoids alerts for rounding noise. |
 
 ### `logging`
 

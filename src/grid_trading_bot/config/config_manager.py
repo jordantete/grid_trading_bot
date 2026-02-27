@@ -191,6 +191,12 @@ class ConfigManager:
     def get_backtest_slippage(self) -> float:
         return self.get_execution_settings().get("backtest_slippage", 0.0)
 
+    def get_reconciliation_interval(self) -> float:
+        return self.get_execution_settings().get("reconciliation_interval", 300.0)
+
+    def get_reconciliation_balance_tolerance(self) -> float:
+        return self.get_execution_settings().get("reconciliation_balance_tolerance", 0.01)
+
     # --- Logging Accessor Methods ---
     def get_logging(self):
         return self.config.get("logging", {})

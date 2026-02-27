@@ -193,6 +193,9 @@ class BacktestExchangeService(ExchangeInterface):
     ) -> dict[str, str | float]:
         raise NotImplementedError("cancel_order is not used in backtesting")
 
+    async def fetch_open_orders(self, pair: str) -> list[dict[str, Any]]:
+        raise NotImplementedError("fetch_open_orders is not used in backtesting")
+
     async def get_exchange_status(self) -> dict:
         raise NotImplementedError("get_exchange_status is not used in backtesting")
 
