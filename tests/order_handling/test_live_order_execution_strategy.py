@@ -3,24 +3,15 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
-from grid_trading_bot.core.order_handling.execution_strategy.live_order_execution_strategy import (
-    LiveOrderExecutionStrategy,
-)
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.services.exceptions import DataFetchError
 
 
 @pytest.mark.asyncio
 class TestLiveOrderExecutionStrategy:
-    @pytest.fixture
-    def setup_strategy(self):
-        mock_exchange_service = Mock()
-        strategy = LiveOrderExecutionStrategy(exchange_service=mock_exchange_service)
-        return strategy, mock_exchange_service
-
     @patch("time.time", return_value=1680000000)  # Mock time for predictable order IDs
-    async def test_execute_market_order_success(self, mock_time, setup_strategy):
-        strategy, exchange_service = setup_strategy
+    async def test_execute_market_order_success(self, mock_time, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
         pair = "BTC/USDT"
         quantity = 0.5
         price = 30000
@@ -48,8 +39,8 @@ class TestLiveOrderExecutionStrategy:
         assert order.side == OrderSide.BUY
         assert order.price == price
 
-    async def test_execute_market_order_retries(self, setup_strategy):
-        strategy, exchange_service = setup_strategy
+    async def test_execute_market_order_retries(self, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
         pair = "BTC/USDT"
         quantity = 0.5
         price = 30000
@@ -61,8 +52,8 @@ class TestLiveOrderExecutionStrategy:
 
         assert exchange_service.place_order.call_count == strategy.max_retries
 
-    async def test_execute_limit_order_success(self, setup_strategy):
-        strategy, exchange_service = setup_strategy
+    async def test_execute_limit_order_success(self, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
         pair = "ETH/USDT"
         quantity = 1
         price = 2000
@@ -89,8 +80,8 @@ class TestLiveOrderExecutionStrategy:
         assert order.side == OrderSide.SELL
         assert order.price == price
 
-    async def test_execute_limit_order_data_fetch_error(self, setup_strategy):
-        strategy, exchange_service = setup_strategy
+    async def test_execute_limit_order_data_fetch_error(self, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
         pair = "ETH/USDT"
         quantity = 1
         price = 2000
@@ -100,8 +91,8 @@ class TestLiveOrderExecutionStrategy:
         with pytest.raises(OrderExecutionFailedError):
             await strategy.execute_limit_order(OrderSide.SELL, pair, quantity, price)
 
-    async def test_get_order_success(self, setup_strategy):
-        strategy, exchange_service = setup_strategy
+    async def test_get_order_success(self, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
         order_id = "test-order-id"
         pair = "BTC/USDT"
         raw_order = {
@@ -126,8 +117,8 @@ class TestLiveOrderExecutionStrategy:
         assert order.status == OrderStatus.OPEN
         assert order.order_type == OrderType.LIMIT
 
-    async def test_get_order_data_fetch_error(self, setup_strategy):
-        strategy, exchange_service = setup_strategy
+    async def test_get_order_data_fetch_error(self, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
         order_id = "test-order-id"
         pair = "BTC/USDT"
 
@@ -136,16 +127,16 @@ class TestLiveOrderExecutionStrategy:
         with pytest.raises(DataFetchError):
             await strategy.get_order(order_id, pair)
 
-    async def test_handle_partial_fill(self, setup_strategy):
-        strategy, exchange_service = setup_strategy
+    async def test_handle_partial_fill(self, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
         partial_order = Mock(identifier="partial-order", filled=0.5)
         exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
 
         await strategy._handle_partial_fill(partial_order, "BTC/USDT")
         exchange_service.cancel_order.assert_called_once_with("partial-order", "BTC/USDT")
 
-    async def test_retry_cancel_order(self, setup_strategy):
-        strategy, exchange_service = setup_strategy
+    async def test_retry_cancel_order(self, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
         order_id = "test-order-id"
         pair = "BTC/USDT"
 
@@ -161,15 +152,15 @@ class TestLiveOrderExecutionStrategy:
         assert result is True
         assert exchange_service.cancel_order.call_count == 2
 
-    async def test_adjust_price_buy(self, setup_strategy):
-        strategy, _ = setup_strategy
+    async def test_adjust_price_buy(self, setup_live_strategy):
+        strategy, _ = setup_live_strategy
         price = 30000
         adjusted_price = await strategy._adjust_price(OrderSide.BUY, price, 1)
 
         assert adjusted_price > price
 
-    async def test_adjust_price_sell(self, setup_strategy):
-        strategy, _ = setup_strategy
+    async def test_adjust_price_sell(self, setup_live_strategy):
+        strategy, _ = setup_live_strategy
         price = 30000
         adjusted_price = await strategy._adjust_price(OrderSide.SELL, price, 1)
 

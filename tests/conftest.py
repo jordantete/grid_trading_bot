@@ -1,5 +1,9 @@
 import pytest
 
+pytest_plugins = [
+    "tests.fixtures.order_handling",
+]
+
 
 @pytest.fixture
 def valid_config():

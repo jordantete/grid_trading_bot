@@ -1,7 +1,7 @@
 # Grid Trading Bot
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/jordantete/grid_trading_bot/actions/workflows/run-tests-on-push-or-merge-pr-master.yml/badge.svg)](https://github.com/jordantete/grid_trading_bot/actions/workflows/run-tests-on-push-or-merge-pr-master.yml)
+[![CI](https://github.com/jordantete/grid_trading_bot/actions/workflows/unit_tests.yml/badge.svg)](https://github.com/jordantete/grid_trading_bot/actions/workflows/unit_tests.yml)
 [![codecov](https://codecov.io/github/jordantete/grid_trading_bot/graph/badge.svg?token=DOZRQAXAK7)](https://codecov.io/github/jordantete/grid_trading_bot)
 [![PyPI version](https://img.shields.io/pypi/v/grid-trading-bot)](https://pypi.org/project/grid-trading-bot/)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://jordantete.github.io/grid_trading_bot/)

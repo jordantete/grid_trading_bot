@@ -3,54 +3,13 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
-from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.services.exceptions import DataFetchError
 
 
 class TestOrderManager:
-    @pytest.fixture
-    def setup_order_manager(self):
-        grid_manager = Mock()
-        order_validator = Mock()
-        balance_tracker = Mock()
-        balance_tracker.reserve_funds_for_buy = AsyncMock()
-        balance_tracker.reserve_funds_for_sell = AsyncMock()
-        balance_tracker.update_after_initial_purchase = AsyncMock()
-        order_book = Mock()
-        event_bus = Mock(spec=EventBus)
-        order_execution_strategy = Mock()
-        notification_handler = Mock()
-        notification_handler.async_send_notification = AsyncMock()
-        order_simulator = Mock()
-        order_simulator.simulate_fill = AsyncMock()
-
-        manager = OrderManager(
-            grid_manager=grid_manager,
-            order_validator=order_validator,
-            balance_tracker=balance_tracker,
-            order_book=order_book,
-            event_bus=event_bus,
-            order_execution_strategy=order_execution_strategy,
-            notification_handler=notification_handler,
-            order_simulator=order_simulator,
-            trading_mode=TradingMode.LIVE,
-            trading_pair="BTC/USD",
-        )
-        return (
-            manager,
-            grid_manager,
-            order_validator,
-            balance_tracker,
-            order_book,
-            event_bus,
-            order_execution_strategy,
-            notification_handler,
-        )
-
     # ── initialize_grid_orders ──────────────────────────────────────────
 
     @pytest.mark.asyncio

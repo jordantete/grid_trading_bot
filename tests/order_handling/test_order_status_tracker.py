@@ -6,24 +6,10 @@ import pytest
 
 from grid_trading_bot.core.bot_management.event_bus import Events
 from grid_trading_bot.core.order_handling.order import OrderStatus
-from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
 from grid_trading_bot.core.services.exceptions import DataFetchError
 
 
 class TestOrderStatusTracker:
-    @pytest.fixture
-    def setup_tracker(self):
-        order_book = Mock()
-        order_execution_strategy = Mock()
-        event_bus = Mock()
-        tracker = OrderStatusTracker(
-            order_book=order_book,
-            order_execution_strategy=order_execution_strategy,
-            event_bus=event_bus,
-            polling_interval=1.0,
-        )
-        return tracker, order_book, order_execution_strategy, event_bus
-
     @pytest.mark.asyncio
     async def test_process_open_orders_success(self, setup_tracker):
         tracker, order_book, order_execution_strategy, _ = setup_tracker
