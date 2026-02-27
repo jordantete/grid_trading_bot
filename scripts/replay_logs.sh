@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # replay_logs.sh — Copy a bot log file into ./logs/ and start the monitoring stack
-# so Promtail ingests it and Grafana can visualize it.
+# so Alloy ingests it and Grafana can visualize it.
 #
 # Usage:
 #   ./scripts/replay_logs.sh /path/to/bot_SOL_USDT_LIVE_*.log

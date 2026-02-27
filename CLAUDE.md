@@ -46,7 +46,7 @@ uv run ruff format .
 # Run pre-commit hooks
 uv run pre-commit run --all-files
 
-# Start monitoring stack (Grafana/Loki/Promtail)
+# Start monitoring stack (Grafana/Loki/Alloy)
 docker-compose up -d
 ```
 

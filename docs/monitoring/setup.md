@@ -1,15 +1,15 @@
 # Monitoring Setup
 
-The project includes a Docker Compose stack for centralized log monitoring using **Grafana**, **Loki**, and **Promtail**.
+The project includes a Docker Compose stack for centralized log monitoring using **Grafana**, **Loki**, and **Alloy**.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     Bot["Grid Trading Bot"] -->|writes logs| Logs["logs/*.log"]
-    Logs -->|tails files| Promtail["Promtail 3.0.0"]
-    Promtail -->|pushes logs| Loki["Loki 3.0.0"]
-    Loki -->|queries| Grafana["Grafana 11.0.0"]
+    Logs -->|tails files| Alloy["Alloy v1.13.2"]
+    Alloy -->|pushes logs| Loki["Loki 3.6.7"]
+    Loki -->|queries| Grafana["Grafana 12.4.0"]
 ```
 
 ## Prerequisites
@@ -27,9 +27,9 @@ This starts three services:
 
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
-| **Loki** | `grafana/loki:3.0.0` | 3100 | Log aggregation and storage |
-| **Grafana** | `grafana/grafana:11.0.0` | 3000 | Visualization and dashboards |
-| **Promtail** | `grafana/promtail:3.0.0` | 9080 | Log collection agent |
+| **Loki** | `grafana/loki:3.6.7` | 3100 | Log aggregation and storage |
+| **Grafana** | `grafana/grafana:12.4.0` | 3000 | Visualization and dashboards |
+| **Alloy** | `grafana/alloy:v1.13.2` | 12345 | Log collection agent |
 
 ## Access Grafana
 
@@ -42,9 +42,9 @@ Loki is pre-configured as the default datasource.
 
 ## Log Pipeline
 
-### How Promtail Processes Logs
+### How Alloy Processes Logs
 
-Promtail tails all `.log` files from the `logs/` directory and extracts structured labels from the log filenames.
+Alloy tails all `.log` files from the `logs/` directory and extracts structured labels from the log filenames.
 
 **Labels extracted from filename:**
 
@@ -62,7 +62,7 @@ A derived `trading_pair` label is created by combining `base_currency/quote_curr
 
 ### Log Format Parsing
 
-Promtail parses each log line to extract:
+Alloy parses each log line to extract:
 
 - **Timestamp** — Used for time-series indexing in Loki
 - **Service** — The component that emitted the log
@@ -87,7 +87,7 @@ Alert rules are defined in `monitoring/configs/loki/rules.yaml`.
 | `docker-compose.yml` | Service definitions and volumes |
 | `monitoring/configs/loki/loki.yaml` | Loki storage, limits, and cache settings |
 | `monitoring/configs/loki/rules.yaml` | Alert rule definitions |
-| `monitoring/configs/promtail/promtail.yaml` | Log tailing and label extraction |
+| `monitoring/configs/alloy/config.alloy` | Log tailing and label extraction |
 | `monitoring/configs/grafana/provisioning/datasources.yml` | Loki datasource auto-provisioning |
 | `monitoring/configs/grafana/provisioning/dashboards.yml` | Dashboard auto-provisioning |
 

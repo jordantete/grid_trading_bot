@@ -5,7 +5,7 @@ groups:
           expr: |
             avg_over_time(
               {job="grid_trading_bot"}
-                | service="HealthCheck"
+                |= "HealthCheck"
                 |= "System resource usage"
                 | regexp "'cpu': (?P<cpu>[\\d.]+)"
                 | unwrap cpu [5m]

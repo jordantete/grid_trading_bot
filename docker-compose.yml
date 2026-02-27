@@ -1,6 +1,6 @@
 services:
   loki:
-    image: grafana/loki:3.0.0
+    image: grafana/loki:3.6.7
     container_name: loki
     restart: unless-stopped
     user: root
@@ -17,7 +17,7 @@ services:
       - default
 
   grafana:
-    image: grafana/grafana:11.0.0
+    image: grafana/grafana:12.4.0
     container_name: grafana
     restart: unless-stopped
     ports:
@@ -30,7 +30,6 @@ services:
       - GF_LOG_MODE=console
       - GF_LOG_LEVEL=debug
       - GF_PANELS_ENABLE_ALPHA=false
-      - GF_FEATURE_TOGGLES_ENABLE=lokiLogsDataplane
       - GF_INSTALL_PLUGINS=grafana-polystat-panel
     volumes:
       - ./monitoring/configs/grafana/provisioning/datasources.yml:/etc/grafana/provisioning/datasources/provisioning-datasources.yaml:ro
@@ -44,15 +43,17 @@ services:
     networks:
       - default
 
-  promtail:
-    image: grafana/promtail:3.0.0
-    container_name: promtail
+  alloy:
+    image: grafana/alloy:v1.13.2
+    container_name: alloy
     restart: unless-stopped
+    ports:
+      - "12345:12345"
     volumes:
-      - ./monitoring/configs/promtail/promtail.yaml:/etc/promtail/promtail.yaml
+      - ./monitoring/configs/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - ./logs:/logs:ro
-      - promtail-positions:/tmp
-    command: -config.file=/etc/promtail/promtail.yaml -config.expand-env=true
+      - alloy-data:/var/lib/alloy/data
+    command: run --server.http.listen-addr=0.0.0.0:12345 --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy
     depends_on:
       - loki
     cpus: 0.5
@@ -65,5 +66,5 @@ volumes:
     driver: local
   loki-data:
     driver: local
-  promtail-positions:
+  alloy-data:
     driver: local

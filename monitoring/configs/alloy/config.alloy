@@ -1,0 +1,91 @@
+// Grafana Alloy configuration for Grid Trading Bot log ingestion.
+// Replaces Promtail — tails bot log files, extracts labels, and pushes to Loki.
+
+// ---------------------------------------------------------------------------
+// 1. Discover log files
+// ---------------------------------------------------------------------------
+local.file_match "bot_logs" {
+  path_targets = [
+    {
+      "__path__" = "/logs/**/*.log",
+      "job"      = "grid_trading_bot",
+    },
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// 2. Tail discovered files
+// ---------------------------------------------------------------------------
+loki.source.file "bot_logs" {
+  targets    = local.file_match.bot_logs.targets
+  forward_to = [loki.process.bot_logs.receiver]
+}
+
+// ---------------------------------------------------------------------------
+// 3. Pipeline — extract labels and parse timestamps
+// ---------------------------------------------------------------------------
+loki.process "bot_logs" {
+
+  // Extract labels from the log filename
+  stage.regex {
+    source     = "filename"
+    expression = "/bot_(?P<base_currency>[A-Z]+)_(?P<quote_currency>[A-Z]+)_(?P<trading_mode>[A-Z_]+)_strategy(?P<strategy_type>[A-Z_]+)_spacing(?P<spacing_type>[A-Z]+)_size(?P<grid_size>\\d+)_range(?P<grid_range>\\d+-\\d+)_.*\\.log$"
+  }
+
+  // Derive trading_pair from base/quote
+  stage.template {
+    source   = "trading_pair"
+    template = "{{ .base_currency }}/{{ .quote_currency }}"
+  }
+
+  // Promote filename-derived values to labels
+  stage.labels {
+    values = {
+      "base_currency"  = "",
+      "quote_currency" = "",
+      "trading_mode"   = "",
+      "strategy_type"  = "",
+      "spacing_type"   = "",
+      "grid_size"      = "",
+      "grid_range"     = "",
+      "trading_pair"   = "",
+    }
+  }
+
+  // Parse each log line: timestamp (date,ms), service, level
+  stage.regex {
+    expression = "^(?P<ts_date>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}),(?P<ts_ms>\\d{3}) - (?P<service>[A-Za-z0-9_]+) - (?P<level>[A-Z]+) - (?P<log_message>.*)$"
+  }
+
+  // Promote service and level to labels
+  stage.labels {
+    values = {
+      "service" = "",
+      "level"   = "",
+    }
+  }
+
+  // Reconstruct timestamp with period instead of comma (Go time.Parse requirement)
+  stage.template {
+    source   = "timestamp"
+    template = "{{ .ts_date }}.{{ .ts_ms }}"
+  }
+
+  // Parse the reconstructed timestamp so Loki indexes by original log time
+  stage.timestamp {
+    source = "timestamp"
+    format = "2006-01-02 15:04:05.000"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+// ---------------------------------------------------------------------------
+// 4. Ship logs to Loki
+// ---------------------------------------------------------------------------
+loki.write "default" {
+  endpoint {
+    url        = "http://loki:3100/loki/api/v1/push"
+    batch_wait = "1s"
+  }
+}

@@ -44,17 +44,17 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"LiveExchangeService\" or service=\"BacktestExchangeService\" |= \"current price\" | regexp \"current price: (?P<price>[\\\\d.]+)\" | unwrap price",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |~ \"LiveExchangeService|BacktestExchangeService\" |= \"current price\" | regexp \"current price: (?P<price>[\\\\d.]+)\" | unwrap price [$__auto])",
           "legendFormat": "Price"
         },
         {
           "refId": "B",
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"OrderManager\" |= \"buy limit order\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"buy limit order\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price [$__auto])",
           "legendFormat": "Buy Order"
         },
         {
           "refId": "C",
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"OrderManager\" |= \"sell limit order\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"sell limit order\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price [$__auto])",
           "legendFormat": "Sell Order"
         }
       ],
@@ -109,13 +109,18 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"BalanceTracker\" |= \"Updated balances\" | regexp \"Fiat balance: (?P<fiat>[\\\\d.]+)\" | unwrap fiat",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"BalanceTracker\" |= \"Updated balances\" | regexp \"Fiat balance: (?P<fiat>[\\\\d.]+)\" | unwrap fiat [$__auto])",
           "legendFormat": "Fiat ($trading_pair quote)"
         },
         {
           "refId": "B",
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"BalanceTracker\" |= \"Updated balances\" | regexp \"Crypto balance: (?P<crypto>[\\\\d.]+)\" | unwrap crypto",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"BalanceTracker\" |= \"Updated balances\" | regexp \"Crypto balance: (?P<crypto>[\\\\d.]+)\" | unwrap crypto [$__auto])",
           "legendFormat": "Crypto ($trading_pair base)"
+        },
+        {
+          "refId": "C",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"BalanceTracker\" |= \"Updated balances\" | regexp \"Total base balance: (?P<total_base>[\\\\d.]+)\" | unwrap total_base [$__auto])",
+          "legendFormat": "Total ($trading_pair base)"
         }
       ],
       "fieldConfig": {
@@ -141,6 +146,15 @@
               { "id": "custom.axisPlacement", "value": "right" },
               { "id": "custom.axisLabel", "value": "Crypto" }
             ]
+          },
+          {
+            "matcher": { "id": "byFrameRefID", "options": "C" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "custom.axisLabel", "value": "Total (base)" },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+            ]
           }
         ]
       },
@@ -154,11 +168,11 @@
       "title": "System Health (CPU %)",
       "type": "gauge",
       "datasource": "Loki",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 22 },
       "targets": [
         {
           "refId": "A",
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} | service=\"HealthCheck\" |= \"System resource usage\" | regexp \"'cpu': (?P<cpu>[\\\\d.]+)\" | unwrap cpu"
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"System resource usage\" | regexp \"'cpu': (?P<cpu>[\\\\d.]+)\" | unwrap cpu [$__auto])"
         }
       ],
       "fieldConfig": {
@@ -185,26 +199,113 @@
     {
       "id": 4,
       "title": "Strategy Overview",
-      "type": "stat",
+      "type": "table",
       "datasource": "Loki",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 22 },
       "targets": [
         {
           "refId": "A",
-          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\", strategy_type=\"$strategy\"} | line_format \"{{.grid_size}} grids | Range: {{.grid_range}} | {{.spacing_type}}\""
+          "expr": "{job=\"grid_trading_bot\", trading_pair=\"$trading_pair\", strategy_type=\"$strategy\", service=\"GridManager\"} |= \"Grids and levels initialized\" | line_format \"Grid Size: {{.grid_size}} | Range: {{.grid_range}} | Spacing: {{.spacing_type}} | Strategy: {{.strategy_type}}\"",
+          "maxLines": 1
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        },
-        "textMode": "value",
-        "colorMode": "background"
+        "showHeader": false,
+        "cellHeight": "lg"
       },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "fixed", "fixedColor": "blue" }
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "custom": {
+            "align": "center",
+            "cellOptions": { "type": "color-text" }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Time" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "id" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "tsNs" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "labels" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "id": true,
+              "tsNs": true,
+              "labels": true
+            }
+          }
         }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Executed Trades",
+      "type": "stat",
+      "datasource": "Loki",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 22 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"Buy order completed at grid level\" [$__auto]))",
+          "legendFormat": "Buy Fills"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(count_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"Sell order completed at grid level\" [$__auto]))",
+          "legendFormat": "Sell Fills"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": 0, "color": "text" },
+              { "value": 1, "color": "green" }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Buy Fills" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sell Fills" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["sum"]
+        },
+        "graphMode": "none",
+        "colorMode": "value",
+        "textMode": "value_and_name",
+        "orientation": "horizontal"
       }
     }
   ]

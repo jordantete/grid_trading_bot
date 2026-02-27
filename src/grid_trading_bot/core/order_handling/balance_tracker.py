@@ -165,6 +165,7 @@ class BalanceTracker:
         self._crypto_balance = round(self._crypto_balance + quantity, _BALANCE_PRECISION)
         self.total_fees = round(self.total_fees + fee, _BALANCE_PRECISION)
         self.logger.info(f"Buy order completed: {quantity} crypto purchased at {price}.")
+        self._log_balance_update(price)
 
     def _update_after_sell_order_filled(
         self,
@@ -194,6 +195,7 @@ class BalanceTracker:
         self._balance = round(self._balance + sale_proceeds, _BALANCE_PRECISION)
         self.total_fees = round(self.total_fees + fee, _BALANCE_PRECISION)
         self.logger.info(f"Sell order completed: {quantity} crypto sold at {price}.")
+        self._log_balance_update(price)
 
     async def update_after_initial_purchase(self, initial_order: Order):
         """
@@ -212,10 +214,7 @@ class BalanceTracker:
             self._crypto_balance = round(self._crypto_balance + initial_order.filled, _BALANCE_PRECISION)
             self._balance = round(self._balance - total_cost - fee, _BALANCE_PRECISION)
             self.total_fees = round(self.total_fees + fee, _BALANCE_PRECISION)
-            self.logger.info(
-                f"Updated balances. Crypto balance: {self._crypto_balance}, "
-                f"Fiat balance: {self._balance}, Total fees: {self.total_fees}",
-            )
+            self._log_balance_update(initial_order.average)
 
     async def reserve_funds_for_buy(
         self,
@@ -254,6 +253,17 @@ class BalanceTracker:
             self.logger.info(
                 f"Reserved {quantity} crypto for a sell order. Remaining crypto balance: {self._crypto_balance}.",
             )
+
+    def _log_balance_update(self, price: float) -> None:
+        """Logs a consistent balance snapshot after every balance-changing event."""
+        fiat = self.get_adjusted_fiat_balance()
+        crypto = self.get_adjusted_crypto_balance()
+        total_base = round(crypto + fiat / price, _BALANCE_PRECISION) if price > 0 else crypto
+        self.logger.info(
+            f"Updated balances. Fiat balance: {fiat}, "
+            f"Crypto balance: {crypto}, "
+            f"Total base balance: {total_base}",
+        )
 
     def get_adjusted_fiat_balance(self) -> float:
         """

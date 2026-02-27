@@ -1,4 +1,4 @@
-name: on_push_or_merge_pr_master
+name: unit_tests
 
 on:
   push:

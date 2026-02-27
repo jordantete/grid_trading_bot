@@ -49,6 +49,7 @@ A dual-axis time-series chart tracking:
 
 - **Fiat balance** (left Y-axis) — Quote currency balance over time
 - **Crypto balance** (right Y-axis) — Base currency balance over time
+- **Total base balance** (right Y-axis, dashed yellow) — Total portfolio value in base currency (`crypto + fiat / price`)
 
 Values are extracted from `BalanceTracker` logs.
 
@@ -71,6 +72,15 @@ A stat panel displaying the current strategy configuration:
 - Grid size (number of levels)
 - Grid price range
 - Spacing type
+
+### 5. Executed Trades
+
+A stat panel showing cumulative trade counts:
+
+- **Buy Fills** (green) — Total buy orders completed at grid levels
+- **Sell Fills** (red) — Total sell orders completed at grid levels
+
+Both counters use `count_over_time` over the selected time range, filtering `OrderManager` logs for completed orders.
 
 ## Customization
 
