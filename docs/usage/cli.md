@@ -96,3 +96,60 @@ Generate a `.prof` file for performance analysis:
 ```bash
 uv run grid_trading_bot run --config config/config.json --profile
 ```
+
+## Runtime Commands
+
+In **live** and **paper trading** modes, the bot starts an interactive command listener (BotController) that accepts commands while the bot is running.
+
+```
+Enter command (quit, orders, balance, stop, restart, pause):
+```
+
+### Command Reference
+
+| Command | Description |
+|---------|-------------|
+| `quit` | Gracefully shuts down the bot and exits the process. |
+| `stop` | Stops the bot's trading activity. The process remains alive. |
+| `restart` | Stops then immediately restarts the bot's trading activity. |
+| `pause <seconds>` | Pauses trading for the specified duration, then automatically resumes. |
+| `orders` | Displays all active orders in a formatted table. |
+| `balance` | Displays current fiat and crypto balances. |
+
+Commands are case-insensitive. Invalid commands are logged as warnings.
+
+### Examples
+
+Stop trading and exit:
+
+```
+Enter command: quit
+```
+
+View active orders:
+
+```
+Enter command: orders
+```
+
+The `orders` command outputs a table with the following columns:
+
+| Column | Description |
+|--------|-------------|
+| Order Side | Buy or Sell |
+| Type | Order type (limit, market) |
+| Status | Current order status |
+| Price | Order price |
+| Quantity | Order quantity |
+| Timestamp | When the order was placed |
+| Grid Level | Associated grid level index |
+| Slippage | Price slippage from expected fill |
+
+Pause the bot for 5 minutes:
+
+```
+Enter command: pause 300
+```
+
+!!! note
+    The runtime command listener is **not available** in backtest mode, since backtests run to completion without user interaction.

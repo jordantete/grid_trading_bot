@@ -16,7 +16,8 @@ nav = [
     "configuration/environment-variables.md"
   ]},
   {"Usage" = [
-    "usage/cli.md"
+    "usage/cli.md",
+    "usage/notifications.md"
   ]},
   {"Monitoring" = [
     "monitoring/setup.md",

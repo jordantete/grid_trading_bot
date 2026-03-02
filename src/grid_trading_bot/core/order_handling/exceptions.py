@@ -5,11 +5,11 @@ class OrderExecutionFailedError(Exception):
     def __init__(
         self,
         message: str,
-        order_side: OrderSide,
-        order_type: OrderType,
-        pair: str,
-        quantity: float,
-        price: float,
+        order_side: OrderSide | None = None,
+        order_type: OrderType | None = None,
+        pair: str | None = None,
+        quantity: float | None = None,
+        price: float | None = None,
     ):
         super().__init__(message)
         self.order_side = order_side
