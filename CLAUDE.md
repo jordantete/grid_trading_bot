@@ -65,6 +65,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 - **`core/bot_management/`** — Bot lifecycle: `GridTradingBot` (orchestrator), `EventBus` (pub/sub), `BotController` (CLI), `HealthCheck`, `NotificationHandler` (Apprise alerts)
 - **`core/grid_management/`** — `GridManager` computes grid levels (arithmetic/geometric spacing), `GridLevel` is a state machine tracking each level's cycle (`READY_TO_BUY` → `WAITING_FOR_BUY_FILL` → `READY_TO_SELL` → etc.)
 - **`core/order_handling/`** — `OrderManager` orchestrates order placement and pairing (buy fill → place sell above, sell fill → place buy below). `BalanceTracker` tracks fiat/crypto with reserved amounts. `OrderBook` maps orders to grid levels
+- **`core/persistence/`** — SQLite state persistence (live mode only): `StatePersistenceService` (event-driven checkpoints on every order fill/cancel), `StateRecoveryService` (merge recovery on restart — loads DB state, reconciles with exchange, restores balances), `SQLiteStateRepository` (WAL-mode SQLite backend), `Serializers` (Order/GridLevel/Balance ↔ dict). DB path: `data/{BASE}_{QUOTE}/state_{config_hash[:8]}.db`
 - **`core/services/`** — Exchange abstraction via `ExchangeInterface` ABC. `BacktestExchangeService` reads CSV/CCXT OHLCV data. `LiveExchangeService` uses CCXT Pro WebSockets
 - **`core/order_handling/execution_strategy/`** — `OrderExecutionStrategyInterface` ABC. Backtest variant is instant; live variant has retry logic with exponential backoff and slippage handling
 - **`core/validation/`** — `OrderValidator` for order quantity/price validation
@@ -83,7 +84,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 ### Key Design Patterns
 
 - **Factory Pattern**: `ExchangeServiceFactory` and `OrderExecutionStrategyFactory` select implementations based on `TradingMode`
-- **Event Bus**: Decoupled communication via events (`ORDER_FILLED`, `ORDER_CANCELLED`, `START_BOT`, `STOP_BOT`). Components subscribe to events rather than calling each other directly
+- **Event Bus**: Decoupled communication via events (`ORDER_FILLED`, `ORDER_CANCELLED`, `START_BOT`, `STOP_BOT`, `INITIAL_PURCHASE_DONE`, `GRID_ORDERS_INITIALIZED`). Components subscribe to events rather than calling each other directly
 - **State Machine**: `GridLevel` transitions through `GridCycleState` enum states as orders are placed and filled
 - **Strategy Pattern**: `TradingStrategyInterface` ABC; currently one implementation (`GridTradingStrategy`) with two modes (`simple_grid`, `hedged_grid`)
 
@@ -92,7 +93,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 Configured via `exchange.trading_mode` in `config.json`:
 - **`backtest`**: Simulates on historical OHLCV data (CSV or fetched via CCXT). No real orders
 - **`paper_trading`**: Connects to exchange sandbox APIs with real market data. Runs BotController + HealthCheck
-- **`live`**: Real trading with actual funds. Same architecture as paper trading but against production APIs
+- **`live`**: Real trading with actual funds. Same architecture as paper trading but against production APIs. Includes SQLite state persistence for crash recovery (automatic checkpoint on every order event, merge recovery on restart)
 
 ## Testing
 

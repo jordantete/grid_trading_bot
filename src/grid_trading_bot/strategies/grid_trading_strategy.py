@@ -111,13 +111,21 @@ class GridTradingStrategy(TradingStrategyInterface):
             self.logger.info("Restarting trading session.")
             await self.run()
 
-    async def run(self):
+    async def run(
+        self,
+        skip_initial_purchase: bool = False,
+        skip_grid_init: bool = False,
+    ):
         """
         Starts the trading session based on the configured mode.
 
         For backtesting, this simulates the strategy using historical data.
         For live or paper trading, this interacts with the exchange to manage
         real-time trading.
+
+        Args:
+            skip_initial_purchase: If True, skip the initial crypto purchase (recovery mode).
+            skip_grid_init: If True, skip grid order initialization (recovery mode).
 
         Raises:
             Exception: If any error occurs during the trading session.
@@ -131,9 +139,18 @@ class GridTradingStrategy(TradingStrategyInterface):
             self.logger.info("Ending backtest simulation")
             self._running = False
         else:
-            await self._run_live_or_paper_trading(trigger_price)
+            await self._run_live_or_paper_trading(
+                trigger_price,
+                skip_initial_purchase=skip_initial_purchase,
+                skip_grid_init=skip_grid_init,
+            )
 
-    async def _run_live_or_paper_trading(self, trigger_price: float):
+    async def _run_live_or_paper_trading(
+        self,
+        trigger_price: float,
+        skip_initial_purchase: bool = False,
+        skip_grid_init: bool = False,
+    ):
         """
         Executes live or paper trading sessions based on real-time ticker updates.
 
@@ -142,10 +159,12 @@ class GridTradingStrategy(TradingStrategyInterface):
 
         Args:
             trigger_price (float): The price at which grid orders are triggered.
+            skip_initial_purchase: If True, skip initial purchase on grid init (recovery).
+            skip_grid_init: If True, mark grid orders as already initialized (recovery).
         """
         self.logger.info(f"Starting {'live' if self.trading_mode == TradingMode.LIVE else 'paper'} trading")
         last_price: float | None = None
-        grid_orders_initialized = False
+        grid_orders_initialized = skip_grid_init
 
         async def on_ticker_update(current_price):
             nonlocal last_price, grid_orders_initialized
@@ -162,6 +181,7 @@ class GridTradingStrategy(TradingStrategyInterface):
                     trigger_price,
                     grid_orders_initialized,
                     last_price,
+                    skip_initial_purchase=skip_initial_purchase,
                 )
 
                 if not grid_orders_initialized:
@@ -246,6 +266,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         trigger_price: float,
         grid_orders_initialized: bool,
         last_price: float | None = None,
+        skip_initial_purchase: bool = False,
     ) -> bool:
         """
         Performs the initial purchase and grid order setup when the trigger price is first crossed.
@@ -261,12 +282,18 @@ class GridTradingStrategy(TradingStrategyInterface):
             return False
 
         if last_price <= trigger_price <= current_price or last_price == trigger_price:
-            self.logger.info(
-                f"Current price {current_price} reached trigger price {trigger_price}. Will perform initial purchase",
-            )
-            await self.order_manager.perform_initial_purchase(current_price)
+            if not skip_initial_purchase:
+                self.logger.info(
+                    f"Current price {current_price} reached trigger price {trigger_price}. "
+                    f"Will perform initial purchase",
+                )
+                await self.order_manager.perform_initial_purchase(current_price)
+                await self.event_bus.publish(Events.INITIAL_PURCHASE_DONE, None)
+            else:
+                self.logger.info("Skipping initial purchase (recovered from persisted state).")
             self.logger.info("Initial purchase done, will initialize grid orders")
             await self.order_manager.initialize_grid_orders(current_price)
+            await self.event_bus.publish(Events.GRID_ORDERS_INITIALIZED, None)
             return True
 
         self.logger.debug(

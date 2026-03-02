@@ -21,6 +21,7 @@ A modular Python engine for crypto grid trading with real-time Grafana monitorin
 | **Grid Strategies**       | Simple grid and hedged grid with arithmetic or geometric spacing            |
 | **Risk Management**       | Configurable take-profit, stop-loss, and slippage controls                  |
 | **Performance Analytics** | ROI, max drawdown, Sharpe ratio, interactive Plotly charts                  |
+| **Crash Recovery**        | SQLite state persistence with exchange reconciliation on restart (live mode) |
 | **Monitoring**            | Grafana dashboards with Loki log aggregation                                |
 | **Multi-Exchange**        | Any exchange supported by CCXT                                              |
 

@@ -14,6 +14,8 @@ class Events:
     ORDER_CANCELLED = "order_cancelled"
     START_BOT = "start_bot"
     STOP_BOT = "stop_bot"
+    INITIAL_PURCHASE_DONE = "initial_purchase_done"
+    GRID_ORDERS_INITIALIZED = "grid_orders_initialized"
 
 
 class EventBus:

@@ -61,6 +61,10 @@ The bot is configured via a JSON file (typically `config/config.json`). This pag
   "logging": {
     "log_level": "INFO",
     "log_to_file": true
+  },
+  "persistence": {
+    "enabled": true,
+    "db_path": "data/SOL_USDT/state.db"
   }
 }
 ```
@@ -137,3 +141,12 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 |-----------|------|----------|-------------|
 | `log_level` | string | Yes | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `log_to_file` | bool | Yes | Enable logging to a file in the `logs/` directory. |
+
+### `persistence` *(optional, live mode only)*
+
+SQLite state persistence for crash recovery. Only active in `live` trading mode — ignored in `backtest` and `paper_trading`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `true` | Whether to persist bot state to SQLite. |
+| `db_path` | string | `data/{BASE}_{QUOTE}/state_{hash}.db` | Path to the SQLite database file. The default path includes a short config hash so different grid configurations for the same pair use separate databases. |

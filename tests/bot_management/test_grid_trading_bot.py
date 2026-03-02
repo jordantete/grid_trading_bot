@@ -34,6 +34,7 @@ class TestGridTradingBot:
         mock_config.get_bottom_range.return_value = 1500
         mock_config.get_num_grids.return_value = 10
         mock_config.get_strategy_type.return_value = StrategyType.SIMPLE_GRID
+        mock_config.is_persistence_enabled.return_value = False
         return mock_config
 
     @pytest.fixture
