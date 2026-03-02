@@ -325,6 +325,41 @@ class OrderManager:
                 f"Failed to place {order_side.value} order at grid level {target_grid_level}",
             )
 
+    async def place_paired_orders_for_recovered_fills(
+        self,
+        filled_orders: list[tuple[Order, GridLevel]],
+    ) -> None:
+        """
+        Places paired orders for orders that filled while the bot was down.
+
+        For each recovered fill, places the corresponding paired order
+        (buy fill → sell above, sell fill → buy below) without re-triggering
+        grid state transitions (already done during reconciliation).
+
+        Args:
+            filled_orders: List of (Order, GridLevel) tuples for orders
+                that were found CLOSED on the exchange during recovery.
+        """
+        async with self._lock:
+            for order, grid_level in filled_orders:
+                try:
+                    if order.side == OrderSide.BUY:
+                        paired_sell_level = self.grid_manager.get_paired_sell_level(grid_level)
+                        if paired_sell_level and self.grid_manager.can_place_order(paired_sell_level, OrderSide.SELL):
+                            await self._place_order(OrderSide.SELL, grid_level, paired_sell_level, order.filled)
+                        else:
+                            self.logger.warning(f"No valid sell level for recovered buy fill at {grid_level.price}.")
+                    elif order.side == OrderSide.SELL:
+                        paired_buy_level = self.grid_manager.get_or_create_paired_buy_level(grid_level)
+                        if paired_buy_level:
+                            await self._place_order(OrderSide.BUY, grid_level, paired_buy_level, order.filled)
+                        else:
+                            self.logger.error(f"No paired buy level for recovered sell fill at {grid_level.price}.")
+                except Exception as e:
+                    await self._handle_order_error(
+                        e, f"Error placing paired order for recovered fill {order.identifier}"
+                    )
+
     async def perform_initial_purchase(
         self,
         current_price: float,

@@ -3,8 +3,9 @@ from decimal import Decimal
 import logging
 
 from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
-from grid_trading_bot.core.grid_management.grid_level import GridCycleState
+from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_interface import (
@@ -26,6 +27,7 @@ class RecoveryResult:
     orders_reconciled: int = 0
     orphan_orders_found: int = 0
     ghost_orders_found: int = 0
+    orders_filled_while_down: list[tuple[Order, GridLevel]] = field(default_factory=list)
     balance_source: str = "db"
     errors: list[str] = field(default_factory=list)
 
@@ -84,10 +86,10 @@ class StateRecoveryService:
         # Step 3: Restore orders + OrderBook
         self._restore_orders()
 
-        # Step 4: Merge with exchange
-        reconcile_stats = await self._reconcile_with_exchange()
+        # Step 4: Reconcile with exchange (updates statuses, completes grid states for filled orders)
+        reconcile_stats, filled_while_down = await self._reconcile_with_exchange()
 
-        # Step 5: Restore balance
+        # Step 5: Restore balance (recalculates reserved from confirmed-still-open orders)
         balance_source = await self._restore_balance()
 
         result = RecoveryResult(
@@ -97,6 +99,7 @@ class StateRecoveryService:
             orders_reconciled=reconcile_stats["reconciled"],
             orphan_orders_found=reconcile_stats["orphans"],
             ghost_orders_found=reconcile_stats["ghosts"],
+            orders_filled_while_down=filled_while_down,
             balance_source=balance_source,
         )
 
@@ -106,8 +109,13 @@ class StateRecoveryService:
             f"reconciled={result.orders_reconciled}, "
             f"orphans={result.orphan_orders_found}, "
             f"ghosts={result.ghost_orders_found}, "
+            f"filled_while_down={len(filled_while_down)}, "
             f"balance_source={result.balance_source}"
         )
+
+        # Send recovery notification
+        await self._send_recovery_notification(result)
+
         return result
 
     # ── Step 2: Grid Level Restoration ───────────────────────────────────
@@ -167,13 +175,14 @@ class StateRecoveryService:
 
     # ── Step 4: Exchange Reconciliation ──────────────────────────────────
 
-    async def _reconcile_with_exchange(self) -> dict[str, int]:
+    async def _reconcile_with_exchange(self) -> tuple[dict[str, int], list[tuple[Order, GridLevel]]]:
         stats = {"reconciled": 0, "orphans": 0, "ghosts": 0}
+        filled_while_down: list[tuple[Order, GridLevel]] = []
         open_orders = self.order_book.get_open_orders()
 
         if not open_orders:
             self.logger.info("No open orders to reconcile.")
-            return stats
+            return stats, filled_while_down
 
         # Check each locally open order against exchange
         for order in open_orders:
@@ -184,10 +193,9 @@ class StateRecoveryService:
                 continue
 
             if exchange_order is None:
-                # Order not found on exchange → mark as canceled
+                # Order not found on exchange → mark as canceled (ghost)
                 self.logger.warning(f"Ghost order {order.identifier} not found on exchange. Marking as canceled.")
                 self.order_book.update_order_status(order.identifier, OrderStatus.CANCELED)
-                await self._release_reserved_for_order(order)
                 stats["ghosts"] += 1
                 stats["reconciled"] += 1
 
@@ -199,12 +207,18 @@ class StateRecoveryService:
                 order.average = exchange_order.average
                 order.cost = exchange_order.cost
                 self.order_book.remove_open_order(order)
+
+                # Complete grid level state transition for the filled order
+                grid_level = self.order_book.get_grid_level_for_order(order)
+                if grid_level:
+                    self.grid_manager.complete_order(grid_level, order.side)
+                    filled_while_down.append((order, grid_level))
+
                 stats["reconciled"] += 1
 
             elif exchange_order.status == OrderStatus.CANCELED:
                 self.logger.info(f"Order {order.identifier} was canceled on exchange while bot was down.")
                 self.order_book.update_order_status(order.identifier, OrderStatus.CANCELED)
-                await self._release_reserved_for_order(order)
                 stats["reconciled"] += 1
 
             # OPEN on exchange → keep as-is
@@ -224,14 +238,7 @@ class StateRecoveryService:
         except Exception as e:
             self.logger.warning(f"Failed to fetch exchange open orders for orphan check: {e}")
 
-        return stats
-
-    async def _release_reserved_for_order(self, order: Order) -> None:
-        if order.side == OrderSide.BUY:
-            reserved_amount = order.price * order.remaining
-            await self.balance_tracker.release_reserved_fiat(reserved_amount)
-        else:
-            await self.balance_tracker.release_reserved_crypto(order.remaining)
+        return stats, filled_while_down
 
     # ── Step 5: Balance Restoration ──────────────────────────────────────
 
@@ -245,23 +252,29 @@ class StateRecoveryService:
             exchange_fiat = Decimal(str(exchange_balance.get("free", {}).get(quote, 0)))
             exchange_crypto = Decimal(str(exchange_balance.get("free", {}).get(base, 0)))
 
+            # Recalculate reserved from confirmed-still-open orders (after reconciliation).
+            # This avoids using stale DB reserved values that may include reservations
+            # for orders that filled or were canceled while the bot was down.
+            open_orders = self.order_book.get_open_orders()
+            reserved_fiat = sum(
+                (Decimal(str(o.price)) * Decimal(str(o.remaining)) for o in open_orders if o.side == OrderSide.BUY),
+                Decimal("0"),
+            )
+            reserved_crypto = sum(
+                (Decimal(str(o.remaining)) for o in open_orders if o.side == OrderSide.SELL),
+                Decimal("0"),
+            )
+
+            # Exchange "free" already excludes funds locked in open orders.
+            # Available balance = exchange_free, reserved = recalculated from open orders.
+            self.balance_tracker._balance = exchange_fiat
+            self.balance_tracker._crypto_balance = exchange_crypto
+            self.balance_tracker._reserved_fiat = reserved_fiat
+            self.balance_tracker._reserved_crypto = reserved_crypto
+
+            # Total fees from DB (exchange doesn't track cumulative fees)
             if saved_balance:
-                reserved_fiat = Decimal(saved_balance["reserved_fiat"])
-                reserved_crypto = Decimal(saved_balance["reserved_crypto"])
-                total_fees = Decimal(saved_balance["total_fees"])
-
-                # Cap reserved at exchange free to prevent negative available
-                reserved_fiat = min(reserved_fiat, exchange_fiat)
-                reserved_crypto = min(reserved_crypto, exchange_crypto)
-
-                self.balance_tracker._balance = exchange_fiat - reserved_fiat
-                self.balance_tracker._crypto_balance = exchange_crypto - reserved_crypto
-                self.balance_tracker._reserved_fiat = reserved_fiat
-                self.balance_tracker._reserved_crypto = reserved_crypto
-                self.balance_tracker._total_fees = total_fees
-            else:
-                self.balance_tracker._balance = exchange_fiat
-                self.balance_tracker._crypto_balance = exchange_crypto
+                self.balance_tracker._total_fees = Decimal(saved_balance["total_fees"])
 
             self.logger.info(
                 f"Balance restored from exchange: "
@@ -284,3 +297,18 @@ class StateRecoveryService:
 
             self.logger.error("No saved balance and exchange unavailable. Starting with zero balances.")
             return "none"
+
+    # ── Notification ─────────────────────────────────────────────────────
+
+    async def _send_recovery_notification(self, result: RecoveryResult) -> None:
+        details = (
+            f"Orders reconciled: {result.orders_reconciled}\n"
+            f"Orders filled while down: {len(result.orders_filled_while_down)}\n"
+            f"Ghost orders: {result.ghost_orders_found}\n"
+            f"Orphan orders: {result.orphan_orders_found}\n"
+            f"Balance source: {result.balance_source}"
+        )
+        await self.notification_handler.async_send_notification(
+            NotificationType.STATE_RECOVERY_COMPLETE,
+            recovery_details=details,
+        )
