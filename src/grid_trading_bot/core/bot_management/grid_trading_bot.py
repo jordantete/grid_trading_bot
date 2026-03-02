@@ -15,6 +15,9 @@ from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
+from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
+from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
+from grid_trading_bot.core.persistence.state_recovery_service import StateRecoveryService
 from grid_trading_bot.core.reconciliation.reconciliation_service import ReconciliationService
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
@@ -110,6 +113,38 @@ class GridTradingBot:
                     balance_tolerance=self.config_manager.get_reconciliation_balance_tolerance(),
                 )
 
+            self.state_persistence_service = None
+            self.state_recovery_service = None
+            if self.trading_mode == TradingMode.LIVE and self.config_manager.is_persistence_enabled():
+                db_path = self.config_manager.get_state_db_path()
+                import os
+
+                os.makedirs(os.path.dirname(db_path), exist_ok=True)
+                state_repository = SQLiteStateRepository(db_path)
+                state_repository.initialize()
+
+                self.state_persistence_service = StatePersistenceService(
+                    repository=state_repository,
+                    event_bus=self.event_bus,
+                    order_book=order_book,
+                    grid_manager=grid_manager,
+                    balance_tracker=self.balance_tracker,
+                    config_manager=self.config_manager,
+                    trading_pair=trading_pair,
+                    strategy_type=strategy_type.value,
+                )
+                self.state_recovery_service = StateRecoveryService(
+                    repository=state_repository,
+                    config_manager=self.config_manager,
+                    grid_manager=grid_manager,
+                    order_book=order_book,
+                    balance_tracker=self.balance_tracker,
+                    exchange_service=self.exchange_service,
+                    order_execution_strategy=order_execution_strategy,
+                    notification_handler=self.notification_handler,
+                    trading_pair=trading_pair,
+                )
+
             self.order_manager = OrderManager(
                 grid_manager,
                 order_validator,
@@ -151,18 +186,46 @@ class GridTradingBot:
     async def run(self) -> dict[str, Any] | None:
         try:
             self.is_running = True
+            skip_initial_purchase = False
+            skip_grid_init = False
 
-            await self.balance_tracker.setup_balances(
-                initial_balance=self.config_manager.get_initial_balance(),
-                initial_crypto_balance=0.0,
-                exchange_service=self.exchange_service,
-            )
+            # Attempt state recovery for live trading
+            if self.state_recovery_service:
+                self.strategy.initialize_strategy()
+                recovery_result = await self.state_recovery_service.attempt_recovery()
+                if recovery_result.recovered:
+                    skip_initial_purchase = recovery_result.initial_purchase_done
+                    skip_grid_init = recovery_result.grid_orders_initialized
+                    if self.state_persistence_service:
+                        self.state_persistence_service.set_flags(
+                            initial_purchase_done=skip_initial_purchase,
+                            grid_orders_initialized=skip_grid_init,
+                        )
+                    self.logger.info(
+                        f"State recovered: skip_initial_purchase={skip_initial_purchase}, "
+                        f"skip_grid_init={skip_grid_init}"
+                    )
+                else:
+                    await self.balance_tracker.setup_balances(
+                        initial_balance=self.config_manager.get_initial_balance(),
+                        initial_crypto_balance=0.0,
+                        exchange_service=self.exchange_service,
+                    )
+            else:
+                await self.balance_tracker.setup_balances(
+                    initial_balance=self.config_manager.get_initial_balance(),
+                    initial_crypto_balance=0.0,
+                    exchange_service=self.exchange_service,
+                )
+                self.strategy.initialize_strategy()
 
             self.order_status_tracker.start_tracking()
             if self.reconciliation_service:
                 self.reconciliation_service.start()
-            self.strategy.initialize_strategy()
-            await self.strategy.run()
+            await self.strategy.run(
+                skip_initial_purchase=skip_initial_purchase,
+                skip_grid_init=skip_grid_init,
+            )
 
             if not self.no_plot:
                 self.strategy.plot_results()
@@ -197,6 +260,8 @@ class GridTradingBot:
                 await self.reconciliation_service.stop()
             await self.order_status_tracker.stop_tracking()
             await self.strategy.stop()
+            if self.state_persistence_service:
+                self.state_persistence_service.cleanup()
             self._cleanup_subscriptions()
             self.is_running = False
 

@@ -46,6 +46,14 @@ Requires network access — validates CCXT/aiohttp compatibility with live excha
 uv run python -m pytest -m sandbox -v
 ```
 
+### Persistence layer tests
+
+Tests for SQLite state persistence, serialization, and recovery logic:
+
+```bash
+uv run python -m pytest tests/persistence/ -v
+```
+
 ### Update snapshots
 
 After intentional behavior changes, update the reference snapshots:
@@ -90,6 +98,7 @@ Pre-commit hooks enforce:
 
 - Source code: `src/grid_trading_bot/`
 - Tests: `tests/` (mirrors source structure)
+- Persistence tests: `tests/persistence/`
 - Integration tests: `tests/integration/`
 - Config files: `config/`
 - Monitoring stack: `monitoring/`

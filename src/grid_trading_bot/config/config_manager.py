@@ -208,3 +208,21 @@ class ConfigManager:
     def should_log_to_file(self) -> bool:
         logging = self.get_logging()
         return logging.get("log_to_file", False)
+
+    # --- Persistence Accessor Methods ---
+    def get_persistence_settings(self) -> dict:
+        return self.config.get("persistence", {})
+
+    def is_persistence_enabled(self) -> bool:
+        return self.get_persistence_settings().get("enabled", True)
+
+    def get_state_db_path(self) -> str:
+        persistence = self.get_persistence_settings()
+        if "db_path" in persistence:
+            return persistence["db_path"]
+        from grid_trading_bot.core.persistence.serializers import compute_config_hash
+
+        base = self.get_base_currency() or "BASE"
+        quote = self.get_quote_currency() or "QUOTE"
+        config_hash_short = compute_config_hash(self)[:8]
+        return f"data/{base}_{quote}/state_{config_hash_short}.db"

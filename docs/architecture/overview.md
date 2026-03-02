@@ -25,6 +25,11 @@ src/grid_trading_bot/
 │   │   ├── balance_tracker.py      # Fiat/crypto balances
 │   │   ├── order_book.py           # Order-to-grid mapping
 │   │   └── execution_strategy/     # Backtest vs live execution
+│   ├── persistence/                # State persistence (live mode)
+│   │   ├── state_persistence_service.py  # Event-driven checkpoints
+│   │   ├── state_recovery_service.py     # Merge recovery on restart
+│   │   ├── sqlite_state_repository.py    # SQLite backend
+│   │   └── serializers.py                # Model serialization
 │   ├── services/                   # Exchange abstraction
 │   │   ├── backtest_exchange_service.py
 │   │   └── live_exchange_service.py
@@ -58,6 +63,10 @@ flowchart TD
     ExecutionStrategy --> ExchangeService["ExchangeService"]
     OrderManager --> OrderValidator["OrderValidator"]
     GridManager --> GridLevel["GridLevel"]
+    Bot --> PersistenceService["StatePersistenceService"]
+    Bot --> RecoveryService["StateRecoveryService"]
+    PersistenceService --> StateRepository["SQLiteStateRepository"]
+    RecoveryService --> StateRepository
 ```
 
 ## Design Patterns
@@ -75,10 +84,12 @@ Decoupled communication via a publish/subscribe system. Components subscribe to 
 
 | Event | Published When | Typical Subscribers |
 |-------|---------------|-------------------|
-| `ORDER_FILLED` | An order is fully executed | OrderManager, Strategy |
-| `ORDER_CANCELLED` | An order is cancelled | OrderManager |
+| `ORDER_FILLED` | An order is fully executed | OrderManager, BalanceTracker, StatePersistenceService |
+| `ORDER_CANCELLED` | An order is cancelled | OrderManager, StatePersistenceService |
 | `START_BOT` | Bot initialization complete | BotController |
 | `STOP_BOT` | Shutdown requested | All components |
+| `INITIAL_PURCHASE_DONE` | Initial crypto purchase completed | StatePersistenceService |
+| `GRID_ORDERS_INITIALIZED` | Grid orders placed for the first time | StatePersistenceService |
 
 ### State Machine
 
@@ -115,10 +126,47 @@ The strategy handles:
 |------|-----------------|-------------------|-----------------|
 | `backtest` | `BacktestExchangeService` (CSV/CCXT OHLCV) | Instant fill | None |
 | `paper_trading` | `LiveExchangeService` (sandbox APIs) | Retry with backoff | BotController, HealthCheck |
-| `live` | `LiveExchangeService` (production APIs) | Retry with backoff | BotController, HealthCheck |
+| `live` | `LiveExchangeService` (production APIs) | Retry with backoff | BotController, HealthCheck, StatePersistence, ReconciliationService |
 
 In live and paper modes, the bot runs three concurrent async tasks:
 
 1. **Trading strategy** — Price consumption and order management
 2. **BotController** — Runtime CLI commands for status and control
 3. **HealthCheck** — System resource monitoring (CPU, memory)
+
+## State Persistence (Live Mode Only)
+
+In live trading mode, the bot persists its state to a SQLite database so it can recover from crashes or restarts without losing order history, grid states, or balance tracking.
+
+### How It Works
+
+- **Checkpoint strategy**: Event-driven — a full snapshot is written after every `ORDER_FILLED`, `ORDER_CANCELLED`, `INITIAL_PURCHASE_DONE`, and `GRID_ORDERS_INITIALIZED` event
+- **Database**: SQLite with WAL (Write-Ahead Logging) mode for crash safety
+- **DB path**: `data/{BASE}_{QUOTE}/state_{config_hash[:8]}.db` (auto-derived, or explicit via `persistence.db_path` in config)
+
+### Recovery on Restart
+
+When the bot starts in live mode with an existing state DB:
+
+1. **Config compatibility** — Compares config hash; if grid configuration changed, clears DB and starts fresh
+2. **Grid level restoration** — Overlays saved states and paired-level references onto freshly computed grid levels
+3. **Order restoration** — Reconstructs Order objects from DB, repopulates the OrderBook
+4. **Exchange reconciliation** — For each locally-open order, fetches current status from exchange:
+    - Filled while bot was down → updates status locally
+    - Canceled on exchange → releases reserved funds
+    - Not found → marks as ghost, releases funds
+    - Orphan orders on exchange (not in local book) → logged as warnings, not auto-adopted
+5. **Balance restoration** — Exchange balance is authoritative; DB reserved amounts are overlaid
+
+### Configuration
+
+```json
+{
+  "persistence": {
+    "enabled": true,
+    "db_path": "data/SOL_USDT/my_state.db"
+  }
+}
+```
+
+Both fields are optional. Persistence is enabled by default in live mode. The `db_path` defaults to `data/{BASE}_{QUOTE}/state_{hash}.db` where `{hash}` is derived from the grid configuration, ensuring different grid configs get separate databases even for the same trading pair
