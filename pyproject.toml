@@ -25,7 +25,6 @@ dependencies = [
     "aiohttp==3.13.3",
     "apprise==1.9.7",
     "ccxt==4.5.40",
-    "configparser==7.2.0",
     "psutil==7.2.2",
     "python-dotenv==1.2.1",
     "click>=8.1"
@@ -41,6 +40,7 @@ dev = [
     "pytest-cov==7.0.0",
     "pytest-timeout==2.4.0",
     "pre-commit==4.5.1",
+    "ruff>=0.8.4",
 ]
 docs = [
     "zensical>=0.0.23",

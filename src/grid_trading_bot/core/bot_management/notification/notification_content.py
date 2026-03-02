@@ -49,3 +49,7 @@ class NotificationType(Enum):
         title="Balance Reconciliation Drift",
         message="Balance reconciliation detected drift:\n{alert_details}",
     )
+    STATE_RECOVERY_COMPLETE = NotificationContent(
+        title="State Recovery Complete",
+        message="Bot recovered from previous state:\n{recovery_details}",
+    )

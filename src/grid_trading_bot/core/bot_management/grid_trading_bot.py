@@ -1,4 +1,5 @@
 import logging
+import os
 import traceback
 from typing import TYPE_CHECKING, Any
 
@@ -117,8 +118,6 @@ class GridTradingBot:
             self.state_recovery_service = None
             if self.trading_mode == TradingMode.LIVE and self.config_manager.is_persistence_enabled():
                 db_path = self.config_manager.get_state_db_path()
-                import os
-
                 os.makedirs(os.path.dirname(db_path), exist_ok=True)
                 state_repository = SQLiteStateRepository(db_path)
                 state_repository.initialize()
@@ -188,6 +187,7 @@ class GridTradingBot:
             self.is_running = True
             skip_initial_purchase = False
             skip_grid_init = False
+            recovery_result = None
 
             # Attempt state recovery for live trading
             if self.state_recovery_service:
@@ -212,12 +212,22 @@ class GridTradingBot:
                         exchange_service=self.exchange_service,
                     )
             else:
+                self.strategy.initialize_strategy()
                 await self.balance_tracker.setup_balances(
                     initial_balance=self.config_manager.get_initial_balance(),
                     initial_crypto_balance=0.0,
                     exchange_service=self.exchange_service,
                 )
-                self.strategy.initialize_strategy()
+
+            # Place paired orders for any orders that filled while the bot was down
+            if self.state_recovery_service and recovery_result and recovery_result.orders_filled_while_down:
+                self.logger.info(
+                    f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
+                    f"orders filled while bot was down."
+                )
+                await self.order_manager.place_paired_orders_for_recovered_fills(
+                    recovery_result.orders_filled_while_down
+                )
 
             self.order_status_tracker.start_tracking()
             if self.reconciliation_service:
