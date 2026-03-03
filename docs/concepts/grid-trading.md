@@ -91,6 +91,30 @@ stateDiagram-v2
 | `READY_TO_SELL` | Buy filled — level is ready for a sell order |
 | `WAITING_FOR_SELL_FILL` | Sell order placed, waiting for execution |
 
+## Asymmetric Order Sizing (Buy/Sell Ratio)
+
+By default, the bot uses the full computed quantity for both buy and sell orders (`buy_ratio: 1.0`, `sell_ratio: 1.0`). You can override this to create asymmetric strategies via the `buy_ratio` and `sell_ratio` parameters.
+
+**Use case — Crypto accumulation in a bull market:**
+Set `sell_ratio: 0.5` to sell only half the quantity on each sell cycle. The surplus crypto stays in your free balance, letting you accumulate over time while still capturing grid profits.
+
+| Parameter | Effect |
+|-----------|--------|
+| `buy_ratio` | Applied to all buy orders (initialization + paired buys after a sell fill). |
+| `sell_ratio` | Applied to all sell orders (initialization + paired sells after a buy fill). |
+
+Both ratios accept a value between `0` (exclusive) and `1.0` (inclusive). A value of `1.0` means the full quantity — identical to default behavior.
+
+**How it works:**
+
+- At **grid initialization**, the base order size is `total_balance / num_grids / price`. The ratio is applied: `base_size * ratio`.
+- On a **buy fill**, the paired sell quantity is `filled * sell_ratio`.
+- On a **sell fill**, the paired buy quantity is `filled * buy_ratio`.
+- Surplus crypto (the portion not sold) remains as free balance.
+
+!!! note
+    With a ratio below 1.0, order sizes compound down across cycles (e.g., with `sell_ratio: 0.5`: 1.0 → 0.5 → 0.25 → …). This is by design for accumulation strategies.
+
 ## Configuration
 
 Configure grid strategy in your `config.json`:
@@ -104,7 +128,9 @@ Configure grid strategy in your `config.json`:
     "range": {
       "top": 200,
       "bottom": 250
-    }
+    },
+    "buy_ratio": 1.0,
+    "sell_ratio": 0.5
   }
 }
 ```

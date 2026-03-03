@@ -19,6 +19,8 @@ class TestGridManager:
         mock_config_manager.get_top_range.return_value = 2000
         mock_config_manager.get_num_grids.return_value = 10
         mock_config_manager.get_spacing_type.return_value = SpacingType.ARITHMETIC
+        mock_config_manager.get_buy_ratio.return_value = 1.0
+        mock_config_manager.get_sell_ratio.return_value = 1.0
         return mock_config_manager
 
     @pytest.fixture
@@ -56,10 +58,38 @@ class TestGridManager:
     def test_get_order_size_for_grid_level(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
         current_price = 2000
-        total_balance = 10000  # Mocked initial balance
+        total_balance = 10000
         expected_order_size = total_balance / len(grid_manager.grid_levels) / current_price
-        result = grid_manager.get_order_size_for_grid_level(total_balance, current_price)
+        result = grid_manager.get_order_size_for_grid_level(total_balance, current_price, OrderSide.BUY)
         assert result == expected_order_size
+
+    def test_get_order_size_with_buy_ratio(self, config_manager):
+        config_manager.get_buy_ratio.return_value = 0.8
+        grid_manager = GridManager(config_manager, StrategyType.SIMPLE_GRID)
+        grid_manager.initialize_grids_and_levels()
+        current_price = 2000
+        total_balance = 10000
+        base_size = total_balance / len(grid_manager.grid_levels) / current_price
+        result = grid_manager.get_order_size_for_grid_level(total_balance, current_price, OrderSide.BUY)
+        assert result == pytest.approx(base_size * 0.8)
+
+    def test_get_order_size_with_sell_ratio(self, config_manager):
+        config_manager.get_sell_ratio.return_value = 0.5
+        grid_manager = GridManager(config_manager, StrategyType.SIMPLE_GRID)
+        grid_manager.initialize_grids_and_levels()
+        current_price = 2000
+        total_balance = 10000
+        base_size = total_balance / len(grid_manager.grid_levels) / current_price
+        result = grid_manager.get_order_size_for_grid_level(total_balance, current_price, OrderSide.SELL)
+        assert result == pytest.approx(base_size * 0.5)
+
+    def test_get_order_size_default_ratios_are_symmetric(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        total_balance = 10000
+        current_price = 2000
+        buy_size = grid_manager.get_order_size_for_grid_level(total_balance, current_price, OrderSide.BUY)
+        sell_size = grid_manager.get_order_size_for_grid_level(total_balance, current_price, OrderSide.SELL)
+        assert buy_size == sell_size
 
     def test_get_initial_order_quantity(self, grid_manager):
         current_fiat_balance = 5000  # Half of the total balance

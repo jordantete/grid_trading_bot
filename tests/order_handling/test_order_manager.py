@@ -271,7 +271,7 @@ class TestOrderManager:
         manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
         mock_order = Mock(side=OrderSide.SELL, filled=0.01)
         mock_grid_level = Mock(price=50000)
-        grid_manager.get_or_create_paired_buy_level.return_value = Mock()
+        grid_manager.get_or_create_paired_buy_level.return_value = Mock(price=48000)
         manager._place_order = AsyncMock()
 
         await manager._handle_order_completion(mock_order, mock_grid_level)
@@ -643,3 +643,65 @@ class TestOrderManager:
             NotificationType.ORDER_CANCELLED,
             order_details=str(mock_order),
         )
+
+    # ── Buy/Sell Ratio ──────────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_buy_fill_places_sell_with_sell_ratio(self, setup_order_manager):
+        manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
+        grid_manager.sell_ratio = 0.5
+        mock_order = Mock(side=OrderSide.BUY, filled=1.0)
+        mock_grid_level = Mock(price=50000)
+        paired_sell_level = Mock(price=52000)
+        grid_manager.get_paired_sell_level.return_value = paired_sell_level
+        grid_manager.can_place_order.return_value = True
+        manager._place_order = AsyncMock()
+
+        await manager._handle_buy_order_completion(mock_order, mock_grid_level)
+
+        manager._place_order.assert_awaited_once_with(OrderSide.SELL, mock_grid_level, paired_sell_level, 0.5)
+
+    @pytest.mark.asyncio
+    async def test_buy_fill_places_sell_with_default_ratio(self, setup_order_manager):
+        manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
+        grid_manager.sell_ratio = 1.0
+        mock_order = Mock(side=OrderSide.BUY, filled=1.0)
+        mock_grid_level = Mock(price=50000)
+        paired_sell_level = Mock(price=52000)
+        grid_manager.get_paired_sell_level.return_value = paired_sell_level
+        grid_manager.can_place_order.return_value = True
+        manager._place_order = AsyncMock()
+
+        await manager._handle_buy_order_completion(mock_order, mock_grid_level)
+
+        manager._place_order.assert_awaited_once_with(OrderSide.SELL, mock_grid_level, paired_sell_level, 1.0)
+
+    @pytest.mark.asyncio
+    async def test_sell_fill_places_buy_with_default_ratio(self, setup_order_manager):
+        manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
+        grid_manager.buy_ratio = 1.0
+        mock_order = Mock(side=OrderSide.SELL, filled=0.5)
+        mock_grid_level = Mock(price=52000)
+        paired_buy_level = Mock(price=50000)
+        grid_manager.get_or_create_paired_buy_level.return_value = paired_buy_level
+        manager._place_order = AsyncMock()
+
+        await manager._handle_sell_order_completion(mock_order, mock_grid_level)
+
+        # buy_qty = 0.5 * 1.0 = 0.5 (same as filled, backward compatible)
+        manager._place_order.assert_awaited_once_with(OrderSide.BUY, mock_grid_level, paired_buy_level, 0.5)
+
+    @pytest.mark.asyncio
+    async def test_sell_fill_places_buy_with_buy_ratio_half(self, setup_order_manager):
+        manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
+        grid_manager.buy_ratio = 0.5
+        mock_order = Mock(side=OrderSide.SELL, filled=1.0)
+        mock_grid_level = Mock(price=52000)
+        paired_buy_level = Mock(price=50000)
+        grid_manager.get_or_create_paired_buy_level.return_value = paired_buy_level
+        manager._place_order = AsyncMock()
+
+        await manager._handle_sell_order_completion(mock_order, mock_grid_level)
+
+        # buy_qty = 1.0 * 0.5 = 0.5 (accumulate 50% fiat)
+        manager._place_order.assert_awaited_once_with(OrderSide.BUY, mock_grid_level, paired_buy_level, 0.5)

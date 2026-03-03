@@ -83,6 +83,8 @@ def compute_config_hash(config_manager: ConfigManager) -> str:
         "spacing": grid_settings.get("spacing"),
         "num_grids": grid_settings.get("num_grids"),
         "range": grid_settings.get("range"),
+        "buy_ratio": grid_settings.get("buy_ratio", 1.0),
+        "sell_ratio": grid_settings.get("sell_ratio", 1.0),
         "pair": pair,
     }
     canonical = json.dumps(hash_input, sort_keys=True, separators=(",", ":"))

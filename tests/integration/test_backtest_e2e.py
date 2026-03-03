@@ -168,3 +168,81 @@ async def test_backtest_deterministic_results(strategy_type, spacing, run_backte
 
     diffs = compare_snapshots(actual, expected)
     assert not diffs, f"Snapshot mismatch for {name}:\n" + "\n".join(diffs)
+
+
+# ---------------------------------------------------------------------------
+# Asymmetric ratio: sell_ratio=0.5 (crypto accumulation)
+# ---------------------------------------------------------------------------
+
+RATIO_SCENARIOS = [
+    ("simple_grid", "arithmetic"),
+    ("hedged_grid", "arithmetic"),
+]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("strategy_type", "spacing"), RATIO_SCENARIOS)
+async def test_asymmetric_ratio_completes_without_error(strategy_type, spacing, run_backtest_bot):
+    """The bot runs a full backtest with sell_ratio=0.5 without crashing."""
+    bot, result = await run_backtest_bot(strategy_type, spacing, sell_ratio=0.5)
+
+    assert result is not None
+    assert "performance_summary" in result
+    assert len(result["orders"]) > 0
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("strategy_type", "spacing"), RATIO_SCENARIOS)
+async def test_asymmetric_ratio_balance_coherence(strategy_type, spacing, run_backtest_bot):
+    """With sell_ratio=0.5, all balances remain non-negative and consistent."""
+    bot, result = await run_backtest_bot(strategy_type, spacing, sell_ratio=0.5)
+    bt = bot.balance_tracker
+    order_book = bot.strategy.order_manager.order_book
+
+    assert bt.balance >= 0, f"Fiat balance is negative: {bt.balance}"
+    assert bt.crypto_balance >= 0, f"Crypto balance is negative: {bt.crypto_balance}"
+    assert bt.reserved_fiat >= 0, f"Reserved fiat is negative: {bt.reserved_fiat}"
+    assert bt.reserved_crypto >= 0, f"Reserved crypto is negative: {bt.reserved_crypto}"
+
+    open_buy_orders = [o for o in order_book.get_all_buy_orders() if o.is_open()]
+    open_sell_orders = [o for o in order_book.get_all_sell_orders() if o.is_open()]
+
+    if not open_buy_orders:
+        assert bt.reserved_fiat == 0, f"Reserved fiat={bt.reserved_fiat} but no open buy orders"
+    if not open_sell_orders:
+        assert bt.reserved_crypto == 0, f"Reserved crypto={bt.reserved_crypto} but no open sell orders"
+
+    assert bt.get_adjusted_fiat_balance() >= 0, "Adjusted fiat balance is negative"
+    assert bt.get_adjusted_crypto_balance() >= 0, "Adjusted crypto balance is negative"
+
+    summary = result["performance_summary"]
+    reported_final = float(summary["Final Balance (Fiat)"].split()[0])
+    final_price = bot.strategy.close_prices[-1]
+    computed_total = bt.get_total_balance_value(final_price)
+    assert (
+        abs(computed_total - reported_final) < 0.02
+    ), f"Balance mismatch: tracker says {computed_total:.4f}, summary says {reported_final:.4f}"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("strategy_type", "spacing"), RATIO_SCENARIOS)
+async def test_asymmetric_ratio_reduces_sell_volume(strategy_type, spacing, run_backtest_bot):
+    """With sell_ratio=0.5, total sell volume is strictly lower than symmetric."""
+    bot_asym, _ = await run_backtest_bot(strategy_type, spacing, sell_ratio=0.5)
+    bot_sym, _ = await run_backtest_bot(strategy_type, spacing)
+
+    ob_asym = bot_asym.strategy.order_manager.order_book
+    ob_sym = bot_sym.strategy.order_manager.order_book
+
+    asym_sell_vol = sum(o.filled for o in ob_asym.get_all_sell_orders() if o.is_filled())
+    sym_sell_vol = sum(o.filled for o in ob_sym.get_all_sell_orders() if o.is_filled())
+    assert (
+        asym_sell_vol < sym_sell_vol
+    ), f"Asymmetric sell volume should be lower: asym={asym_sell_vol:.6f} vs sym={sym_sell_vol:.6f}"
+
+    # Crypto held should be at least as much as symmetric (we sell less)
+    asym_crypto = bot_asym.balance_tracker.get_adjusted_crypto_balance()
+    sym_crypto = bot_sym.balance_tracker.get_adjusted_crypto_balance()
+    assert (
+        asym_crypto >= sym_crypto
+    ), f"Asymmetric crypto should be >= symmetric: asym={asym_crypto:.6f} vs sym={sym_crypto:.6f}"

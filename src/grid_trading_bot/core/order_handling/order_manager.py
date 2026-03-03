@@ -84,7 +84,7 @@ class OrderManager:
 
             grid_level = self.grid_manager.grid_levels[price]
             total_balance_value = self.balance_tracker.get_total_balance_value(current_price)
-            order_quantity = self.grid_manager.get_order_size_for_grid_level(total_balance_value, current_price)
+            order_quantity = self.grid_manager.get_order_size_for_grid_level(total_balance_value, current_price, side)
 
             if self.grid_manager.can_place_order(grid_level, side):
                 try:
@@ -246,7 +246,8 @@ class OrderManager:
         paired_sell_level = self.grid_manager.get_paired_sell_level(grid_level)
 
         if paired_sell_level and self.grid_manager.can_place_order(paired_sell_level, OrderSide.SELL):
-            await self._place_order(OrderSide.SELL, grid_level, paired_sell_level, order.filled)
+            sell_quantity = order.filled * self.grid_manager.sell_ratio
+            await self._place_order(OrderSide.SELL, grid_level, paired_sell_level, sell_quantity)
         else:
             self.logger.warning(
                 f"No valid sell grid level found for buy grid level {grid_level}. Skipping sell order placement.",
@@ -269,7 +270,8 @@ class OrderManager:
         paired_buy_level = self.grid_manager.get_or_create_paired_buy_level(grid_level)
 
         if paired_buy_level:
-            await self._place_order(OrderSide.BUY, grid_level, paired_buy_level, order.filled)
+            buy_quantity = order.filled * self.grid_manager.buy_ratio
+            await self._place_order(OrderSide.BUY, grid_level, paired_buy_level, buy_quantity)
         else:
             self.logger.error(f"Failed to find or create a paired buy grid level for grid level {grid_level}.")
 
@@ -346,13 +348,15 @@ class OrderManager:
                     if order.side == OrderSide.BUY:
                         paired_sell_level = self.grid_manager.get_paired_sell_level(grid_level)
                         if paired_sell_level and self.grid_manager.can_place_order(paired_sell_level, OrderSide.SELL):
-                            await self._place_order(OrderSide.SELL, grid_level, paired_sell_level, order.filled)
+                            sell_quantity = order.filled * self.grid_manager.sell_ratio
+                            await self._place_order(OrderSide.SELL, grid_level, paired_sell_level, sell_quantity)
                         else:
                             self.logger.warning(f"No valid sell level for recovered buy fill at {grid_level.price}.")
                     elif order.side == OrderSide.SELL:
                         paired_buy_level = self.grid_manager.get_or_create_paired_buy_level(grid_level)
                         if paired_buy_level:
-                            await self._place_order(OrderSide.BUY, grid_level, paired_buy_level, order.filled)
+                            buy_quantity = order.filled * self.grid_manager.buy_ratio
+                            await self._place_order(OrderSide.BUY, grid_level, paired_buy_level, buy_quantity)
                         else:
                             self.logger.error(f"No paired buy level for recovered sell fill at {grid_level.price}.")
                 except Exception as e:

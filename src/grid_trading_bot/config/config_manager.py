@@ -126,6 +126,14 @@ class ConfigManager:
         grid_range = self.get_grid_range()
         return grid_range.get("bottom", None)
 
+    def get_buy_ratio(self) -> float:
+        grid_settings = self.get_grid_settings()
+        return grid_settings.get("buy_ratio", 1.0)
+
+    def get_sell_ratio(self) -> float:
+        grid_settings = self.get_grid_settings()
+        return grid_settings.get("sell_ratio", 1.0)
+
     # --- Risk management (Take Profit / Stop Loss) Accessor Methods ---
     def get_risk_management(self) -> dict:
         return self.config.get("risk_management", {})

@@ -37,7 +37,17 @@ def snapshot_dir():
     return Path(__file__).resolve().parent / "snapshots"
 
 
-def _build_config_dict(strategy_type: str, spacing: str) -> dict:
+def _build_config_dict(strategy_type: str, spacing: str, **grid_overrides) -> dict:
+    grid_strategy = {
+        "type": strategy_type,
+        "spacing": spacing,
+        "num_grids": 8,
+        "range": {
+            "top": 170,
+            "bottom": 155,
+        },
+        **grid_overrides,
+    }
     return {
         "exchange": {
             "name": "binance",
@@ -57,15 +67,7 @@ def _build_config_dict(strategy_type: str, spacing: str) -> dict:
             "initial_balance": 150,
             "historical_data_file": CSV_DATA_FILE,
         },
-        "grid_strategy": {
-            "type": strategy_type,
-            "spacing": spacing,
-            "num_grids": 8,
-            "range": {
-                "top": 170,
-                "bottom": 155,
-            },
-        },
+        "grid_strategy": grid_strategy,
         "risk_management": {
             "take_profit": {
                 "enabled": False,
@@ -87,9 +89,11 @@ def _build_config_dict(strategy_type: str, spacing: str) -> dict:
 def make_config_file(tmp_path):
     """Factory fixture that writes a config JSON to tmp_path and returns its path."""
 
-    def _make(strategy_type: str, spacing: str) -> str:
-        config_dict = _build_config_dict(strategy_type, spacing)
-        config_path = tmp_path / f"config_{strategy_type}_{spacing}.json"
+    def _make(strategy_type: str, spacing: str, **grid_overrides) -> str:
+        config_dict = _build_config_dict(strategy_type, spacing, **grid_overrides)
+        suffix = "_".join(f"{k}{v}" for k, v in sorted(grid_overrides.items()))
+        filename = f"config_{strategy_type}_{spacing}{'_' + suffix if suffix else ''}.json"
+        config_path = tmp_path / filename
         config_path.write_text(json.dumps(config_dict, indent=2))
         return str(config_path)
 
@@ -108,8 +112,8 @@ async def run_backtest_bot(make_config_file):
 
     bots_and_event_buses = []
 
-    async def _run(strategy_type: str, spacing: str):
-        config_path = make_config_file(strategy_type, spacing)
+    async def _run(strategy_type: str, spacing: str, **grid_overrides):
+        config_path = make_config_file(strategy_type, spacing, **grid_overrides)
         config_manager = ConfigManager(config_path, ConfigValidator())
         event_bus = EventBus()
         notification_handler = NotificationHandler(event_bus, [], TradingMode.BACKTEST)

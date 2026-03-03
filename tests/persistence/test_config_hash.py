@@ -88,6 +88,8 @@ class TestComputeConfigHash:
             "spacing": "arithmetic",
             "num_grids": 10,
             "range": [40000, 50000],
+            "buy_ratio": 1.0,
+            "sell_ratio": 1.0,
             "pair": {"base": "BTC", "quote": "USDT"},
         }
         canonical = json.dumps(hash_input, sort_keys=True, separators=(",", ":"))
@@ -127,6 +129,14 @@ class TestComputeConfigHash:
         )
 
         assert compute_config_hash(cm_arith) != compute_config_hash(cm_geo)
+
+    def test_hash_changes_when_ratios_change(self):
+        """Changing buy_ratio or sell_ratio produces a different hash."""
+        base = {"type": "simple_grid", "spacing": "arithmetic", "num_grids": 10, "range": [40000, 50000]}
+        cm_default = self._make_config_manager(grid_settings=dict(base))
+        cm_with_ratio = self._make_config_manager(grid_settings={**base, "sell_ratio": 0.5})
+
+        assert compute_config_hash(cm_default) != compute_config_hash(cm_with_ratio)
 
     def test_hash_is_valid_sha256_hex_digest(self):
         """The returned hash is a 64-character lowercase hex string (SHA-256)."""

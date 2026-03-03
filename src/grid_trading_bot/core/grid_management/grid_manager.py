@@ -23,6 +23,8 @@ class GridManager:
         self.central_price: float
         self.sorted_buy_grids: list[float]
         self.sorted_sell_grids: list[float]
+        self.buy_ratio: float = config_manager.get_buy_ratio()
+        self.sell_ratio: float = config_manager.get_sell_ratio()
         self.grid_levels: dict[float, GridLevel] = {}
         self._sorted_prices: list[float] = []
         self._price_index_map: dict[float, int] = {}
@@ -70,19 +72,24 @@ class GridManager:
         self,
         total_balance: float,
         current_price: float,
+        side: OrderSide,
     ) -> float:
         """
-        Calculates the order size for a grid level based on the total balance, total grids, and current price.
+        Calculates the order size for a grid level based on the total balance, total grids, current price,
+        and the buy/sell ratio.
 
         Args:
             total_balance: The total portfolio value in fiat.
             current_price: The current price of the trading pair.
+            side: The order side (BUY or SELL) to determine which ratio to apply.
 
         Returns:
             The calculated order size as a float.
         """
         total_grids = len(self.grid_levels)
-        return total_balance / total_grids / current_price
+        base_size = total_balance / total_grids / current_price
+        ratio = self.buy_ratio if side == OrderSide.BUY else self.sell_ratio
+        return base_size * ratio
 
     def get_initial_order_quantity(
         self,

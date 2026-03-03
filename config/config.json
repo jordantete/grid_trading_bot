@@ -23,7 +23,9 @@
     "range": {
       "top": 240,
       "bottom": 210
-    }
+    },
+    "buy_ratio": 1.0,
+    "sell_ratio": 1.0
   },
   "risk_management": {
     "take_profit": {

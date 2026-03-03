@@ -165,3 +165,17 @@ class TestConfigManager:
     def test_get_stop_loss_threshold_default(self, config_manager):
         del config_manager.config["risk_management"]["stop_loss"]
         assert config_manager.get_stop_loss_threshold() is None
+
+    def test_get_buy_ratio_default(self, config_manager):
+        assert config_manager.get_buy_ratio() == 1.0
+
+    def test_get_sell_ratio_default(self, config_manager):
+        assert config_manager.get_sell_ratio() == 1.0
+
+    def test_get_buy_ratio_custom(self, config_manager):
+        config_manager.config["grid_strategy"]["buy_ratio"] = 0.8
+        assert config_manager.get_buy_ratio() == 0.8
+
+    def test_get_sell_ratio_custom(self, config_manager):
+        config_manager.config["grid_strategy"]["sell_ratio"] = 0.5
+        assert config_manager.get_sell_ratio() == 0.5

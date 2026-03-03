@@ -31,7 +31,9 @@ The bot is configured via a JSON file (typically `config/config.json`). This pag
     "range": {
       "top": 200,
       "bottom": 250
-    }
+    },
+    "buy_ratio": 1.0,
+    "sell_ratio": 0.5
   },
   "risk_management": {
     "take_profit": {
@@ -105,6 +107,8 @@ The bot is configured via a JSON file (typically `config/config.json`). This pag
 | `num_grids` | int | Yes | Total number of grid levels. |
 | `range.top` | float | Yes | Upper price limit of the grid. |
 | `range.bottom` | float | Yes | Lower price limit of the grid. |
+| `buy_ratio` | float | No | Fraction of the base quantity to use for buy orders. Must be in `(0, 1.0]`. Default: `1.0`. |
+| `sell_ratio` | float | No | Fraction of the base quantity to use for sell orders. Must be in `(0, 1.0]`. Default: `1.0`. |
 
 ### `risk_management`
 

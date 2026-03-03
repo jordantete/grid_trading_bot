@@ -14,6 +14,8 @@ from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatu
 @pytest.fixture
 def setup_order_manager():
     grid_manager = Mock()
+    grid_manager.buy_ratio = 1.0
+    grid_manager.sell_ratio = 1.0
     order_validator = Mock()
     balance_tracker = Mock()
     balance_tracker.reserve_funds_for_buy = AsyncMock()

@@ -121,3 +121,27 @@ class TestConfigValidator:
         with pytest.raises(ConfigValidationError) as excinfo:
             config_validator.validate(valid_config)
         assert "logging.log_level" in excinfo.value.missing_fields
+
+    def test_validate_ratios_valid(self, config_validator, valid_config):
+        valid_config["grid_strategy"]["buy_ratio"] = 1.0
+        valid_config["grid_strategy"]["sell_ratio"] = 0.5
+        try:
+            config_validator.validate(valid_config)
+        except ConfigValidationError:
+            pytest.fail("Valid ratios raised ConfigValidationError")
+
+    def test_validate_ratios_absent_is_valid(self, config_validator, valid_config):
+        assert "buy_ratio" not in valid_config["grid_strategy"]
+        assert "sell_ratio" not in valid_config["grid_strategy"]
+        try:
+            config_validator.validate(valid_config)
+        except ConfigValidationError:
+            pytest.fail("Config without ratios raised ConfigValidationError")
+
+    @pytest.mark.parametrize("ratio_field", ["buy_ratio", "sell_ratio"])
+    @pytest.mark.parametrize("invalid_value", [0, -0.5, 1.5, "abc"])
+    def test_validate_ratio_invalid_values(self, config_validator, valid_config, ratio_field, invalid_value):
+        valid_config["grid_strategy"][ratio_field] = invalid_value
+        with pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+        assert f"grid_strategy.{ratio_field}" in excinfo.value.invalid_fields

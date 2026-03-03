@@ -159,6 +159,14 @@ class ConfigValidator:
                 invalid_fields.append("grid_strategy.range.top")
                 invalid_fields.append("grid_strategy.range.bottom")
 
+        for ratio_field in ("buy_ratio", "sell_ratio"):
+            value = grid.get(ratio_field)
+            if value is not None and (not isinstance(value, int | float) or value <= 0 or value > 1.0):
+                self.logger.error(
+                    f"grid_strategy.{ratio_field} must be a number between 0 (exclusive) and 1.0 (inclusive)."
+                )
+                invalid_fields.append(f"grid_strategy.{ratio_field}")
+
         return missing_fields, invalid_fields
 
     def _validate_limits(self, config: dict[str, Any]) -> list[str]:
