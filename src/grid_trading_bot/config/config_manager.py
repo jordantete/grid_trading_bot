@@ -19,6 +19,16 @@ class ConfigManager:
         self.config: dict[str, Any] = {}
         self.load_config()
 
+    @classmethod
+    def from_dict(cls, config_dict: dict[str, Any], config_validator: ConfigValidator | None = None) -> "ConfigManager":
+        instance = cls.__new__(cls)
+        instance.logger = logging.getLogger(cls.__name__)
+        instance.config_file = "<dict>"
+        instance.config_validator = config_validator or ConfigValidator()
+        instance.config = config_dict
+        instance.config_validator.validate(instance.config)
+        return instance
+
     def load_config(self) -> None:
         if not os.path.exists(self.config_file):
             self.logger.error(f"Config file {self.config_file} does not exist.")

@@ -5,7 +5,7 @@ import pytest
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.config_validator import ConfigValidator
-from grid_trading_bot.config.exceptions import ConfigFileNotFoundError, ConfigParseError
+from grid_trading_bot.config.exceptions import ConfigFileNotFoundError, ConfigParseError, ConfigValidationError
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.domain.spacing_type import SpacingType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
@@ -179,3 +179,25 @@ class TestConfigManager:
     def test_get_sell_ratio_custom(self, config_manager):
         config_manager.config["grid_strategy"]["sell_ratio"] = 0.5
         assert config_manager.get_sell_ratio() == 0.5
+
+
+class TestConfigManagerFromDict:
+    def test_from_dict_creates_valid_config_manager(self, valid_config):
+        cm = ConfigManager.from_dict(valid_config)
+        assert cm.get_exchange_name() == "binance"
+        assert cm.get_trading_fee() == 0.001
+        assert cm.get_base_currency() == "ETH"
+        assert cm.get_quote_currency() == "USDT"
+
+    def test_from_dict_validates_config(self):
+        with pytest.raises(ConfigValidationError):
+            ConfigManager.from_dict({"exchange": {}})
+
+    def test_from_dict_accepts_custom_validator(self, valid_config):
+        validator = ConfigValidator()
+        cm = ConfigManager.from_dict(valid_config, config_validator=validator)
+        assert cm.config_validator is validator
+
+    def test_from_dict_sets_config_file_marker(self, valid_config):
+        cm = ConfigManager.from_dict(valid_config)
+        assert cm.config_file == "<dict>"
