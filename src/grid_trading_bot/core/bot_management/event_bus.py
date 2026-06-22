@@ -90,7 +90,7 @@ class EventBus:
         self.logger.info(f"Publishing async event: {event_type} with data: {data}")
         tasks = [
             self._safe_invoke_async(callback, data)
-            if asyncio.iscoroutinefunction(callback)
+            if inspect.iscoroutinefunction(callback)
             else asyncio.to_thread(self._safe_invoke_sync, callback, data)
             for callback in self.subscribers[event_type]
         ]
@@ -115,7 +115,7 @@ class EventBus:
             except RuntimeError:
                 loop = None
             for callback in self.subscribers[event_type]:
-                if asyncio.iscoroutinefunction(callback):
+                if inspect.iscoroutinefunction(callback):
                     if loop is not None:
                         asyncio.run_coroutine_threadsafe(self._safe_invoke_async(callback, data), loop)
                     else:

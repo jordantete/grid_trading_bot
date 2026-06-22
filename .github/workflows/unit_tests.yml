@@ -12,6 +12,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -22,7 +27,7 @@ jobs:
       - name: "Set up Python"
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install the project
         run: uv sync --all-extras --dev
@@ -32,6 +37,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload coverage reports to Codecov
+        if: matrix.python-version == '3.12'
         uses: codecov/codecov-action@v7
         with:
           fail_ci_if_error: true

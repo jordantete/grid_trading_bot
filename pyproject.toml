@@ -11,6 +11,8 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Office/Business :: Financial :: Investment",
@@ -18,8 +20,8 @@ classifiers = [
     "Intended Audience :: Financial and Insurance Industry",
 ]
 dependencies = [
-    "pandas==2.2.3",
-    "numpy==2.1.3",
+    "pandas==3.0.3",
+    "numpy==2.5.0",
     "plotly==6.8.0",
     "tabulate==0.10.0",
     "aiohttp==3.14.1",
