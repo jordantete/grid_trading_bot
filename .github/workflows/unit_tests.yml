@@ -30,11 +30,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install the project
-        run: uv sync --all-extras --dev
+        run: uv sync --python ${{ matrix.python-version }} --all-extras --dev
 
       - name: Run tests and upload coverage
-        run: uv run pytest --cov=grid_trading_bot --cov-report=xml:coverage.xml --cov-report=term
-        continue-on-error: true
+        run: uv run --python ${{ matrix.python-version }} pytest --cov=grid_trading_bot --cov-report=xml:coverage.xml --cov-report=term
 
       - name: Upload coverage reports to Codecov
         if: matrix.python-version == '3.12'
