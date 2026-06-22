@@ -105,9 +105,9 @@ class TestGridTradingStrategy:
 
         # Verify `listen_to_ticker_updates` was called with the correct parameters
         assert actual_call_args[0][0] == strategy.trading_pair, "Expected the trading pair to be passed."
-        assert (
-            actual_call_args[0][2] == strategy.TICKER_REFRESH_INTERVAL
-        ), "Expected the correct ticker refresh interval."
+        assert actual_call_args[0][2] == strategy.TICKER_REFRESH_INTERVAL, (
+            "Expected the correct ticker refresh interval."
+        )
         assert callable(actual_callback), "Expected a callable callback for on_ticker_update."
 
     @pytest.mark.asyncio
@@ -484,7 +484,7 @@ class TestGridTradingStrategy:
 
     @pytest.mark.asyncio
     async def test_on_ticker_update_error_handling(self, setup_strategy):
-        create_strategy, _, exchange_service, grid_manager, order_manager, balance_tracker, _, _, _ = setup_strategy
+        create_strategy, _, exchange_service, grid_manager, _order_manager, balance_tracker, _, _, _ = setup_strategy
         strategy = create_strategy(TradingMode.LIVE)
 
         grid_manager.get_trigger_price.return_value = 15000

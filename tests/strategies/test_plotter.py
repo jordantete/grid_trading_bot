@@ -37,7 +37,7 @@ class TestPlotter:
         assert fig.data[3].line.color == "red"  # Above central price
 
     def test_add_trigger_price_line(self, setup_plotter):
-        plotter, grid_manager, _ = setup_plotter
+        plotter, _grid_manager, _ = setup_plotter
         fig = go.Figure()
         trigger_price = 105
 

@@ -37,7 +37,7 @@ def _snapshot_name(strategy_type: str, spacing: str) -> str:
 @pytest.mark.parametrize(("strategy_type", "spacing"), SCENARIOS)
 async def test_backtest_completes_without_error(strategy_type, spacing, run_backtest_bot):
     """The bot starts, runs a full backtest, and returns a valid result."""
-    bot, result = await run_backtest_bot(strategy_type, spacing)
+    _bot, result = await run_backtest_bot(strategy_type, spacing)
 
     assert result is not None, "run() returned None — backtest did not produce results"
     assert "performance_summary" in result
@@ -88,9 +88,9 @@ async def test_backtest_balance_coherence(strategy_type, spacing, run_backtest_b
     reported_final = float(summary["Final Balance (Fiat)"].split()[0])
     final_price = bot.strategy.close_prices[-1]
     computed_total = bt.get_total_balance_value(final_price)
-    assert (
-        abs(computed_total - reported_final) < 0.02
-    ), f"Balance mismatch: tracker says {computed_total:.4f}, summary says {reported_final:.4f}"
+    assert abs(computed_total - reported_final) < 0.02, (
+        f"Balance mismatch: tracker says {computed_total:.4f}, summary says {reported_final:.4f}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -124,14 +124,14 @@ async def test_backtest_grid_cycle_integrity(strategy_type, spacing, run_backtes
         assert level.state in valid_states, f"Grid level {price} in invalid state: {level.state.name}"
 
         if level.state == GridCycleState.WAITING_FOR_BUY_FILL:
-            assert (
-                price in open_buy_prices
-            ), f"Grid level {price} is WAITING_FOR_BUY_FILL but no open buy order exists at that price"
+            assert price in open_buy_prices, (
+                f"Grid level {price} is WAITING_FOR_BUY_FILL but no open buy order exists at that price"
+            )
 
         if level.state == GridCycleState.WAITING_FOR_SELL_FILL:
-            assert (
-                price in open_sell_prices
-            ), f"Grid level {price} is WAITING_FOR_SELL_FILL but no open sell order exists at that price"
+            assert price in open_sell_prices, (
+                f"Grid level {price} is WAITING_FOR_SELL_FILL but no open sell order exists at that price"
+            )
 
     # Every filled buy should have had a corresponding sell placed (or the level is ready to sell)
     filled_buys = [o for o in order_book.get_all_buy_orders() if o.is_filled()]
@@ -139,9 +139,9 @@ async def test_backtest_grid_cycle_integrity(strategy_type, spacing, run_backtes
         grid_level = order_book.get_grid_level_for_order(buy_order)
         if grid_level is None:
             continue  # initial purchase or non-grid order
-        assert (
-            grid_level.state != GridCycleState.READY_TO_BUY
-        ), f"Buy filled at {grid_level.price} but level reverted to READY_TO_BUY without sell cycle"
+        assert grid_level.state != GridCycleState.READY_TO_BUY, (
+            f"Buy filled at {grid_level.price} but level reverted to READY_TO_BUY without sell cycle"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ async def test_backtest_grid_cycle_integrity(strategy_type, spacing, run_backtes
 @pytest.mark.parametrize(("strategy_type", "spacing"), SCENARIOS)
 async def test_backtest_deterministic_results(strategy_type, spacing, run_backtest_bot, snapshot_dir, update_snapshots):
     """With identical config and CSV data, the backtest produces identical results."""
-    bot, result = await run_backtest_bot(strategy_type, spacing)
+    _bot, result = await run_backtest_bot(strategy_type, spacing)
     name = _snapshot_name(strategy_type, spacing)
     actual = extract_snapshot_data(result["performance_summary"], result["orders"])
 
@@ -184,7 +184,7 @@ RATIO_SCENARIOS = [
 @pytest.mark.parametrize(("strategy_type", "spacing"), RATIO_SCENARIOS)
 async def test_asymmetric_ratio_completes_without_error(strategy_type, spacing, run_backtest_bot):
     """The bot runs a full backtest with sell_ratio=0.5 without crashing."""
-    bot, result = await run_backtest_bot(strategy_type, spacing, sell_ratio=0.5)
+    _bot, result = await run_backtest_bot(strategy_type, spacing, sell_ratio=0.5)
 
     assert result is not None
     assert "performance_summary" in result
@@ -219,9 +219,9 @@ async def test_asymmetric_ratio_balance_coherence(strategy_type, spacing, run_ba
     reported_final = float(summary["Final Balance (Fiat)"].split()[0])
     final_price = bot.strategy.close_prices[-1]
     computed_total = bt.get_total_balance_value(final_price)
-    assert (
-        abs(computed_total - reported_final) < 0.02
-    ), f"Balance mismatch: tracker says {computed_total:.4f}, summary says {reported_final:.4f}"
+    assert abs(computed_total - reported_final) < 0.02, (
+        f"Balance mismatch: tracker says {computed_total:.4f}, summary says {reported_final:.4f}"
+    )
 
 
 @pytest.mark.integration
@@ -236,13 +236,13 @@ async def test_asymmetric_ratio_reduces_sell_volume(strategy_type, spacing, run_
 
     asym_sell_vol = sum(o.filled for o in ob_asym.get_all_sell_orders() if o.is_filled())
     sym_sell_vol = sum(o.filled for o in ob_sym.get_all_sell_orders() if o.is_filled())
-    assert (
-        asym_sell_vol < sym_sell_vol
-    ), f"Asymmetric sell volume should be lower: asym={asym_sell_vol:.6f} vs sym={sym_sell_vol:.6f}"
+    assert asym_sell_vol < sym_sell_vol, (
+        f"Asymmetric sell volume should be lower: asym={asym_sell_vol:.6f} vs sym={sym_sell_vol:.6f}"
+    )
 
     # Crypto held should be at least as much as symmetric (we sell less)
     asym_crypto = bot_asym.balance_tracker.get_adjusted_crypto_balance()
     sym_crypto = bot_sym.balance_tracker.get_adjusted_crypto_balance()
-    assert (
-        asym_crypto >= sym_crypto
-    ), f"Asymmetric crypto should be >= symmetric: asym={asym_crypto:.6f} vs sym={sym_crypto:.6f}"
+    assert asym_crypto >= sym_crypto, (
+        f"Asymmetric crypto should be >= symmetric: asym={asym_crypto:.6f} vs sym={sym_crypto:.6f}"
+    )

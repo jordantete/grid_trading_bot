@@ -80,7 +80,7 @@ class TestOrderValidator:
         order_quantity = 1
         price = 3000
 
-        with pytest.raises(InsufficientBalanceError, match="Balance .* is far below the required cost .*"):
+        with pytest.raises(InsufficientBalanceError, match=r"Balance .* is far below the required cost .*"):
             validator.adjust_and_validate_buy_quantity(balance, order_quantity, price)
 
     def test_adjust_and_validate_sell_quantity_tolerance_threshold(self, validator):
@@ -89,6 +89,6 @@ class TestOrderValidator:
 
         with pytest.raises(
             InsufficientCryptoBalanceError,
-            match="Crypto balance .* is far below the required quantity .*",
+            match=r"Crypto balance .* is far below the required quantity .*",
         ):
             validator.adjust_and_validate_sell_quantity(crypto_balance, order_quantity)

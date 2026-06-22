@@ -69,7 +69,7 @@ class TestEventSubscription:
 
 class TestCheckpointOnEvents:
     async def test_checkpoint_on_order_filled(self, setup_persistence_service):
-        service, repository, event_bus, *_ = setup_persistence_service
+        _service, repository, event_bus, *_ = setup_persistence_service
 
         mock_order = MagicMock()
         await event_bus.publish(Events.ORDER_FILLED, mock_order)
@@ -80,7 +80,7 @@ class TestCheckpointOnEvents:
         repository.save_grid_levels.assert_called_once()
 
     async def test_checkpoint_on_order_cancelled(self, setup_persistence_service):
-        service, repository, event_bus, *_ = setup_persistence_service
+        _service, repository, event_bus, *_ = setup_persistence_service
 
         mock_order = MagicMock()
         await event_bus.publish(Events.ORDER_CANCELLED, mock_order)
@@ -93,7 +93,7 @@ class TestCheckpointOnEvents:
 
 class TestFlagEvents:
     async def test_initial_purchase_done_sets_flag(self, setup_persistence_service):
-        service, repository, event_bus, *_ = setup_persistence_service
+        _service, repository, event_bus, *_ = setup_persistence_service
 
         await event_bus.publish(Events.INITIAL_PURCHASE_DONE, {})
 
@@ -102,7 +102,7 @@ class TestFlagEvents:
         assert saved_state["initial_purchase_done"] is True
 
     async def test_grid_orders_initialized_sets_flag(self, setup_persistence_service):
-        service, repository, event_bus, *_ = setup_persistence_service
+        _service, repository, event_bus, *_ = setup_persistence_service
 
         await event_bus.publish(Events.GRID_ORDERS_INITIALIZED, {})
 

@@ -33,9 +33,9 @@ class TestOrderExecutionStrategyFactory:
             strategy,
             LiveOrderExecutionStrategy,
         ), "Expected LiveOrderExecutionStrategy instance for live trading mode"
-        assert (
-            strategy.exchange_service == exchange_service
-        ), "Expected exchange_service to be set correctly in LiveOrderExecutionStrategy"
+        assert strategy.exchange_service == exchange_service, (
+            "Expected exchange_service to be set correctly in LiveOrderExecutionStrategy"
+        )
 
     def test_create_paper_trading_strategy(self, config_manager, exchange_service):
         config_manager.get_trading_mode.return_value = TradingMode.PAPER_TRADING
@@ -45,9 +45,9 @@ class TestOrderExecutionStrategyFactory:
             strategy,
             LiveOrderExecutionStrategy,
         ), "Expected LiveOrderExecutionStrategy instance for paper trading mode"
-        assert (
-            strategy.exchange_service == exchange_service
-        ), "Expected exchange_service to be set correctly in LiveOrderExecutionStrategy"
+        assert strategy.exchange_service == exchange_service, (
+            "Expected exchange_service to be set correctly in LiveOrderExecutionStrategy"
+        )
 
     def test_create_backtest_strategy(self, config_manager, exchange_service):
         config_manager.get_trading_mode.return_value = TradingMode.BACKTEST

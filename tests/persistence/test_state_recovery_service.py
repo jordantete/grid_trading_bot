@@ -681,9 +681,7 @@ class TestStateRecoveryService:
         mock_order_book.get_open_orders.return_value = [buy_order, sell_order]
 
         # Map orders to grid levels
-        mock_order_book.get_grid_level_for_order.side_effect = lambda o: (
-            gl_buy if o.identifier == "buy-1" else gl_sell
-        )
+        mock_order_book.get_grid_level_for_order.side_effect = lambda o: gl_buy if o.identifier == "buy-1" else gl_sell
 
         # Both filled on exchange
         def get_order_side_effect(identifier, pair):

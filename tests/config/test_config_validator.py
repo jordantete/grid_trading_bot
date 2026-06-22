@@ -61,7 +61,7 @@ class TestConfigValidator:
 
     def test_validate_invalid_trading_mode(self, config_validator, valid_config):
         valid_config["exchange"]["trading_mode"] = "invalid_mode"
-        with pytest.raises(ConfigValidationError, match="exchange.trading_mode"):
+        with pytest.raises(ConfigValidationError, match=r"exchange.trading_mode"):
             config_validator.validate(valid_config)
 
     def test_validate_invalid_timeframe(self, config_validator, valid_config):

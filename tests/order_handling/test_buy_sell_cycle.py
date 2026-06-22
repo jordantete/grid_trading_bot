@@ -16,7 +16,7 @@ class TestBuyFillSellPlacement:
     @pytest.mark.parametrize("strategy_label", ["simple_grid", "hedged_grid"])
     @pytest.mark.asyncio
     async def test_buy_fill_places_sell_order(self, setup_order_manager, strategy_label):
-        manager, grid_manager, order_validator, balance_tracker, order_book, _, order_execution_strategy, _ = (
+        manager, grid_manager, order_validator, _balance_tracker, order_book, _, order_execution_strategy, _ = (
             setup_order_manager
         )
         buy_order = Mock(side=OrderSide.BUY, filled=0.01, price=50000)
@@ -260,13 +260,13 @@ class TestEventDrivenBuySellFlow:
     async def test_tracker_detects_fill_and_triggers_sell_placement(self, setup_event_driven_flow):
         (
             tracker,
-            manager,
+            _manager,
             order_book,
             tracker_exec,
             manager_exec,
             grid_manager,
             order_validator,
-            balance_tracker,
+            _balance_tracker,
         ) = setup_event_driven_flow
 
         # Local order for tracker to discover

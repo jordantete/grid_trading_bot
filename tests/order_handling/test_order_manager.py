@@ -114,7 +114,7 @@ class TestOrderManager:
             balance_tracker,
             _,
             _,
-            order_execution_strategy,
+            _order_execution_strategy,
             notification_handler,
         ) = setup_order_manager
 

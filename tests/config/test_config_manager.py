@@ -120,7 +120,7 @@ class TestConfigManager:
 
         with pytest.raises(
             ValueError,
-            match="Invalid trading mode: 'invalid_mode'. Available modes are: backtest, paper_trading, live",
+            match=r"Invalid trading mode: 'invalid_mode'. Available modes are: backtest, paper_trading, live",
         ):
             config_manager.get_trading_mode()
 
@@ -129,7 +129,7 @@ class TestConfigManager:
 
         with pytest.raises(
             ValueError,
-            match="Invalid spacing type: 'invalid_spacing'. Available spacings are: arithmetic, geometric",
+            match=r"Invalid spacing type: 'invalid_spacing'. Available spacings are: arithmetic, geometric",
         ):
             config_manager.get_spacing_type()
 
@@ -138,7 +138,7 @@ class TestConfigManager:
 
         with pytest.raises(
             ValueError,
-            match="Invalid strategy type: 'invalid_strategy'. Available strategies are: simple_grid, hedged_grid",
+            match=r"Invalid strategy type: 'invalid_strategy'. Available strategies are: simple_grid, hedged_grid",
         ):
             config_manager.get_strategy_type()
 
