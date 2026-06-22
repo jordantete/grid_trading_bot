@@ -139,3 +139,12 @@ Deploy is automatic via GitHub Actions (`.github/workflows/docs.yml`) on push to
 ## Linting & Formatting
 
 Ruff is configured in `pyproject.toml` with 120-char line length, targeting Python 3.12. Pre-commit hooks run Ruff lint+format, plus checks for trailing whitespace, valid YAML/JSON/TOML, merge conflicts, debug statements, blanket `noqa`/`type: ignore`, and deprecated `log.warn()`.
+
+## Behavioral Guidelines (Karpathy/Multica)
+
+These four principles bias toward caution and clarity over raw speed — most valuable on complex or ambiguous tasks, with free judgment on trivial ones. Source: [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md). **The project-specific rules above always take precedence over anything here; on any conflict, the project rule wins.**
+
+1. **Think Before Coding** — Don't assume, don't hide confusion, surface tradeoffs. State assumptions explicitly; if a request has several valid interpretations, present them instead of silently picking one; if a simpler approach exists, say so; if something is unclear, stop and ask rather than guessing.
+2. **Simplicity First** — Write the minimum code that solves the problem, nothing speculative. No unrequested features, no abstractions for a single use, no error handling for edge cases that can't occur. If a change balloons (e.g. 200 lines where 50 would do), step back and rewrite.
+3. **Surgical Changes** — Touch only what the task requires. Don't "improve" adjacent code, and match the existing style. Flag pre-existing dead code rather than deleting it; clean up only the imports/functions your own changes made obsolete.
+4. **Goal-Driven Execution** — Turn vague requests into verifiable success criteria, then loop until they hold. "Fix the bug" becomes "write a failing test that reproduces it, then make it pass." Sketch a brief multi-step plan and verify each step. For this repo, the default success bar is `uv run python -m pytest --cov=grid_trading_bot` green and `uv run ruff check .` / `uv run ruff format .` clean.
