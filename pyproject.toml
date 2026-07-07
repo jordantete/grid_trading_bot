@@ -26,7 +26,7 @@ dependencies = [
     "tabulate==0.10.0",
     "aiohttp==3.14.1",
     "apprise==1.12.0",
-    "ccxt==4.5.62",
+    "ccxt==4.5.64",
     "psutil==7.2.2",
     "python-dotenv==1.2.2",
     "click>=8.1"
