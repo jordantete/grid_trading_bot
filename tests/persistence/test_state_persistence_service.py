@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -138,6 +139,25 @@ class TestWriteCheckpoint:
         saved_state = repository.save_bot_state.call_args[0][0]
         assert saved_state["initial_purchase_done"] is True
         assert saved_state["grid_orders_initialized"] is True
+
+
+class TestStrategyStateCheckpoint:
+    def test_checkpoint_includes_strategy_state(self, setup_persistence_service):
+        service, repository, *_ = setup_persistence_service
+        service.strategy_state_provider = lambda: {"trailing_stop": None, "atr_grid": 3.5}
+
+        service._write_checkpoint()
+
+        saved = repository.save_bot_state.call_args[0][0]
+        assert json.loads(saved["strategy_state"]) == {"trailing_stop": None, "atr_grid": 3.5}
+
+    def test_checkpoint_without_provider_has_no_strategy_state(self, setup_persistence_service):
+        service, repository, *_ = setup_persistence_service
+
+        service._write_checkpoint()
+
+        saved = repository.save_bot_state.call_args[0][0]
+        assert saved["strategy_state"] is None
 
 
 class TestCheckpointErrorHandling:

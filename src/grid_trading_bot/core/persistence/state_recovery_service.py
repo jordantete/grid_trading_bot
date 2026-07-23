@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from decimal import Decimal
+import json
 import logging
 
 from grid_trading_bot.config.config_manager import ConfigManager
@@ -30,6 +31,7 @@ class RecoveryResult:
     orders_filled_while_down: list[tuple[Order, GridLevel]] = field(default_factory=list)
     balance_source: str = "db"
     errors: list[str] = field(default_factory=list)
+    strategy_state: dict | None = None
 
 
 class StateRecoveryService:
@@ -92,6 +94,14 @@ class StateRecoveryService:
         # Step 5: Restore balance (recalculates reserved from confirmed-still-open orders)
         balance_source = await self._restore_balance()
 
+        raw_strategy_state = bot_state.get("strategy_state")
+        strategy_state = None
+        if raw_strategy_state:
+            try:
+                strategy_state = json.loads(raw_strategy_state)
+            except (json.JSONDecodeError, TypeError) as e:
+                self.logger.warning(f"Failed to parse persisted strategy_state, ignoring it: {e}")
+
         result = RecoveryResult(
             recovered=True,
             initial_purchase_done=bot_state["initial_purchase_done"],
@@ -101,6 +111,7 @@ class StateRecoveryService:
             ghost_orders_found=reconcile_stats["ghosts"],
             orders_filled_while_down=filled_while_down,
             balance_source=balance_source,
+            strategy_state=strategy_state,
         )
 
         self.logger.info(

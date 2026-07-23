@@ -9,6 +9,7 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.domain.strategy_type import StrategyType
+from grid_trading_bot.core.persistence.state_recovery_service import RecoveryResult
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     UnsupportedExchangeError,
@@ -341,3 +342,100 @@ class TestGridTradingBot:
         bot.strategy.plot_results.assert_called_once()
         bot.strategy.run.assert_awaited_once()
         bot.order_status_tracker.start_tracking.assert_called_once()
+
+
+class TestStrategyStatePersistenceWiring:
+    @pytest.fixture
+    def config_manager(self, tmp_path):
+        mock_config = Mock(spec=ConfigManager)
+        mock_config.get_trading_mode.return_value = TradingMode.LIVE
+        mock_config.get_initial_balance.return_value = 1000
+        mock_config.get_exchange_name.return_value = "binance"
+        mock_config.get_spacing_type.return_value = "arithmetic"
+        mock_config.get_top_range.return_value = 2000
+        mock_config.get_bottom_range.return_value = 1500
+        mock_config.get_num_grids.return_value = 10
+        mock_config.get_strategy_type.return_value = StrategyType.SIMPLE_GRID
+        mock_config.is_persistence_enabled.return_value = True
+        mock_config.get_state_db_path.return_value = str(tmp_path / "state.db")
+        mock_config.get_grid_settings.return_value = {
+            "type": "simple_grid",
+            "spacing": "arithmetic",
+            "num_grids": 10,
+            "range": [1500, 2000],
+        }
+        mock_config.get_pair.return_value = "BTC/USDT"
+        return mock_config
+
+    @pytest.fixture
+    def mock_event_bus(self):
+        event_bus = Mock(spec=EventBus)
+        event_bus.subscribe = Mock()
+        event_bus.publish_sync = Mock()
+        return event_bus
+
+    @pytest.fixture
+    def notification_handler(self):
+        return Mock(spec=NotificationHandler)
+
+    @pytest.fixture
+    def bot(self, config_manager, notification_handler, mock_event_bus):
+        with patch("grid_trading_bot.core.bot_management.grid_trading_bot.SQLiteStateRepository") as mock_repo_cls:
+            mock_repo_cls.return_value = MagicMock()
+            yield GridTradingBot(
+                config_path="config.json",
+                config_manager=config_manager,
+                notification_handler=notification_handler,
+                event_bus=mock_event_bus,
+                save_performance_results_path="results.json",
+                no_plot=True,
+            )
+
+    def test_persistence_service_wired_with_strategy_provider(self, bot):
+        assert bot.state_persistence_service is not None
+        assert bot.state_persistence_service.strategy_state_provider == bot.strategy.export_strategy_state
+
+    @pytest.mark.asyncio
+    async def test_run_restores_strategy_state_after_recovery(self, bot):
+        bot.strategy.grid_manager = Mock()
+        bot.strategy.initialize_strategy = Mock()
+        bot.strategy.run = AsyncMock()
+        bot.strategy.restore_strategy_state = Mock()
+        bot.order_status_tracker.start_tracking = Mock()
+        bot._generate_and_log_performance = Mock(return_value={})
+        bot.reconciliation_service = None
+
+        recovery_result = RecoveryResult(
+            recovered=True,
+            initial_purchase_done=True,
+            grid_orders_initialized=True,
+            strategy_state={"trailing_stop": None, "atr_grid": 3.5},
+        )
+        bot.state_recovery_service.attempt_recovery = AsyncMock(return_value=recovery_result)
+
+        await bot.run()
+
+        bot.strategy.restore_strategy_state.assert_called_once_with({"trailing_stop": None, "atr_grid": 3.5})
+        bot.strategy.run.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_run_skips_restore_when_no_strategy_state(self, bot):
+        bot.strategy.grid_manager = Mock()
+        bot.strategy.initialize_strategy = Mock()
+        bot.strategy.run = AsyncMock()
+        bot.strategy.restore_strategy_state = Mock()
+        bot.order_status_tracker.start_tracking = Mock()
+        bot._generate_and_log_performance = Mock(return_value={})
+        bot.reconciliation_service = None
+
+        recovery_result = RecoveryResult(
+            recovered=True,
+            initial_purchase_done=False,
+            grid_orders_initialized=False,
+            strategy_state=None,
+        )
+        bot.state_recovery_service.attempt_recovery = AsyncMock(return_value=recovery_result)
+
+        await bot.run()
+
+        bot.strategy.restore_strategy_state.assert_not_called()

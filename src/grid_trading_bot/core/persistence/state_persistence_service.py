@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Callable
+import json
 import logging
 from typing import Any
 
@@ -23,6 +25,7 @@ class StatePersistenceService:
         config_manager: Any,
         trading_pair: str,
         strategy_type: str,
+        strategy_state_provider: Callable[[], dict] | None = None,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.repository = repository
@@ -33,6 +36,7 @@ class StatePersistenceService:
         self.config_manager = config_manager
         self.trading_pair = trading_pair
         self.strategy_type = strategy_type
+        self.strategy_state_provider = strategy_state_provider
         self._config_hash = compute_config_hash(config_manager)
         self._initial_purchase_done = False
         self._grid_orders_initialized = False
@@ -70,6 +74,7 @@ class StatePersistenceService:
                 "strategy_type": self.strategy_type,
                 "initial_purchase_done": self._initial_purchase_done,
                 "grid_orders_initialized": self._grid_orders_initialized,
+                "strategy_state": json.dumps(self.strategy_state_provider()) if self.strategy_state_provider else None,
             }
         )
 

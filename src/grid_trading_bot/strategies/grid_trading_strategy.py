@@ -500,6 +500,25 @@ class GridTradingStrategy(TradingStrategyInterface):
 
         await self.order_manager.initialize_grid_orders(center_price)
 
+    def export_strategy_state(self) -> dict:
+        """Returns the trailing stop ratchet and ATR grid baseline for crash-recovery checkpoints."""
+        return {
+            "trailing_stop": self.trailing_stop.to_dict() if self.trailing_stop else None,
+            "atr_grid": self.grid_manager.atr_grid,
+        }
+
+    def restore_strategy_state(self, state: dict) -> None:
+        """Restores the trailing stop ratchet and ATR grid baseline recovered from persisted state."""
+        trailing = state.get("trailing_stop")
+        if trailing is not None and self.config_manager.is_trailing_stop_loss_enabled():
+            self.trailing_stop = TrailingStopLoss.from_dict(trailing)
+
+        atr_grid = state.get("atr_grid")
+        if atr_grid is not None:
+            self.grid_manager.atr_grid = atr_grid
+
+        self.logger.info("Restored strategy state (trailing stop / ATR grid baseline).")
+
     def _precompute_backtest_atr(self) -> None:
         """
         Precomputes ATR series for the trailing stop and dynamic spacing features, aligned on self.data.

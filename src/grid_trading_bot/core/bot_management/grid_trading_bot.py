@@ -173,6 +173,9 @@ class GridTradingBot:
                 order_simulator,
             )
 
+            if self.state_persistence_service:
+                self.state_persistence_service.strategy_state_provider = self.strategy.export_strategy_state
+
         except (UnsupportedExchangeError, DataFetchError, UnsupportedTimeframeError) as e:
             self.logger.error(f"{type(e).__name__}: {e}")
             raise
@@ -201,6 +204,8 @@ class GridTradingBot:
                             initial_purchase_done=skip_initial_purchase,
                             grid_orders_initialized=skip_grid_init,
                         )
+                    if recovery_result.strategy_state is not None:
+                        self.strategy.restore_strategy_state(recovery_result.strategy_state)
                     self.logger.info(
                         f"State recovered: skip_initial_purchase={skip_initial_purchase}, "
                         f"skip_grid_init={skip_grid_init}"

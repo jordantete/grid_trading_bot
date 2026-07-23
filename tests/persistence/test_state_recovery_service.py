@@ -732,3 +732,60 @@ class TestStateRecoveryService:
 
         assert result.recovered is False
         mock_notification_handler.async_send_notification.assert_not_called()
+
+    # 16. Strategy state parsed from JSON and exposed on the result
+    async def test_strategy_state_parsed_from_json(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+    ):
+        """When the saved bot_state has a strategy_state JSON blob, it should be
+        parsed into a dict and exposed on RecoveryResult."""
+        _set_valid_bot_state(
+            mock_repository,
+            mock_config_manager,
+            strategy_state='{"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": 3.1}',
+        )
+
+        result = await service.attempt_recovery()
+
+        assert result.recovered is True
+        assert result.strategy_state == {
+            "trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0},
+            "atr_grid": 3.1,
+        }
+
+    # 17. Missing strategy state (older DB) exposes None, no crash
+    async def test_strategy_state_absent_is_none(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+    ):
+        """When the saved bot_state has no strategy_state (older DB), the result
+        should expose None rather than crashing."""
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+
+        result = await service.attempt_recovery()
+
+        assert result.recovered is True
+        assert result.strategy_state is None
+
+    # 18. Corrupt strategy state JSON doesn't abort recovery
+    async def test_corrupt_strategy_state_json_does_not_abort_recovery(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+    ):
+        """A corrupt strategy_state blob should not discard otherwise-recovered state
+        (orders/balance/grid) or fall back to a fresh start. Recovery should still
+        succeed, just with strategy_state=None."""
+        _set_valid_bot_state(mock_repository, mock_config_manager, strategy_state="{corrupt")
+
+        result = await service.attempt_recovery()
+
+        assert result.recovered is True
+        assert result.strategy_state is None
+        mock_repository.clear_all.assert_not_called()

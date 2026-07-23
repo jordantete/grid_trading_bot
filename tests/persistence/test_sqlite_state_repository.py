@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 
 import pytest
@@ -103,7 +104,7 @@ class TestInitialize:
         cursor = repo._conn.execute("SELECT version FROM schema_version")
         row = cursor.fetchone()
         assert row is not None
-        assert row["version"] == 1
+        assert row["version"] == 2
 
 
 class TestBotState:
@@ -295,6 +296,75 @@ class TestClearAll:
         assert repo.load_balance_state() is None
         assert repo.load_all_orders() == []
         assert repo.load_grid_levels() == []
+
+
+class TestStrategyStatePersistence:
+    def test_bot_state_round_trips_strategy_state(self, repo, sample_bot_state):
+        state = {
+            **sample_bot_state,
+            "strategy_state": '{"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": 3.1}',
+        }
+        repo.save_bot_state(state)
+        loaded = repo.load_bot_state()
+        assert loaded["strategy_state"] == (
+            '{"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": 3.1}'
+        )
+
+    def test_bot_state_without_strategy_state_loads_none(self, repo, sample_bot_state):
+        repo.save_bot_state(sample_bot_state)
+        loaded = repo.load_bot_state()
+        assert loaded.get("strategy_state") is None
+
+
+class TestSchemaMigrationV1ToV2:
+    def test_v1_database_migrates_to_v2(self, tmp_path):
+        """A hand-crafted v1 database (no strategy_state column) should gain the
+        column and be bumped to schema version 2 when opened with the current code."""
+        db_path = str(tmp_path / "v1.db")
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE schema_version (
+                version INTEGER NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE bot_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                config_hash TEXT NOT NULL,
+                trading_pair TEXT NOT NULL,
+                strategy_type TEXT NOT NULL,
+                initial_purchase_done INTEGER NOT NULL DEFAULT 0,
+                grid_orders_initialized INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO schema_version (version) VALUES (1);
+            INSERT INTO bot_state (id, config_hash, trading_pair, strategy_type)
+            VALUES (1, 'abc123', 'ETH/USDT', 'simple_grid');
+        """)
+        conn.commit()
+        conn.close()
+
+        repository = SQLiteStateRepository(db_path=db_path)
+        try:
+            repository.initialize()
+
+            columns = {row["name"] for row in repository._conn.execute("PRAGMA table_info(bot_state)")}
+            assert "strategy_state" in columns
+
+            version_row = repository._conn.execute(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            assert version_row["version"] == 2
+
+            # Pre-existing row should have survived the migration untouched.
+            loaded = repository.load_bot_state()
+            assert loaded["config_hash"] == "abc123"
+            assert loaded["strategy_state"] is None
+        finally:
+            repository.close()
+            for suffix in ("", "-wal", "-shm"):
+                path = db_path + suffix
+                if os.path.exists(path):
+                    os.unlink(path)
 
 
 class TestDecimalPrecision:

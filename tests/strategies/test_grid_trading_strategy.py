@@ -595,6 +595,68 @@ class TestTrailingStopOrchestration:
         assert s.trailing_stop.stop_price is None  # not even updated
 
 
+class TestStrategyStateExportRestore:
+    def test_export_includes_trailing_stop_and_atr_grid(self, strategy_fixture):
+        s = strategy_fixture
+        s.trailing_stop = TrailingStopLoss(atr_multiplier=2.0)
+        s.trailing_stop.stop_price = 94.0
+        s.grid_manager.atr_grid = 3.1
+
+        state = s.export_strategy_state()
+
+        assert state == {
+            "trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0},
+            "atr_grid": 3.1,
+        }
+
+    def test_export_with_no_trailing_stop(self, strategy_fixture):
+        s = strategy_fixture
+        s.trailing_stop = None
+        s.grid_manager.atr_grid = None
+
+        state = s.export_strategy_state()
+
+        assert state == {"trailing_stop": None, "atr_grid": None}
+
+    def test_restore_sets_trailing_stop_when_enabled(self, strategy_fixture):
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.trailing_stop = None
+
+        s.restore_strategy_state({"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": None})
+
+        assert isinstance(s.trailing_stop, TrailingStopLoss)
+        assert s.trailing_stop.stop_price == 94.0
+        assert s.trailing_stop.atr_multiplier == 2.0
+
+    def test_restore_skips_trailing_stop_when_disabled(self, strategy_fixture):
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
+        s.trailing_stop = None
+
+        s.restore_strategy_state({"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": None})
+
+        assert s.trailing_stop is None
+
+    def test_restore_sets_atr_grid_when_present(self, strategy_fixture):
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
+        s.grid_manager.atr_grid = None
+
+        s.restore_strategy_state({"trailing_stop": None, "atr_grid": 3.1})
+
+        assert s.grid_manager.atr_grid == 3.1
+
+    def test_restore_leaves_atr_grid_when_absent(self, strategy_fixture):
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
+        s.grid_manager.atr_grid = 5.0
+
+        s.restore_strategy_state({"trailing_stop": None, "atr_grid": None})
+
+        assert s.grid_manager.atr_grid == 5.0
+
+
 class TestVolatilityRegrid:
     def _setup_dynamic(self, s):
         s.config_manager.is_trailing_stop_loss_enabled.return_value = False

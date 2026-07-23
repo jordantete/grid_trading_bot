@@ -5,7 +5,7 @@ from typing import Any
 
 from .state_repository_interface import StateRepositoryInterface
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS bot_state (
     strategy_type TEXT NOT NULL,
     initial_purchase_done INTEGER NOT NULL DEFAULT 0,
     grid_orders_initialized INTEGER NOT NULL DEFAULT 0,
+    strategy_state TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -94,13 +95,25 @@ class SQLiteStateRepository(StateRepositoryInterface):
         if row is None:
             self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
             self._conn.commit()
-        else:
-            stored_version = row["version"]
-            if stored_version != SCHEMA_VERSION:
-                self.logger.warning(
-                    f"Schema version mismatch: stored={stored_version}, expected={SCHEMA_VERSION}. "
-                    f"Migration may be needed."
-                )
+            return
+
+        stored_version = row["version"]
+        if stored_version == 1 and SCHEMA_VERSION == 2:
+            self._migrate_v1_to_v2()
+            stored_version = 2
+
+        if stored_version != SCHEMA_VERSION:
+            self.logger.warning(
+                f"Schema version mismatch: stored={stored_version}, expected={SCHEMA_VERSION}. Migration may be needed."
+            )
+
+    def _migrate_v1_to_v2(self) -> None:
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(bot_state)")}
+        if "strategy_state" not in columns:
+            self._conn.execute("ALTER TABLE bot_state ADD COLUMN strategy_state TEXT")
+        self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (2,))
+        self._conn.commit()
+        self.logger.info("Migrated schema v1 -> v2 (added bot_state.strategy_state).")
 
     # ── Bot State ────────────────────────────────────────────────────────
 
@@ -109,14 +122,15 @@ class SQLiteStateRepository(StateRepositoryInterface):
             self._conn.execute(
                 """INSERT OR REPLACE INTO bot_state
                    (id, config_hash, trading_pair, strategy_type,
-                    initial_purchase_done, grid_orders_initialized, updated_at)
-                   VALUES (1, ?, ?, ?, ?, ?, datetime('now'))""",
+                    initial_purchase_done, grid_orders_initialized, strategy_state, updated_at)
+                   VALUES (1, ?, ?, ?, ?, ?, ?, datetime('now'))""",
                 (
                     state["config_hash"],
                     state["trading_pair"],
                     state["strategy_type"],
                     1 if state.get("initial_purchase_done") else 0,
                     1 if state.get("grid_orders_initialized") else 0,
+                    state.get("strategy_state"),
                 ),
             )
             self._conn.commit()
@@ -132,6 +146,7 @@ class SQLiteStateRepository(StateRepositoryInterface):
             "strategy_type": row["strategy_type"],
             "initial_purchase_done": bool(row["initial_purchase_done"]),
             "grid_orders_initialized": bool(row["grid_orders_initialized"]),
+            "strategy_state": row["strategy_state"],
             "updated_at": row["updated_at"],
         }
 
