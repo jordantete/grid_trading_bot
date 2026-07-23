@@ -218,7 +218,7 @@ class GridTradingStrategy(TradingStrategyInterface):
                     last_price = current_price
                     return
 
-                await self._maybe_refresh_live_atr(pd.Timestamp.now())
+                fresh_candle = await self._maybe_refresh_live_atr(pd.Timestamp.now())
 
                 trailing_atr = self._live_atr.get(
                     self.config_manager.get_trailing_atr_period(),
@@ -230,11 +230,14 @@ class GridTradingStrategy(TradingStrategyInterface):
                 if await self._handle_take_profit_stop_loss(current_price):
                     return
 
-                dynamic_atr = self._live_atr.get(
-                    self.config_manager.get_dynamic_atr_period(),
-                    math.nan,
-                )
-                await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
+                # Volatility regrid is cooldown-counted in bars; only evaluate it once per
+                # closed candle, not on every ~3s ticker tick.
+                if fresh_candle:
+                    dynamic_atr = self._live_atr.get(
+                        self.config_manager.get_dynamic_atr_period(),
+                        math.nan,
+                    )
+                    await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
 
                 last_price = current_price
 
@@ -434,6 +437,14 @@ class GridTradingStrategy(TradingStrategyInterface):
             return False
 
         self.trailing_stop.update(current_price, atr)
+
+        # With NaN/invalid ATR the ratchet cannot move; do not evaluate the trigger.
+        # After a live restart a restored stop_price could otherwise fire during the
+        # pre-first-candle window (ATR still NaN), and the regrid branch would no-op
+        # yet reset(), discarding the restored protection.
+        if math.isnan(atr) or atr <= 0:
+            return False
+
         if not self.trailing_stop.is_triggered(current_price):
             return False
 
@@ -447,8 +458,8 @@ class GridTradingStrategy(TradingStrategyInterface):
             return True
 
         self.logger.info(f"Trailing stop triggered at {current_price}. Regridding around current price.")
-        await self._execute_regrid(current_price, atr)
-        self.trailing_stop.reset()
+        if await self._execute_regrid(current_price, atr):
+            self.trailing_stop.reset()
         return False
 
     async def _maybe_regrid_on_volatility(self, current_price: float, atr: float) -> None:
@@ -476,35 +487,48 @@ class GridTradingStrategy(TradingStrategyInterface):
         )
         await self._execute_regrid(current_price, atr)
 
-    async def _execute_regrid(self, center_price: float, atr: float) -> None:
+    async def _execute_regrid(self, center_price: float, atr: float) -> bool:
         """
         Cancels open grid orders and rebuilds the grid around center_price with the given ATR.
         Falls back to re-placing orders on the existing grid if cancellation or regrid fails.
+
+        Returns:
+            bool: True only when the grid was rebuilt and orders re-placed on the NEW grid;
+            False on the NaN/invalid-ATR guard, a cancel failure, or a rejected regrid.
         """
         if math.isnan(atr) or atr <= 0:
-            return
+            return False
 
         cancelled = await self.order_manager.cancel_open_grid_orders()
         self._bars_since_regrid = 0
         if not cancelled:
             self.logger.warning("Regrid aborted: could not cancel all open orders. Re-placing cancelled ones.")
             await self.order_manager.initialize_grid_orders(center_price)
-            return
+            return False
 
         try:
             self.grid_manager.regrid(center_price, atr)
         except ValueError as e:
             self.logger.warning(f"Regrid rejected ({e}). Re-placing orders on the existing grid.")
             await self.order_manager.initialize_grid_orders(center_price)
-            return
+            return False
 
         await self.order_manager.initialize_grid_orders(center_price)
+        return True
 
     def export_strategy_state(self) -> dict:
-        """Returns the trailing stop ratchet and ATR grid baseline for crash-recovery checkpoints."""
+        """
+        Returns the trailing stop ratchet, ATR grid baseline, and current grid geometry
+        for crash-recovery checkpoints. The grid geometry (``price_grids``/``central_price``)
+        is included only once the grid is initialized so a runtime regrid can be restored
+        exactly on restart; otherwise those keys are None.
+        """
+        initialized = self.grid_manager.is_initialized
         return {
             "trailing_stop": self.trailing_stop.to_dict() if self.trailing_stop else None,
             "atr_grid": self.grid_manager.atr_grid,
+            "price_grids": list(self.grid_manager.price_grids) if initialized else None,
+            "central_price": self.grid_manager.central_price if initialized else None,
         }
 
     def restore_strategy_state(self, state: dict) -> None:
@@ -544,7 +568,8 @@ class GridTradingStrategy(TradingStrategyInterface):
 
     @staticmethod
     def _timeframe_to_seconds(timeframe: str) -> int:
-        units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+        # "M" = calendar month, approximated as 30 days (ccxt/ConfigValidator accept "1M").
+        units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "M": 2_592_000}
         return int(timeframe[:-1]) * units[timeframe[-1]]
 
     def _enabled_atr_periods(self) -> set[int]:
@@ -555,22 +580,27 @@ class GridTradingStrategy(TradingStrategyInterface):
             periods.add(self.config_manager.get_dynamic_atr_period())
         return periods
 
-    async def _maybe_refresh_live_atr(self, now: pd.Timestamp) -> None:
+    async def _maybe_refresh_live_atr(self, now: pd.Timestamp) -> bool:
         """
         Fetches recent candles and refreshes self._live_atr for every enabled ATR-based
         feature once a candle boundary has passed. No-op if no such feature is enabled.
+
+        Returns:
+            bool: True only when a fresh candle was actually fetched and ingested this call;
+            False when no feature is armed, the boundary has not been reached yet, or the
+            fetch failed. Callers use this to bar-count volatility regrids per closed candle.
         """
         periods = self._enabled_atr_periods()
         if not periods:
-            return
+            return False
 
         timeframe = self.config_manager.get_timeframe()
         interval = pd.Timedelta(seconds=self._timeframe_to_seconds(timeframe))
         if self._next_candle_close is None:
             self._next_candle_close = now.ceil(interval)
-            return
+            return False
         if now < self._next_candle_close:
-            return
+            return False
 
         self._next_candle_close = self._next_candle_close + interval
         limit = max(periods) * 3  # enough history for Wilder smoothing to stabilize
@@ -578,10 +608,11 @@ class GridTradingStrategy(TradingStrategyInterface):
             candles = await self.exchange_service.fetch_recent_ohlcv(self.trading_pair, timeframe, limit)
         except DataFetchError as e:
             self.logger.warning(f"ATR refresh failed, keeping previous ATR: {e}")
-            return
+            return False
 
         for period in periods:
             self._live_atr[period] = ATRCalculator.compute(candles, period)
+        return True
 
     def _initialize_dynamic_grid_backtest(self) -> int:
         """

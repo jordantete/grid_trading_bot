@@ -1,4 +1,5 @@
 import logging
+import math
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.core.domain.spacing_type import SpacingType
@@ -55,13 +56,8 @@ class GridManager:
         - Buy grid levels are initialized with `READY_TO_BUY`, except for the topmost grid.
         - Sell grid levels are initialized with `READY_TO_SELL`.
         """
-        self.price_grids, self.central_price = self._calculate_price_grids_and_central_price()
-        self.sorted_buy_grids, self.sorted_sell_grids, self.grid_levels = self.grid_strategy.initialize_levels(
-            self.price_grids, self.central_price
-        )
-        self._sorted_prices = sorted(self.price_grids)
-        self._price_index_map = {p: i for i, p in enumerate(self._sorted_prices)}
-        self._initialized = True
+        price_grids, central_price = self._calculate_price_grids_and_central_price()
+        self._apply_grid(price_grids, central_price)
         self.logger.info(f"Grids and levels initialized. Central price: {self.central_price}")
         self.logger.info(f"Price grids: {self.price_grids}")
         self.logger.info(f"Buy grids: {self.sorted_buy_grids}")
@@ -72,6 +68,21 @@ class GridManager:
     def is_initialized(self) -> bool:
         return self._initialized
 
+    def _apply_grid(self, price_grids: list[float], central_price: float) -> None:
+        """
+        Installs the given price grid geometry: rebuilds levels and lookup tables,
+        and marks the manager initialized. Shared by initialization, regrid, and
+        crash-recovery geometry restore.
+        """
+        self.price_grids = price_grids
+        self.central_price = central_price
+        self.sorted_buy_grids, self.sorted_sell_grids, self.grid_levels = self.grid_strategy.initialize_levels(
+            self.price_grids, self.central_price
+        )
+        self._sorted_prices = sorted(self.price_grids)
+        self._price_index_map = {p: i for i, p in enumerate(self._sorted_prices)}
+        self._initialized = True
+
     def regrid(self, center_price: float, atr: float) -> None:
         """
         Rebuilds an arithmetic grid centered on center_price with ATR-proportional spacing.
@@ -79,11 +90,11 @@ class GridManager:
         spacing = atr_spacing_multiplier * atr
         bottom  = center_price - (num_grids - 1) / 2 * spacing
 
-        Raises ValueError when atr <= 0 or the resulting bottom price would be <= 0.
+        Raises ValueError when atr is NaN, atr <= 0, or the resulting bottom price would be <= 0.
         Held crypto and open orders are untouched — callers must cancel orders first.
         """
-        if atr <= 0:
-            raise ValueError(f"Cannot regrid with non-positive ATR: {atr}")
+        if math.isnan(atr) or atr <= 0:
+            raise ValueError(f"Cannot regrid with non-positive or NaN ATR: {atr}")
 
         num_grids = self.config_manager.get_num_grids()
         spacing = self.config_manager.get_atr_spacing_multiplier() * atr
@@ -91,18 +102,31 @@ class GridManager:
         if bottom <= 0:
             raise ValueError(f"Regrid would produce non-positive bottom price: {bottom}")
 
-        self.price_grids = [bottom + i * spacing for i in range(num_grids)]
-        self.central_price = center_price
-        self.sorted_buy_grids, self.sorted_sell_grids, self.grid_levels = self.grid_strategy.initialize_levels(
-            self.price_grids, self.central_price
-        )
-        self._sorted_prices = sorted(self.price_grids)
-        self._price_index_map = {p: i for i, p in enumerate(self._sorted_prices)}
+        price_grids = [bottom + i * spacing for i in range(num_grids)]
+        self._apply_grid(price_grids, center_price)
         self.atr_grid = atr
-        self._initialized = True
         self.logger.info(
             f"Regridded around {center_price} with ATR {atr} (spacing {spacing}). Grids: {self.price_grids}"
         )
+
+    def apply_geometry(
+        self,
+        price_grids: list[float],
+        central_price: float,
+        atr_grid: float | None,
+    ) -> None:
+        """
+        Restores explicit grid geometry (e.g. a runtime-regridded grid) during crash recovery,
+        rebuilding all derived structures without recomputing spacing from ATR.
+
+        Raises ValueError when price_grids is empty.
+        """
+        if not price_grids:
+            raise ValueError("Cannot apply empty grid geometry.")
+
+        self._apply_grid(list(price_grids), central_price)
+        self.atr_grid = atr_grid
+        self.logger.info(f"Applied restored grid geometry around {central_price}. Grids: {self.price_grids}")
 
     def get_trigger_price(self) -> float:
         return self.central_price

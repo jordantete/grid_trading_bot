@@ -547,6 +547,49 @@ class TestGridTradingStrategy:
 
         exchange_service.listen_to_ticker_updates.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_volatility_regrid_skipped_on_non_candle_tick(self, setup_strategy):
+        """A ticker tick that does not close a candle must not evaluate the volatility regrid."""
+        create_strategy, _config, exchange_service, *_ = setup_strategy
+        strategy = create_strategy(TradingMode.LIVE)
+        strategy._initialize_grid_orders_once = AsyncMock(return_value=True)
+        strategy._maybe_refresh_live_atr = AsyncMock(return_value=False)
+        strategy._maybe_regrid_on_volatility = AsyncMock()
+        strategy._handle_trailing_stop = AsyncMock(return_value=False)
+        strategy._handle_take_profit_stop_loss = AsyncMock(return_value=False)
+
+        async def simulate_ticker_update(*args, **kwargs):
+            callback = exchange_service.listen_to_ticker_updates.call_args[0][1]
+            await callback(15100)
+
+        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=simulate_ticker_update)
+
+        await strategy.run()
+
+        strategy._maybe_refresh_live_atr.assert_awaited_once()
+        strategy._maybe_regrid_on_volatility.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_volatility_regrid_evaluated_on_candle_close_tick(self, setup_strategy):
+        """A ticker tick that closes a candle (refresh returned True) evaluates the volatility regrid."""
+        create_strategy, _config, exchange_service, *_ = setup_strategy
+        strategy = create_strategy(TradingMode.LIVE)
+        strategy._initialize_grid_orders_once = AsyncMock(return_value=True)
+        strategy._maybe_refresh_live_atr = AsyncMock(return_value=True)
+        strategy._maybe_regrid_on_volatility = AsyncMock()
+        strategy._handle_trailing_stop = AsyncMock(return_value=False)
+        strategy._handle_take_profit_stop_loss = AsyncMock(return_value=False)
+
+        async def simulate_ticker_update(*args, **kwargs):
+            callback = exchange_service.listen_to_ticker_updates.call_args[0][1]
+            await callback(15100)
+
+        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=simulate_ticker_update)
+
+        await strategy.run()
+
+        strategy._maybe_regrid_on_volatility.assert_awaited_once()
+
 
 class TestTrailingStopOrchestration:
     async def test_trailing_stop_with_stop_trigger_liquidates_and_stops(self, strategy_fixture):
@@ -594,29 +637,75 @@ class TestTrailingStopOrchestration:
         assert stopped is False
         assert s.trailing_stop.stop_price is None  # not even updated
 
+    async def test_nan_atr_does_not_trigger_restored_stop(self, strategy_fixture):
+        """After a restart, a restored stop must not fire while ATR is still NaN (pre-first-candle)."""
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.config_manager.get_trailing_on_trigger.return_value = "regrid"
+        s.balance_tracker.crypto_balance = 1.0
+        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
+        s.trailing_stop.stop_price = 95.0  # restored from persisted state
+
+        stopped = await s._handle_trailing_stop(current_price=94.0, atr=float("nan"))
+
+        assert stopped is False
+        s.order_manager.cancel_open_grid_orders.assert_not_awaited()
+        s.grid_manager.regrid.assert_not_called()
+        assert s.trailing_stop.stop_price == 95.0  # restored protection preserved
+
+    async def test_failed_regrid_does_not_reset_ratchet(self, strategy_fixture):
+        """When the regrid fails (cancel failure), the trailing ratchet must not be reset."""
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.config_manager.get_trailing_on_trigger.return_value = "regrid"
+        s.balance_tracker.crypto_balance = 1.0
+        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=False)
+        s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
+        s.trailing_stop.update(close=100.0, atr=5.0)  # stop = 95
+
+        stopped = await s._handle_trailing_stop(current_price=94.0, atr=5.0)
+
+        assert stopped is False
+        s.grid_manager.regrid.assert_not_called()
+        # cancelled-but-not-regridded orders re-placed on the existing grid
+        s.order_manager.initialize_grid_orders.assert_awaited_once_with(94.0)
+        assert s.trailing_stop.stop_price == 95.0  # ratchet preserved, protection not discarded
+
 
 class TestStrategyStateExportRestore:
-    def test_export_includes_trailing_stop_and_atr_grid(self, strategy_fixture):
+    def test_export_includes_trailing_stop_atr_grid_and_geometry(self, strategy_fixture):
         s = strategy_fixture
         s.trailing_stop = TrailingStopLoss(atr_multiplier=2.0)
         s.trailing_stop.stop_price = 94.0
         s.grid_manager.atr_grid = 3.1
+        s.grid_manager.is_initialized = True
+        s.grid_manager.price_grids = [96.0, 98.0, 100.0, 102.0, 104.0]
+        s.grid_manager.central_price = 100.0
 
         state = s.export_strategy_state()
 
         assert state == {
             "trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0},
             "atr_grid": 3.1,
+            "price_grids": [96.0, 98.0, 100.0, 102.0, 104.0],
+            "central_price": 100.0,
         }
 
-    def test_export_with_no_trailing_stop(self, strategy_fixture):
+    def test_export_omits_geometry_when_grid_not_initialized(self, strategy_fixture):
         s = strategy_fixture
         s.trailing_stop = None
         s.grid_manager.atr_grid = None
+        s.grid_manager.is_initialized = False
 
         state = s.export_strategy_state()
 
-        assert state == {"trailing_stop": None, "atr_grid": None}
+        assert state == {
+            "trailing_stop": None,
+            "atr_grid": None,
+            "price_grids": None,
+            "central_price": None,
+        }
 
     def test_restore_sets_trailing_stop_when_enabled(self, strategy_fixture):
         s = strategy_fixture
@@ -736,8 +825,9 @@ class TestLiveAtrRefresh:
         s.exchange_service.fetch_recent_ohlcv = AsyncMock(return_value=candles)
         s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
 
-        await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
+        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
 
+        assert refreshed is True  # fetched a fresh candle close
         s.exchange_service.fetch_recent_ohlcv.assert_awaited_once()
         assert 3 in s._live_atr
         assert s._next_candle_close == pd.Timestamp("2026-01-01 00:02:00")
@@ -749,9 +839,35 @@ class TestLiveAtrRefresh:
         s.exchange_service.fetch_recent_ohlcv = AsyncMock()
         s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
 
-        await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:00:30"))
+        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:00:30"))
 
+        assert refreshed is False  # boundary not reached
         s.exchange_service.fetch_recent_ohlcv.assert_not_awaited()
+
+    async def test_first_call_arms_boundary_without_fetch(self, strategy_fixture):
+        s = strategy_fixture
+        s.trading_mode = TradingMode.LIVE
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.config_manager.get_trailing_atr_period.return_value = 3
+        s.config_manager.get_timeframe.return_value = "1m"
+        s.exchange_service.fetch_recent_ohlcv = AsyncMock()
+        s._next_candle_close = None
+
+        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:00:30"))
+
+        assert refreshed is False  # not armed yet
+        s.exchange_service.fetch_recent_ohlcv.assert_not_awaited()
+        assert s._next_candle_close is not None
+
+    async def test_no_features_returns_false(self, strategy_fixture):
+        s = strategy_fixture
+        s.trading_mode = TradingMode.LIVE
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
+        s.config_manager.is_dynamic_spacing_enabled.return_value = False
+
+        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
+
+        assert refreshed is False
 
     async def test_fetch_failure_keeps_last_atr(self, strategy_fixture):
         s = strategy_fixture
@@ -763,6 +879,12 @@ class TestLiveAtrRefresh:
         s.exchange_service.fetch_recent_ohlcv = AsyncMock(side_effect=DataFetchError("boom"))
         s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
 
-        await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
+        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
 
+        assert refreshed is False  # fetch failed
         assert s._live_atr[3] == 2.5  # unchanged, bot keeps running
+
+    def test_timeframe_to_seconds_month(self, strategy_fixture):
+        # "1M" (month) must map, not KeyError — ConfigValidator accepts it as a timeframe.
+        assert strategy_fixture._timeframe_to_seconds("1M") == 2_592_000
+        assert strategy_fixture._timeframe_to_seconds("1m") == 60  # minute still distinct

@@ -339,8 +339,12 @@ class TestRegrid:
         assert 104.0 in gm.sorted_sell_grids
 
     def test_regrid_rejects_non_positive_atr(self, grid_manager_simple):
-        with pytest.raises(ValueError, match="non-positive ATR"):
+        with pytest.raises(ValueError, match="non-positive or NaN ATR"):
             grid_manager_simple.regrid(center_price=100.0, atr=0.0)
+
+    def test_regrid_rejects_nan_atr(self, grid_manager_simple):
+        with pytest.raises(ValueError, match="non-positive or NaN ATR"):
+            grid_manager_simple.regrid(center_price=100.0, atr=float("nan"))
 
     def test_regrid_rejects_bottom_below_zero(self, grid_manager_simple):
         # center 1.0, atr 1.0 => bottom = 1.0 - 2*1.0 = -1.0
@@ -349,3 +353,29 @@ class TestRegrid:
 
     def test_not_initialized_before_any_init(self, grid_manager_simple):
         assert grid_manager_simple.is_initialized is False
+
+
+class TestApplyGeometry:
+    def test_apply_geometry_rebuilds_levels_and_lookup_tables(self, grid_manager_simple):
+        gm = grid_manager_simple
+        price_grids = [90.0, 95.0, 100.0, 105.0, 110.0]
+
+        gm.apply_geometry(price_grids, central_price=100.0, atr_grid=4.2)
+
+        assert gm.price_grids == price_grids
+        assert gm.central_price == pytest.approx(100.0)
+        assert gm.atr_grid == pytest.approx(4.2)
+        assert gm.is_initialized is True
+        assert set(gm.grid_levels.keys()) == set(price_grids)
+        assert gm._sorted_prices == sorted(price_grids)
+        assert gm._price_index_map == {p: i for i, p in enumerate(sorted(price_grids))}
+
+    def test_apply_geometry_accepts_none_atr_grid(self, grid_manager_simple):
+        gm = grid_manager_simple
+        gm.apply_geometry([90.0, 100.0, 110.0], central_price=100.0, atr_grid=None)
+        assert gm.atr_grid is None
+        assert gm.is_initialized is True
+
+    def test_apply_geometry_rejects_empty_grid(self, grid_manager_simple):
+        with pytest.raises(ValueError, match="empty grid geometry"):
+            grid_manager_simple.apply_geometry([], central_price=100.0, atr_grid=1.0)

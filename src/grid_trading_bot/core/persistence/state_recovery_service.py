@@ -82,6 +82,17 @@ class StateRecoveryService:
 
         self.logger.info("Previous state found. Attempting recovery...")
 
+        # Parse persisted strategy state early: a runtime regrid changes the grid geometry,
+        # so the checkpointed geometry must be re-applied BEFORE matching persisted levels/orders
+        # by price (otherwise they would fail to match the config-derived grid).
+        strategy_state = self._parse_strategy_state(bot_state.get("strategy_state"))
+        if strategy_state:
+            price_grids = strategy_state.get("price_grids")
+            central_price = strategy_state.get("central_price")
+            if price_grids and central_price is not None:
+                self.grid_manager.apply_geometry(price_grids, central_price, strategy_state.get("atr_grid"))
+                self.logger.info("Restored regridded grid geometry from checkpoint before level/order matching.")
+
         # Step 2: Restore grid levels
         self._restore_grid_levels()
 
@@ -93,14 +104,6 @@ class StateRecoveryService:
 
         # Step 5: Restore balance (recalculates reserved from confirmed-still-open orders)
         balance_source = await self._restore_balance()
-
-        raw_strategy_state = bot_state.get("strategy_state")
-        strategy_state = None
-        if raw_strategy_state:
-            try:
-                strategy_state = json.loads(raw_strategy_state)
-            except (json.JSONDecodeError, TypeError) as e:
-                self.logger.warning(f"Failed to parse persisted strategy_state, ignoring it: {e}")
 
         result = RecoveryResult(
             recovered=True,
@@ -128,6 +131,16 @@ class StateRecoveryService:
         await self._send_recovery_notification(result)
 
         return result
+
+    def _parse_strategy_state(self, raw_strategy_state: str | None) -> dict | None:
+        """Parses the persisted strategy_state JSON blob, returning None if absent or malformed."""
+        if not raw_strategy_state:
+            return None
+        try:
+            return json.loads(raw_strategy_state)
+        except (json.JSONDecodeError, TypeError) as e:
+            self.logger.warning(f"Failed to parse persisted strategy_state, ignoring it: {e}")
+            return None
 
     # ── Step 2: Grid Level Restoration ───────────────────────────────────
 

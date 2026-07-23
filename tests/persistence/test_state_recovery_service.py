@@ -1,10 +1,13 @@
 from decimal import Decimal
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
+from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
+from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
 from grid_trading_bot.core.persistence.state_recovery_service import StateRecoveryService
@@ -789,3 +792,86 @@ class TestStateRecoveryService:
         assert result.recovered is True
         assert result.strategy_state is None
         mock_repository.clear_all.assert_not_called()
+
+    # 19. Regridded geometry is re-applied so level states restore against the runtime grid
+    async def test_recovery_applies_regridded_geometry_before_matching(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+    ):
+        """A checkpoint written after a runtime regrid carries the regridded price_grids.
+        Recovery must apply that geometry before matching persisted levels by price, so the
+        level states restore onto the runtime grid rather than the config-derived one."""
+        real_gm = _make_real_grid_manager()
+        service.grid_manager = real_gm
+
+        regridded = [96.0, 98.0, 100.0, 102.0, 104.0]
+        strategy_state = {
+            "trailing_stop": None,
+            "atr_grid": 4.0,
+            "price_grids": regridded,
+            "central_price": 100.0,
+        }
+        _set_valid_bot_state(mock_repository, mock_config_manager, strategy_state=json.dumps(strategy_state))
+        mock_repository.load_grid_levels.return_value = [
+            {
+                "price": 96.0,
+                "state": "waiting_for_buy_fill",
+                "paired_buy_level_price": None,
+                "paired_sell_level_price": None,
+            },
+            {
+                "price": 104.0,
+                "state": "waiting_for_sell_fill",
+                "paired_buy_level_price": None,
+                "paired_sell_level_price": None,
+            },
+        ]
+
+        result = await service.attempt_recovery()
+
+        assert result.recovered is True
+        assert set(real_gm.grid_levels.keys()) == set(regridded)
+        assert real_gm.grid_levels[96.0].state == GridCycleState.WAITING_FOR_BUY_FILL
+        assert real_gm.grid_levels[104.0].state == GridCycleState.WAITING_FOR_SELL_FILL
+        assert real_gm.atr_grid == 4.0
+        assert result.strategy_state == strategy_state
+
+    # 20. Old checkpoints without geometry keys still recover, geometry untouched
+    async def test_recovery_without_geometry_keys_leaves_grid_untouched(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+    ):
+        """A checkpoint written before the geometry-persistence fix (no price_grids/central_price)
+        must still recover successfully without applying any geometry."""
+        real_gm = _make_real_grid_manager()
+        real_gm.initialize_grids_and_levels()
+        original_keys = set(real_gm.grid_levels.keys())
+        service.grid_manager = real_gm
+
+        strategy_state = {"trailing_stop": None, "atr_grid": 2.0}
+        _set_valid_bot_state(mock_repository, mock_config_manager, strategy_state=json.dumps(strategy_state))
+
+        result = await service.attempt_recovery()
+
+        assert result.recovered is True
+        assert set(real_gm.grid_levels.keys()) == original_keys  # geometry untouched
+        assert result.strategy_state == strategy_state
+
+
+def _make_real_grid_manager() -> GridManager:
+    """Builds a real arithmetic SIMPLE_GRID GridManager for geometry-restore tests."""
+    cfg = MagicMock()
+    cfg.get_num_grids.return_value = 5
+    cfg.get_atr_spacing_multiplier.return_value = 1.0
+    cfg.get_buy_ratio.return_value = 1.0
+    cfg.get_sell_ratio.return_value = 1.0
+    cfg.get_bottom_range.return_value = 90.0
+    cfg.get_top_range.return_value = 110.0
+    from grid_trading_bot.core.domain.spacing_type import SpacingType
+
+    cfg.get_spacing_type.return_value = SpacingType.ARITHMETIC
+    return GridManager(cfg, StrategyType.SIMPLE_GRID)
