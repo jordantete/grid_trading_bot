@@ -64,6 +64,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         self._trailing_atr_series: pd.Series | None = None
         self._dynamic_atr_series: pd.Series | None = None
         self._live_atr: dict[int, float] = {}  # period -> latest ATR (live mode, Task 8)
+        self._next_candle_close: pd.Timestamp | None = None
 
     async def _initialize_historical_data(self) -> pd.DataFrame | None:
         """
@@ -181,6 +182,17 @@ class GridTradingStrategy(TradingStrategyInterface):
             skip_grid_init: If True, mark grid orders as already initialized (recovery).
         """
         self.logger.info(f"Starting {'live' if self.trading_mode == TradingMode.LIVE else 'paper'} trading")
+
+        if self.config_manager.is_dynamic_spacing_enabled() and not self.grid_manager.is_initialized:
+            timeframe = self.config_manager.get_timeframe()
+            period = self.config_manager.get_dynamic_atr_period()
+            candles = await self.exchange_service.fetch_recent_ohlcv(self.trading_pair, timeframe, period * 3)
+            atr = ATRCalculator.compute(candles, period)
+            current_price = await self.exchange_service.get_current_price(self.trading_pair)
+            self.grid_manager.regrid(current_price, atr)
+            trigger_price = self.grid_manager.get_trigger_price()
+            self.logger.info(f"Initial dynamic grid built live (center {current_price}, ATR {atr}).")
+
         last_price: float | None = None
         grid_orders_initialized = skip_grid_init
 
@@ -206,8 +218,23 @@ class GridTradingStrategy(TradingStrategyInterface):
                     last_price = current_price
                     return
 
+                await self._maybe_refresh_live_atr(pd.Timestamp.now())
+
+                trailing_atr = self._live_atr.get(
+                    self.config_manager.get_trailing_atr_period(),
+                    math.nan,
+                )
+                if await self._handle_trailing_stop(current_price, trailing_atr):
+                    return
+
                 if await self._handle_take_profit_stop_loss(current_price):
                     return
+
+                dynamic_atr = self._live_atr.get(
+                    self.config_manager.get_dynamic_atr_period(),
+                    math.nan,
+                )
+                await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
 
                 last_price = current_price
 
@@ -495,6 +522,47 @@ class GridTradingStrategy(TradingStrategyInterface):
         if series is None:
             return math.nan
         return float(series.iloc[index])
+
+    @staticmethod
+    def _timeframe_to_seconds(timeframe: str) -> int:
+        units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+        return int(timeframe[:-1]) * units[timeframe[-1]]
+
+    def _enabled_atr_periods(self) -> set[int]:
+        periods: set[int] = set()
+        if self.config_manager.is_trailing_stop_loss_enabled():
+            periods.add(self.config_manager.get_trailing_atr_period())
+        if self.config_manager.is_dynamic_spacing_enabled():
+            periods.add(self.config_manager.get_dynamic_atr_period())
+        return periods
+
+    async def _maybe_refresh_live_atr(self, now: pd.Timestamp) -> None:
+        """
+        Fetches recent candles and refreshes self._live_atr for every enabled ATR-based
+        feature once a candle boundary has passed. No-op if no such feature is enabled.
+        """
+        periods = self._enabled_atr_periods()
+        if not periods:
+            return
+
+        timeframe = self.config_manager.get_timeframe()
+        interval = pd.Timedelta(seconds=self._timeframe_to_seconds(timeframe))
+        if self._next_candle_close is None:
+            self._next_candle_close = now.ceil(interval)
+            return
+        if now < self._next_candle_close:
+            return
+
+        self._next_candle_close = self._next_candle_close + interval
+        limit = max(periods) * 3  # enough history for Wilder smoothing to stabilize
+        try:
+            candles = await self.exchange_service.fetch_recent_ohlcv(self.trading_pair, timeframe, limit)
+        except DataFetchError as e:
+            self.logger.warning(f"ATR refresh failed, keeping previous ATR: {e}")
+            return
+
+        for period in periods:
+            self._live_atr[period] = ATRCalculator.compute(candles, period)
 
     def _initialize_dynamic_grid_backtest(self) -> int:
         """

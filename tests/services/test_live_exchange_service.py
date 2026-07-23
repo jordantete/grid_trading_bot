@@ -807,3 +807,65 @@ class TestLiveExchangeServiceCircuitBreaker:
         assert service.circuit_breaker.failure_threshold == 2
         assert service.circuit_breaker.recovery_timeout == 60.0
         assert service.circuit_breaker.half_open_max_calls == 1
+
+
+class TestFetchRecentOhlcv:
+    @pytest.fixture
+    def config_manager(self):
+        config_manager = Mock(spec=ConfigManager)
+        config_manager.get_exchange_name.return_value = "binance"
+        config_manager.get_trading_mode.return_value = TradingMode.LIVE
+        config_manager.get_websocket_max_retries.return_value = 5
+        config_manager.get_websocket_retry_base_delay.return_value = 5
+        config_manager.get_circuit_breaker_failure_threshold.return_value = 5
+        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
+        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+        return config_manager
+
+    @pytest.fixture
+    def mock_exchange_instance(self):
+        return AsyncMock()
+
+    @pytest.fixture
+    def setup_env_vars(self, monkeypatch):
+        monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
+        monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
+
+    @pytest.fixture
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def live_service_fixture(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        return LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+    @pytest.mark.asyncio
+    async def test_returns_dataframe_with_ohlcv_columns(self, live_service_fixture):
+        service = live_service_fixture
+        service.exchange.fetch_ohlcv = AsyncMock(
+            return_value=[
+                [1700000000000, 100.0, 101.0, 99.0, 100.5, 12.0],
+                [1700000060000, 100.5, 102.0, 100.0, 101.5, 8.0],
+            ],
+        )
+
+        df = await service.fetch_recent_ohlcv("BTC/USDT", "1m", limit=2)
+
+        assert list(df.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+        assert len(df) == 2
+        assert df["close"].iloc[-1] == 101.5
+
+    @pytest.mark.asyncio
+    async def test_wraps_exchange_error_in_data_fetch_error(self, live_service_fixture):
+        service = live_service_fixture
+        service.exchange.fetch_ohlcv = AsyncMock(side_effect=ccxt.BaseError("boom"))
+
+        with pytest.raises(DataFetchError, match="Failed to fetch recent OHLCV for BTC/USDT"):
+            await service.fetch_recent_ohlcv("BTC/USDT", "1m", limit=2)

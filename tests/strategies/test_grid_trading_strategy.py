@@ -658,3 +658,49 @@ class TestVolatilityRegrid:
         # cancelled-but-not-regridded orders are re-placed at original levels
         s.order_manager.initialize_grid_orders.assert_awaited_once_with(100.0)
         assert s._bars_since_regrid == 0  # failed attempt restarts cooldown
+
+
+class TestLiveAtrRefresh:
+    async def test_refresh_computes_atr_after_candle_close(self, strategy_fixture):
+        s = strategy_fixture
+        s.trading_mode = TradingMode.LIVE
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.config_manager.get_trailing_atr_period.return_value = 3
+        s.config_manager.get_timeframe.return_value = "1m"
+        candles = pd.DataFrame(
+            [[pd.Timestamp("2026-01-01 00:00"), 100, 101, 99, 100, 1]] * 6,
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
+        s.exchange_service.fetch_recent_ohlcv = AsyncMock(return_value=candles)
+        s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
+
+        await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
+
+        s.exchange_service.fetch_recent_ohlcv.assert_awaited_once()
+        assert 3 in s._live_atr
+        assert s._next_candle_close == pd.Timestamp("2026-01-01 00:02:00")
+
+    async def test_no_fetch_before_candle_close(self, strategy_fixture):
+        s = strategy_fixture
+        s.trading_mode = TradingMode.LIVE
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.exchange_service.fetch_recent_ohlcv = AsyncMock()
+        s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
+
+        await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:00:30"))
+
+        s.exchange_service.fetch_recent_ohlcv.assert_not_awaited()
+
+    async def test_fetch_failure_keeps_last_atr(self, strategy_fixture):
+        s = strategy_fixture
+        s.trading_mode = TradingMode.LIVE
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.config_manager.get_trailing_atr_period.return_value = 3
+        s.config_manager.get_timeframe.return_value = "1m"
+        s._live_atr[3] = 2.5
+        s.exchange_service.fetch_recent_ohlcv = AsyncMock(side_effect=DataFetchError("boom"))
+        s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
+
+        await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
+
+        assert s._live_atr[3] == 2.5  # unchanged, bot keeps running

@@ -320,3 +320,16 @@ class LiveExchangeService(ExchangeInterface):
         end_date: str,
     ) -> pd.DataFrame:
         raise NotImplementedError("fetch_ohlcv is not used in live or paper trading mode.")
+
+    async def fetch_recent_ohlcv(self, pair: str, timeframe: str, limit: int) -> pd.DataFrame:
+        try:
+            candles = await self.circuit_breaker.call(self.exchange.fetch_ohlcv, pair, timeframe, None, limit)
+            df = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            return df
+
+        except CircuitBreakerOpenError as e:
+            raise DataFetchError(f"Circuit breaker open: {e!s}") from e
+
+        except BaseError as e:
+            raise DataFetchError(f"Failed to fetch recent OHLCV for {pair}: {e!s}") from e
