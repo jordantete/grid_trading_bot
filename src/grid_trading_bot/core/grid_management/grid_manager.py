@@ -28,6 +28,8 @@ class GridManager:
         self.grid_levels: dict[float, GridLevel] = {}
         self._sorted_prices: list[float] = []
         self._price_index_map: dict[float, int] = {}
+        self.atr_grid: float | None = None
+        self._initialized = False
 
     @staticmethod
     def _create_grid_strategy(strategy_type: StrategyType) -> GridStrategy:
@@ -59,11 +61,48 @@ class GridManager:
         )
         self._sorted_prices = sorted(self.price_grids)
         self._price_index_map = {p: i for i, p in enumerate(self._sorted_prices)}
+        self._initialized = True
         self.logger.info(f"Grids and levels initialized. Central price: {self.central_price}")
         self.logger.info(f"Price grids: {self.price_grids}")
         self.logger.info(f"Buy grids: {self.sorted_buy_grids}")
         self.logger.info(f"Sell grids: {self.sorted_sell_grids}")
         self.logger.info(f"Grid levels: {self.grid_levels}")
+
+    @property
+    def is_initialized(self) -> bool:
+        return self._initialized
+
+    def regrid(self, center_price: float, atr: float) -> None:
+        """
+        Rebuilds an arithmetic grid centered on center_price with ATR-proportional spacing.
+
+        spacing = atr_spacing_multiplier * atr
+        bottom  = center_price - (num_grids - 1) / 2 * spacing
+
+        Raises ValueError when atr <= 0 or the resulting bottom price would be <= 0.
+        Held crypto and open orders are untouched — callers must cancel orders first.
+        """
+        if atr <= 0:
+            raise ValueError(f"Cannot regrid with non-positive ATR: {atr}")
+
+        num_grids = self.config_manager.get_num_grids()
+        spacing = self.config_manager.get_atr_spacing_multiplier() * atr
+        bottom = center_price - (num_grids - 1) / 2 * spacing
+        if bottom <= 0:
+            raise ValueError(f"Regrid would produce non-positive bottom price: {bottom}")
+
+        self.price_grids = [bottom + i * spacing for i in range(num_grids)]
+        self.central_price = center_price
+        self.sorted_buy_grids, self.sorted_sell_grids, self.grid_levels = self.grid_strategy.initialize_levels(
+            self.price_grids, self.central_price
+        )
+        self._sorted_prices = sorted(self.price_grids)
+        self._price_index_map = {p: i for i, p in enumerate(self._sorted_prices)}
+        self.atr_grid = atr
+        self._initialized = True
+        self.logger.info(
+            f"Regridded around {center_price} with ATR {atr} (spacing {spacing}). Grids: {self.price_grids}"
+        )
 
     def get_trigger_price(self) -> float:
         return self.central_price

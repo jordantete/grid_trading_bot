@@ -301,3 +301,51 @@ class TestGridManager:
         grids, central_price = grid_manager._calculate_price_grids_and_central_price()
         np.testing.assert_array_almost_equal(grids, expected_grids, decimal=5)
         assert central_price == 1415.2622462249876
+
+
+@pytest.fixture
+def config_manager_simple():
+    mock_config_manager = Mock(spec=ConfigManager)
+    mock_config_manager.get_num_grids.return_value = 5
+    mock_config_manager.get_atr_spacing_multiplier.return_value = 1.0
+    mock_config_manager.get_buy_ratio.return_value = 1.0
+    mock_config_manager.get_sell_ratio.return_value = 1.0
+    return mock_config_manager
+
+
+@pytest.fixture
+def grid_manager_simple(config_manager_simple):
+    return GridManager(config_manager_simple, StrategyType.SIMPLE_GRID)
+
+
+class TestRegrid:
+    def test_regrid_geometry(self, grid_manager_simple):
+        gm = grid_manager_simple  # num_grids=5, atr_spacing_multiplier=1.0
+        gm.regrid(center_price=100.0, atr=2.0)
+
+        # spacing = 1.0 * 2.0 = 2.0 ; half span = (5-1)/2 * 2 = 4
+        assert gm.price_grids == pytest.approx([96.0, 98.0, 100.0, 102.0, 104.0])
+        assert gm.central_price == pytest.approx(100.0)
+        assert gm.atr_grid == pytest.approx(2.0)
+        assert gm.is_initialized is True
+
+    def test_regrid_rebuilds_levels_and_lookup_tables(self, grid_manager_simple):
+        gm = grid_manager_simple
+        gm.regrid(center_price=100.0, atr=2.0)
+        assert set(gm.grid_levels.keys()) == set(gm.price_grids)
+        assert gm._sorted_prices == sorted(gm.price_grids)
+        # simple grid: levels below center buy, above center sell
+        assert 96.0 in gm.sorted_buy_grids
+        assert 104.0 in gm.sorted_sell_grids
+
+    def test_regrid_rejects_non_positive_atr(self, grid_manager_simple):
+        with pytest.raises(ValueError, match="non-positive ATR"):
+            grid_manager_simple.regrid(center_price=100.0, atr=0.0)
+
+    def test_regrid_rejects_bottom_below_zero(self, grid_manager_simple):
+        # center 1.0, atr 1.0 => bottom = 1.0 - 2*1.0 = -1.0
+        with pytest.raises(ValueError, match="non-positive bottom price"):
+            grid_manager_simple.regrid(center_price=1.0, atr=1.0)
+
+    def test_not_initialized_before_any_init(self, grid_manager_simple):
+        assert grid_manager_simple.is_initialized is False
