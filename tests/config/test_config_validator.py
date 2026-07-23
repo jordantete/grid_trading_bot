@@ -4,11 +4,12 @@ from grid_trading_bot.config.config_validator import ConfigValidator
 from grid_trading_bot.config.exceptions import ConfigValidationError
 
 
-class TestConfigValidator:
-    @pytest.fixture
-    def config_validator(self):
-        return ConfigValidator()
+@pytest.fixture
+def config_validator():
+    return ConfigValidator()
 
+
+class TestConfigValidator:
     def test_validate_valid_config(self, config_validator, valid_config):
         try:
             config_validator.validate(valid_config)
@@ -145,3 +146,78 @@ class TestConfigValidator:
         with pytest.raises(ConfigValidationError) as excinfo:
             config_validator.validate(valid_config)
         assert f"grid_strategy.{ratio_field}" in excinfo.value.invalid_fields
+
+
+class TestTrailingStopLossValidation:
+    def test_absent_section_is_valid(self, config_validator, valid_config):
+        config_validator.validate(valid_config)  # must not raise
+
+    def test_invalid_on_trigger_rejected(self, config_validator, valid_config):
+        valid_config["risk_management"]["trailing_stop_loss"] = {
+            "enabled": True,
+            "atr_period": 14,
+            "atr_multiplier": 2.5,
+            "on_trigger": "explode",
+        }
+        with pytest.raises(ConfigValidationError):
+            config_validator.validate(valid_config)
+
+    def test_regrid_trigger_requires_dynamic_spacing(self, config_validator, valid_config):
+        valid_config["risk_management"]["trailing_stop_loss"] = {
+            "enabled": True,
+            "atr_period": 14,
+            "atr_multiplier": 2.5,
+            "on_trigger": "regrid",
+        }
+        # dynamic_spacing absent => invalid
+        with pytest.raises(ConfigValidationError):
+            config_validator.validate(valid_config)
+
+    def test_atr_period_below_two_rejected(self, config_validator, valid_config):
+        valid_config["risk_management"]["trailing_stop_loss"] = {
+            "enabled": True,
+            "atr_period": 1,
+            "atr_multiplier": 2.5,
+            "on_trigger": "stop",
+        }
+        with pytest.raises(ConfigValidationError):
+            config_validator.validate(valid_config)
+
+
+class TestDynamicSpacingValidation:
+    def _enable_dynamic(self, config, **overrides):
+        config["grid_strategy"]["spacing"] = "arithmetic"
+        section = {
+            "enabled": True,
+            "atr_period": 14,
+            "atr_spacing_multiplier": 1.0,
+            "regrid_threshold": 0.3,
+            "cooldown_bars": 60,
+        }
+        section.update(overrides)
+        config["grid_strategy"]["dynamic_spacing"] = section
+
+    def test_valid_dynamic_spacing_accepted(self, config_validator, valid_config):
+        self._enable_dynamic(valid_config)
+        config_validator.validate(valid_config)  # must not raise
+
+    def test_geometric_spacing_rejected_with_dynamic(self, config_validator, valid_config):
+        self._enable_dynamic(valid_config)
+        valid_config["grid_strategy"]["spacing"] = "geometric"
+        with pytest.raises(ConfigValidationError):
+            config_validator.validate(valid_config)
+
+    def test_range_optional_when_dynamic_enabled(self, config_validator, valid_config):
+        self._enable_dynamic(valid_config)
+        del valid_config["grid_strategy"]["range"]
+        config_validator.validate(valid_config)  # must not raise
+
+    def test_range_still_required_when_dynamic_disabled(self, config_validator, valid_config):
+        del valid_config["grid_strategy"]["range"]
+        with pytest.raises(ConfigValidationError):
+            config_validator.validate(valid_config)
+
+    def test_negative_threshold_rejected(self, config_validator, valid_config):
+        self._enable_dynamic(valid_config, regrid_threshold=-0.1)
+        with pytest.raises(ConfigValidationError):
+            config_validator.validate(valid_config)

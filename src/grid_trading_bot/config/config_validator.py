@@ -141,13 +141,17 @@ class ConfigValidator:
             self.logger.error("Grid strategy 'num_grids' must be a positive integer.")
             invalid_fields.append("grid_strategy.num_grids")
 
+        dynamic = grid.get("dynamic_spacing", {})
+        dynamic_enabled = dynamic.get("enabled", False) is True
+
         range_ = grid.get("range", {})
         top = range_.get("top")
         bottom = range_.get("bottom")
-        if top is None:
-            missing_fields.append("grid_strategy.range.top")
-        if bottom is None:
-            missing_fields.append("grid_strategy.range.bottom")
+        if not dynamic_enabled:
+            if top is None:
+                missing_fields.append("grid_strategy.range.top")
+            if bottom is None:
+                missing_fields.append("grid_strategy.range.bottom")
 
         if top is not None and bottom is not None:
             if not isinstance(top, int | float) or not isinstance(bottom, int | float):
@@ -166,6 +170,35 @@ class ConfigValidator:
                     f"grid_strategy.{ratio_field} must be a number between 0 (exclusive) and 1.0 (inclusive)."
                 )
                 invalid_fields.append(f"grid_strategy.{ratio_field}")
+
+        if dynamic:
+            if not isinstance(dynamic.get("enabled"), bool):
+                self.logger.error("grid_strategy.dynamic_spacing.enabled must be a boolean.")
+                invalid_fields.append("grid_strategy.dynamic_spacing.enabled")
+
+            atr_period = dynamic.get("atr_period", 14)
+            if not isinstance(atr_period, int) or atr_period < 2:
+                self.logger.error("grid_strategy.dynamic_spacing.atr_period must be an integer >= 2.")
+                invalid_fields.append("grid_strategy.dynamic_spacing.atr_period")
+
+            for field, minimum in (("atr_spacing_multiplier", 1.0), ("regrid_threshold", 0.3)):
+                value = dynamic.get(field, minimum)
+                if not isinstance(value, int | float) or value <= 0:
+                    self.logger.error(f"grid_strategy.dynamic_spacing.{field} must be a number > 0.")
+                    invalid_fields.append(f"grid_strategy.dynamic_spacing.{field}")
+
+            cooldown = dynamic.get("cooldown_bars", 60)
+            if not isinstance(cooldown, int) or cooldown < 0:
+                self.logger.error("grid_strategy.dynamic_spacing.cooldown_bars must be an integer >= 0.")
+                invalid_fields.append("grid_strategy.dynamic_spacing.cooldown_bars")
+
+            if dynamic_enabled and spacing is not None:
+                try:
+                    if SpacingType.from_string(spacing) == SpacingType.GEOMETRIC:
+                        self.logger.error("dynamic_spacing does not support geometric spacing (v1).")
+                        invalid_fields.append("grid_strategy.spacing")
+                except ValueError:
+                    pass  # already reported above
 
         return missing_fields, invalid_fields
 
@@ -192,6 +225,32 @@ class ConfigValidator:
         if stop_loss.get("threshold") is None or not isinstance(stop_loss.get("threshold"), float | int):
             self.logger.error("Invalid or missing stop loss threshold.")
             invalid_fields.append("risk_management.stop_loss.threshold")
+
+        trailing = limits.get("trailing_stop_loss", {})
+        if trailing:
+            if not isinstance(trailing.get("enabled"), bool):
+                self.logger.error("risk_management.trailing_stop_loss.enabled must be a boolean.")
+                invalid_fields.append("risk_management.trailing_stop_loss.enabled")
+
+            atr_period = trailing.get("atr_period", 14)
+            if not isinstance(atr_period, int) or atr_period < 2:
+                self.logger.error("risk_management.trailing_stop_loss.atr_period must be an integer >= 2.")
+                invalid_fields.append("risk_management.trailing_stop_loss.atr_period")
+
+            atr_multiplier = trailing.get("atr_multiplier", 2.5)
+            if not isinstance(atr_multiplier, int | float) or atr_multiplier <= 0:
+                self.logger.error("risk_management.trailing_stop_loss.atr_multiplier must be a number > 0.")
+                invalid_fields.append("risk_management.trailing_stop_loss.atr_multiplier")
+
+            on_trigger = trailing.get("on_trigger", "stop")
+            if on_trigger not in ("stop", "regrid"):
+                self.logger.error("risk_management.trailing_stop_loss.on_trigger must be 'stop' or 'regrid'.")
+                invalid_fields.append("risk_management.trailing_stop_loss.on_trigger")
+            elif on_trigger == "regrid":
+                dynamic = config.get("grid_strategy", {}).get("dynamic_spacing", {})
+                if dynamic.get("enabled", False) is not True:
+                    self.logger.error("on_trigger 'regrid' requires grid_strategy.dynamic_spacing.enabled: true.")
+                    invalid_fields.append("risk_management.trailing_stop_loss.on_trigger")
 
         return invalid_fields
 
