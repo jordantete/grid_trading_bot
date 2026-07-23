@@ -144,6 +144,25 @@ class ConfigManager:
         grid_settings = self.get_grid_settings()
         return grid_settings.get("sell_ratio", 1.0)
 
+    def get_dynamic_spacing(self) -> dict:
+        grid_settings = self.get_grid_settings()
+        return grid_settings.get("dynamic_spacing", {})
+
+    def is_dynamic_spacing_enabled(self) -> bool:
+        return self.get_dynamic_spacing().get("enabled", False)
+
+    def get_dynamic_atr_period(self) -> int:
+        return self.get_dynamic_spacing().get("atr_period", 14)
+
+    def get_atr_spacing_multiplier(self) -> float:
+        return self.get_dynamic_spacing().get("atr_spacing_multiplier", 1.0)
+
+    def get_regrid_threshold(self) -> float:
+        return self.get_dynamic_spacing().get("regrid_threshold", 0.3)
+
+    def get_cooldown_bars(self) -> int:
+        return self.get_dynamic_spacing().get("cooldown_bars", 60)
+
     # --- Risk management (Take Profit / Stop Loss) Accessor Methods ---
     def get_risk_management(self) -> dict:
         return self.config.get("risk_management", {})
@@ -171,6 +190,22 @@ class ConfigManager:
     def get_stop_loss_threshold(self) -> float | None:
         stop_loss = self.get_stop_loss()
         return stop_loss.get("threshold", None)
+
+    def get_trailing_stop_loss(self) -> dict:
+        risk_management = self.get_risk_management()
+        return risk_management.get("trailing_stop_loss", {})
+
+    def is_trailing_stop_loss_enabled(self) -> bool:
+        return self.get_trailing_stop_loss().get("enabled", False)
+
+    def get_trailing_atr_period(self) -> int:
+        return self.get_trailing_stop_loss().get("atr_period", 14)
+
+    def get_trailing_atr_multiplier(self) -> float:
+        return self.get_trailing_stop_loss().get("atr_multiplier", 2.5)
+
+    def get_trailing_on_trigger(self) -> str:
+        return self.get_trailing_stop_loss().get("on_trigger", "stop")
 
     # --- Execution Settings Accessor Methods ---
     def get_execution_settings(self) -> dict:

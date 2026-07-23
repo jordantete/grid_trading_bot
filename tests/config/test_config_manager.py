@@ -11,18 +11,20 @@ from grid_trading_bot.core.domain.spacing_type import SpacingType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 
 
+@pytest.fixture
+def mock_validator():
+    return Mock(spec=ConfigValidator)
+
+
+@pytest.fixture
+def config_manager(mock_validator, valid_config):
+    # Mocking both open and os.path.exists to simulate a valid config file
+    mocked_open = mock_open(read_data=json.dumps(valid_config))
+    with patch("builtins.open", mocked_open), patch("os.path.exists", return_value=True):
+        return ConfigManager("config.json", mock_validator)
+
+
 class TestConfigManager:
-    @pytest.fixture
-    def mock_validator(self):
-        return Mock(spec=ConfigValidator)
-
-    @pytest.fixture
-    def config_manager(self, mock_validator, valid_config):
-        # Mocking both open and os.path.exists to simulate a valid config file
-        mocked_open = mock_open(read_data=json.dumps(valid_config))
-        with patch("builtins.open", mocked_open), patch("os.path.exists", return_value=True):
-            return ConfigManager("config.json", mock_validator)
-
     def test_load_config_valid(self, config_manager, valid_config, mock_validator):
         mock_validator.validate.assert_called_once_with(valid_config)
         assert config_manager.config == valid_config
@@ -201,3 +203,46 @@ class TestConfigManagerFromDict:
     def test_from_dict_sets_config_file_marker(self, valid_config):
         cm = ConfigManager.from_dict(valid_config)
         assert cm.config_file == "<dict>"
+
+
+class TestTrailingStopLossAccessors:
+    def test_defaults_when_section_absent(self, config_manager):
+        assert config_manager.is_trailing_stop_loss_enabled() is False
+        assert config_manager.get_trailing_atr_period() == 14
+        assert config_manager.get_trailing_atr_multiplier() == 2.5
+        assert config_manager.get_trailing_on_trigger() == "stop"
+
+    def test_reads_configured_values(self, config_manager):
+        config_manager.config["risk_management"]["trailing_stop_loss"] = {
+            "enabled": True,
+            "atr_period": 20,
+            "atr_multiplier": 3.0,
+            "on_trigger": "regrid",
+        }
+        assert config_manager.is_trailing_stop_loss_enabled() is True
+        assert config_manager.get_trailing_atr_period() == 20
+        assert config_manager.get_trailing_atr_multiplier() == 3.0
+        assert config_manager.get_trailing_on_trigger() == "regrid"
+
+
+class TestDynamicSpacingAccessors:
+    def test_defaults_when_section_absent(self, config_manager):
+        assert config_manager.is_dynamic_spacing_enabled() is False
+        assert config_manager.get_dynamic_atr_period() == 14
+        assert config_manager.get_atr_spacing_multiplier() == 1.0
+        assert config_manager.get_regrid_threshold() == 0.3
+        assert config_manager.get_cooldown_bars() == 60
+
+    def test_reads_configured_values(self, config_manager):
+        config_manager.config["grid_strategy"]["dynamic_spacing"] = {
+            "enabled": True,
+            "atr_period": 10,
+            "atr_spacing_multiplier": 1.5,
+            "regrid_threshold": 0.5,
+            "cooldown_bars": 120,
+        }
+        assert config_manager.is_dynamic_spacing_enabled() is True
+        assert config_manager.get_dynamic_atr_period() == 10
+        assert config_manager.get_atr_spacing_multiplier() == 1.5
+        assert config_manager.get_regrid_threshold() == 0.5
+        assert config_manager.get_cooldown_bars() == 120
