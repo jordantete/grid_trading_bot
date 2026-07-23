@@ -84,3 +84,6 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
             symbol=pair,
             time_in_force="GTC",
         )
+
+    async def cancel_order(self, order_id: str, pair: str) -> bool:
+        return True

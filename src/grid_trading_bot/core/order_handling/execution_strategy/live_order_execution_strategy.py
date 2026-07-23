@@ -110,6 +110,9 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         except DataFetchError:
             raise
 
+    async def cancel_order(self, order_id: str, pair: str) -> bool:
+        return await self._retry_cancel_order(order_id, pair)
+
     async def _parse_order_result(
         self,
         raw_order_result: dict,

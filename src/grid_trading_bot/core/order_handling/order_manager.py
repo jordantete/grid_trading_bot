@@ -7,7 +7,7 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.services.exceptions import DataFetchError
 
-from ..grid_management.grid_level import GridLevel
+from ..grid_management.grid_level import GridCycleState, GridLevel
 from ..grid_management.grid_manager import GridManager
 from ..order_handling.balance_tracker import BalanceTracker
 from ..order_handling.order_book import OrderBook
@@ -68,6 +68,40 @@ class OrderManager:
         async with self._lock:
             await self._initialize_orders(OrderSide.BUY, current_price)
             await self._initialize_orders(OrderSide.SELL, current_price)
+
+    async def cancel_open_grid_orders(self) -> bool:
+        """
+        Cancels all open grid orders, releases their reserved funds and resets
+        their grid level states so orders can be re-placed.
+
+        Returns True only if every open order was cancelled. On the first
+        failure it stops and returns False, leaving remaining orders open.
+        """
+        async with self._lock:
+            open_orders = set(self.order_book.get_open_orders())
+            pairs = [
+                (order, grid_level)
+                for order, grid_level in (
+                    self.order_book.get_buy_orders_with_grid() + self.order_book.get_sell_orders_with_grid()
+                )
+                if order in open_orders
+            ]
+
+            for order, grid_level in pairs:
+                cancelled = await self.order_execution_strategy.cancel_order(order.identifier, self.trading_pair)
+                if not cancelled:
+                    self.logger.error(f"Failed to cancel order {order.identifier}; aborting bulk cancellation.")
+                    return False
+
+                await self._release_funds(order.side, order.amount, order.price)
+                self.order_book.remove_open_order(order)
+                if grid_level is not None:
+                    grid_level.state = (
+                        GridCycleState.READY_TO_BUY if order.side == OrderSide.BUY else GridCycleState.READY_TO_SELL
+                    )
+                self.logger.info(f"Cancelled {order.side.value} order {order.identifier} at {order.price}.")
+
+            return True
 
     async def _initialize_orders(self, side: OrderSide, current_price: float) -> None:
         grids = self.grid_manager.sorted_buy_grids if side == OrderSide.BUY else self.grid_manager.sorted_sell_grids
