@@ -9,9 +9,11 @@ from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
+from grid_trading_bot.core.indicators.atr_calculator import ATRCalculator
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
+from grid_trading_bot.core.risk_management.trailing_stop_loss import TrailingStopLoss
 from grid_trading_bot.core.services.exceptions import DataFetchError, HistoricalMarketDataFileNotFoundError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 from grid_trading_bot.strategies.plotter import Plotter
@@ -53,6 +55,15 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.close_prices = None
         self.live_trading_metrics: deque = deque(maxlen=self.MAX_LIVE_METRICS)
         self._running = True
+        self.trailing_stop: TrailingStopLoss | None = (
+            TrailingStopLoss(config_manager.get_trailing_atr_multiplier())
+            if config_manager.is_trailing_stop_loss_enabled()
+            else None
+        )
+        self._bars_since_regrid: int = 0
+        self._trailing_atr_series: pd.Series | None = None
+        self._dynamic_atr_series: pd.Series | None = None
+        self._live_atr: dict[int, float] = {}  # period -> latest ATR (live mode, Task 8)
 
     async def _initialize_historical_data(self) -> pd.DataFrame | None:
         """
@@ -89,6 +100,9 @@ class GridTradingStrategy(TradingStrategyInterface):
         Initializes the trading strategy by setting up the grid and levels.
         This method prepares the strategy to be ready for trading.
         """
+        if self.config_manager.is_dynamic_spacing_enabled() and self.config_manager.get_top_range() is None:
+            self.logger.info("Dynamic spacing without static range: grid initialization deferred to ATR warm-up.")
+            return
         self.grid_manager.initialize_grids_and_levels()
 
     async def stop(self):
@@ -132,10 +146,14 @@ class GridTradingStrategy(TradingStrategyInterface):
         """
         self._running = True
         self.data = await self._initialize_historical_data()
-        trigger_price = self.grid_manager.get_trigger_price()
+        trigger_price = self.grid_manager.get_trigger_price() if self.grid_manager.is_initialized else None
 
         if self.trading_mode == TradingMode.BACKTEST:
-            await self._run_backtest(trigger_price)
+            self._precompute_backtest_atr()
+            start_index = self._initialize_dynamic_grid_backtest()
+            if trigger_price is None:
+                trigger_price = self.grid_manager.get_trigger_price()
+            await self._run_backtest(trigger_price, start_index)
             self.logger.info("Ending backtest simulation")
             self._running = False
         else:
@@ -209,7 +227,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         finally:
             self.logger.info("Exiting live/paper trading loop.")
 
-    async def _run_backtest(self, trigger_price: float) -> None:
+    async def _run_backtest(self, trigger_price: float, start_index: int = 0) -> None:
         """
         Executes the backtesting simulation based on historical OHLCV data.
 
@@ -218,6 +236,7 @@ class GridTradingStrategy(TradingStrategyInterface):
 
         Args:
             trigger_price (float): The price at which grid orders are triggered.
+            start_index (int): Candle index at which trading may start (ATR warm-up for dynamic grids).
         """
         if self.data is None:
             self.logger.error("No data available for backtesting.")
@@ -238,6 +257,13 @@ class GridTradingStrategy(TradingStrategyInterface):
         for i, (current_price, high_price, low_price, timestamp) in enumerate(
             zip(self.close_prices, high_prices, low_prices, timestamps, strict=False),
         ):
+            if i < start_index:
+                self.data.loc[timestamps[i], "account_value"] = self.balance_tracker.get_total_balance_value(
+                    price=current_price,
+                )
+                last_price = current_price
+                continue
+
             grid_orders_initialized = await self._initialize_grid_orders_once(
                 current_price,
                 trigger_price,
@@ -254,8 +280,15 @@ class GridTradingStrategy(TradingStrategyInterface):
 
             await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
 
+            trailing_atr = self._backtest_atr_at(self._trailing_atr_series, i)
+            if await self._handle_trailing_stop(current_price, trailing_atr):
+                break
+
             if await self._handle_take_profit_stop_loss(current_price):
                 break
+
+            dynamic_atr = self._backtest_atr_at(self._dynamic_atr_series, i)
+            await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
 
             self.data.loc[timestamp, "account_value"] = self.balance_tracker.get_total_balance_value(current_price)
             last_price = current_price
@@ -365,6 +398,123 @@ class GridTradingStrategy(TradingStrategyInterface):
             await self.event_bus.publish(Events.STOP_BOT, "TP or SL hit.")
             return True
         return False
+
+    async def _handle_trailing_stop(self, current_price: float, atr: float) -> bool:
+        """
+        Updates and evaluates the ATR-based trailing stop. Returns True when trading must stop.
+        """
+        if self.trailing_stop is None or self.balance_tracker.crypto_balance == 0:
+            return False
+
+        self.trailing_stop.update(current_price, atr)
+        if not self.trailing_stop.is_triggered(current_price):
+            return False
+
+        if self.config_manager.get_trailing_on_trigger() == "stop":
+            self.logger.info(f"Trailing stop triggered at {current_price}. Liquidating and stopping.")
+            await self.order_manager.execute_take_profit_or_stop_loss_order(
+                current_price=current_price,
+                stop_loss_order=True,
+            )
+            await self.event_bus.publish(Events.STOP_BOT, "Trailing stop hit.")
+            return True
+
+        self.logger.info(f"Trailing stop triggered at {current_price}. Regridding around current price.")
+        await self._execute_regrid(current_price, atr)
+        self.trailing_stop.reset()
+        return False
+
+    async def _maybe_regrid_on_volatility(self, current_price: float, atr: float) -> None:
+        """
+        Rebuilds the grid when the ATR regime has drifted beyond the configured threshold,
+        subject to a cooldown period between regrids.
+        """
+        if not self.config_manager.is_dynamic_spacing_enabled() or not self.grid_manager.is_initialized:
+            return
+        if math.isnan(atr) or atr <= 0:
+            return
+
+        self._bars_since_regrid += 1
+
+        if self.grid_manager.atr_grid is None or self.grid_manager.atr_grid <= 0:
+            self.grid_manager.atr_grid = atr  # baseline for grids built from a static range
+            return
+        if self._bars_since_regrid < self.config_manager.get_cooldown_bars():
+            return
+        if abs(atr / self.grid_manager.atr_grid - 1) <= self.config_manager.get_regrid_threshold():
+            return
+
+        self.logger.info(
+            f"Volatility regime change (ATR {self.grid_manager.atr_grid} -> {atr}). Regridding.",
+        )
+        await self._execute_regrid(current_price, atr)
+
+    async def _execute_regrid(self, center_price: float, atr: float) -> None:
+        """
+        Cancels open grid orders and rebuilds the grid around center_price with the given ATR.
+        Falls back to re-placing orders on the existing grid if cancellation or regrid fails.
+        """
+        if math.isnan(atr) or atr <= 0:
+            return
+
+        cancelled = await self.order_manager.cancel_open_grid_orders()
+        self._bars_since_regrid = 0
+        if not cancelled:
+            self.logger.warning("Regrid aborted: could not cancel all open orders. Re-placing cancelled ones.")
+            await self.order_manager.initialize_grid_orders(center_price)
+            return
+
+        try:
+            self.grid_manager.regrid(center_price, atr)
+        except ValueError as e:
+            self.logger.warning(f"Regrid rejected ({e}). Re-placing orders on the existing grid.")
+            await self.order_manager.initialize_grid_orders(center_price)
+            return
+
+        await self.order_manager.initialize_grid_orders(center_price)
+
+    def _precompute_backtest_atr(self) -> None:
+        """
+        Precomputes ATR series for the trailing stop and dynamic spacing features, aligned on self.data.
+        """
+        if self.data is None:
+            return
+        if self.config_manager.is_trailing_stop_loss_enabled():
+            self._trailing_atr_series = ATRCalculator.compute_series(
+                self.data,
+                self.config_manager.get_trailing_atr_period(),
+            )
+        if self.config_manager.is_dynamic_spacing_enabled():
+            self._dynamic_atr_series = ATRCalculator.compute_series(
+                self.data,
+                self.config_manager.get_dynamic_atr_period(),
+            )
+
+    def _backtest_atr_at(self, series: pd.Series | None, index: int) -> float:
+        """Returns the ATR value at the given candle index, or NaN if the series is disabled."""
+        if series is None:
+            return math.nan
+        return float(series.iloc[index])
+
+    def _initialize_dynamic_grid_backtest(self) -> int:
+        """
+        When dynamic spacing is on and the grid was not built from a static range,
+        builds the initial grid from the first available ATR.
+        Returns the candle index at which the trading loop may start.
+        """
+        if not self.config_manager.is_dynamic_spacing_enabled() or self.grid_manager.is_initialized:
+            return 0
+
+        period = self.config_manager.get_dynamic_atr_period()
+        warmup_index = period + 1
+        if self.data is None or len(self.data) <= warmup_index:
+            raise ValueError("Not enough candles to warm up ATR for dynamic grid initialization.")
+
+        atr = self._backtest_atr_at(self._dynamic_atr_series, warmup_index)
+        center = float(self.data["close"].iloc[warmup_index])
+        self.grid_manager.regrid(center, atr)
+        self.logger.info(f"Initial dynamic grid built at candle {warmup_index} (center {center}, ATR {atr}).")
+        return warmup_index
 
     async def _evaluate_tp_or_sl(self, current_price: float) -> bool:
         """

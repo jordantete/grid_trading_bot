@@ -12,11 +12,56 @@ from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
+from grid_trading_bot.core.risk_management.trailing_stop_loss import TrailingStopLoss
 from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
 from grid_trading_bot.strategies.plotter import Plotter
 from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
+
+
+@pytest.fixture
+def strategy_fixture():
+    """
+    Builds a real GridTradingStrategy with mocked collaborators, attached directly
+    as attributes (config_manager, grid_manager, order_manager, balance_tracker, etc.)
+    since the strategy stores each constructor argument as an instance attribute.
+    """
+    config_manager = Mock(spec=ConfigManager)
+    exchange_service = Mock(spec=ExchangeInterface)
+    grid_manager = Mock(spec=GridManager)
+    order_manager = Mock(spec=OrderManager)
+    balance_tracker = Mock(spec=BalanceTracker)
+    trading_performance_analyzer = Mock(spec=TradingPerformanceAnalyzer)
+    plotter = Mock(spec=Plotter)
+    event_bus = Mock(spec=EventBus)
+    event_bus.publish = AsyncMock()
+    order_simulator = Mock(spec=OrderSimulator)
+    order_simulator.simulate_order_fills = AsyncMock()
+
+    config_manager.get_timeframe.return_value = "1d"
+    config_manager.is_take_profit_enabled.return_value = False
+    config_manager.is_stop_loss_enabled.return_value = False
+    config_manager.is_trailing_stop_loss_enabled.return_value = False
+    config_manager.is_dynamic_spacing_enabled.return_value = False
+    config_manager.get_trailing_atr_multiplier.return_value = 2.5
+
+    order_manager.initialize_grid_orders = AsyncMock()
+    order_manager.execute_take_profit_or_stop_loss_order = AsyncMock()
+
+    return GridTradingStrategy(
+        config_manager=config_manager,
+        event_bus=event_bus,
+        exchange_service=exchange_service,
+        grid_manager=grid_manager,
+        order_manager=order_manager,
+        balance_tracker=balance_tracker,
+        trading_performance_analyzer=trading_performance_analyzer,
+        trading_mode=TradingMode.BACKTEST,
+        trading_pair="BTC/USDT",
+        plotter=plotter,
+        order_simulator=order_simulator,
+    )
 
 
 class TestGridTradingStrategy:
@@ -38,6 +83,8 @@ class TestGridTradingStrategy:
         config_manager.is_stop_loss_enabled.return_value = True
         config_manager.get_take_profit_threshold.return_value = 20000
         config_manager.get_stop_loss_threshold.return_value = 10000
+        config_manager.is_trailing_stop_loss_enabled.return_value = False
+        config_manager.is_dynamic_spacing_enabled.return_value = False
 
         def create_strategy(trading_mode: TradingMode = TradingMode.BACKTEST):
             return GridTradingStrategy(
@@ -499,3 +546,115 @@ class TestGridTradingStrategy:
         await strategy.run()
 
         exchange_service.listen_to_ticker_updates.assert_called_once()
+
+
+class TestTrailingStopOrchestration:
+    async def test_trailing_stop_with_stop_trigger_liquidates_and_stops(self, strategy_fixture):
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.config_manager.get_trailing_on_trigger.return_value = "stop"
+        s.balance_tracker.crypto_balance = 1.0
+        s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
+        s.trailing_stop.update(close=100.0, atr=5.0)  # stop = 95
+
+        stopped = await s._handle_trailing_stop(current_price=94.0, atr=5.0)
+
+        assert stopped is True
+        s.order_manager.execute_take_profit_or_stop_loss_order.assert_awaited_once_with(
+            current_price=94.0,
+            stop_loss_order=True,
+        )
+
+    async def test_trailing_stop_with_regrid_trigger_rebuilds_grid(self, strategy_fixture):
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.config_manager.get_trailing_on_trigger.return_value = "regrid"
+        s.config_manager.is_dynamic_spacing_enabled.return_value = True
+        s.balance_tracker.crypto_balance = 1.0
+        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
+        s.trailing_stop.update(close=100.0, atr=5.0)  # stop = 95
+
+        stopped = await s._handle_trailing_stop(current_price=94.0, atr=5.0)
+
+        assert stopped is False
+        s.order_manager.cancel_open_grid_orders.assert_awaited_once()
+        s.grid_manager.regrid.assert_called_once_with(94.0, 5.0)
+        s.order_manager.initialize_grid_orders.assert_awaited_once_with(94.0)
+        assert s.trailing_stop.stop_price is None  # reset after regrid
+
+    async def test_no_trailing_check_without_crypto(self, strategy_fixture):
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.balance_tracker.crypto_balance = 0
+        s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
+
+        stopped = await s._handle_trailing_stop(current_price=1.0, atr=5.0)
+
+        assert stopped is False
+        assert s.trailing_stop.stop_price is None  # not even updated
+
+
+class TestVolatilityRegrid:
+    def _setup_dynamic(self, s):
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
+        s.config_manager.is_dynamic_spacing_enabled.return_value = True
+        s.config_manager.get_regrid_threshold.return_value = 0.3
+        s.config_manager.get_cooldown_bars.return_value = 5
+        s.grid_manager.is_initialized = True
+        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+
+    async def test_first_atr_sets_baseline_without_regrid(self, strategy_fixture):
+        s = strategy_fixture
+        self._setup_dynamic(s)
+        s.grid_manager.atr_grid = None
+
+        await s._maybe_regrid_on_volatility(current_price=100.0, atr=2.0)
+
+        assert s.grid_manager.atr_grid == 2.0
+        s.grid_manager.regrid.assert_not_called()
+
+    async def test_regrid_when_atr_deviates_beyond_threshold_after_cooldown(self, strategy_fixture):
+        s = strategy_fixture
+        self._setup_dynamic(s)
+        s.grid_manager.atr_grid = 2.0
+        s._bars_since_regrid = 10  # past cooldown of 5
+
+        await s._maybe_regrid_on_volatility(current_price=100.0, atr=3.0)  # |3/2 - 1| = 0.5 > 0.3
+
+        s.order_manager.cancel_open_grid_orders.assert_awaited_once()
+        s.grid_manager.regrid.assert_called_once_with(100.0, 3.0)
+
+    async def test_no_regrid_during_cooldown(self, strategy_fixture):
+        s = strategy_fixture
+        self._setup_dynamic(s)
+        s.grid_manager.atr_grid = 2.0
+        s._bars_since_regrid = 2  # below cooldown of 5
+
+        await s._maybe_regrid_on_volatility(current_price=100.0, atr=3.0)
+
+        s.grid_manager.regrid.assert_not_called()
+
+    async def test_no_regrid_within_threshold(self, strategy_fixture):
+        s = strategy_fixture
+        self._setup_dynamic(s)
+        s.grid_manager.atr_grid = 2.0
+        s._bars_since_regrid = 10
+
+        await s._maybe_regrid_on_volatility(current_price=100.0, atr=2.2)  # |1.1 - 1| = 0.1 < 0.3
+
+        s.grid_manager.regrid.assert_not_called()
+
+    async def test_cancel_failure_aborts_regrid(self, strategy_fixture):
+        s = strategy_fixture
+        self._setup_dynamic(s)
+        s.grid_manager.atr_grid = 2.0
+        s._bars_since_regrid = 10
+        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=False)
+
+        await s._maybe_regrid_on_volatility(current_price=100.0, atr=3.0)
+
+        s.grid_manager.regrid.assert_not_called()
+        # cancelled-but-not-regridded orders are re-placed at original levels
+        s.order_manager.initialize_grid_orders.assert_awaited_once_with(100.0)
+        assert s._bars_since_regrid == 0  # failed attempt restarts cooldown
