@@ -37,7 +37,9 @@ def snapshot_dir():
     return Path(__file__).resolve().parent / "snapshots"
 
 
-def _build_config_dict(strategy_type: str, spacing: str, **grid_overrides) -> dict:
+def _build_config_dict(
+    strategy_type: str, spacing: str, risk_management_overrides: dict | None = None, **grid_overrides
+) -> dict:
     grid_strategy = {
         "type": strategy_type,
         "spacing": spacing,
@@ -48,6 +50,18 @@ def _build_config_dict(strategy_type: str, spacing: str, **grid_overrides) -> di
         },
         **grid_overrides,
     }
+    risk_management = {
+        "take_profit": {
+            "enabled": False,
+            "threshold": 200,
+        },
+        "stop_loss": {
+            "enabled": False,
+            "threshold": 100,
+        },
+    }
+    if risk_management_overrides:
+        risk_management.update(risk_management_overrides)
     return {
         "exchange": {
             "name": "binance",
@@ -68,16 +82,7 @@ def _build_config_dict(strategy_type: str, spacing: str, **grid_overrides) -> di
             "historical_data_file": CSV_DATA_FILE,
         },
         "grid_strategy": grid_strategy,
-        "risk_management": {
-            "take_profit": {
-                "enabled": False,
-                "threshold": 200,
-            },
-            "stop_loss": {
-                "enabled": False,
-                "threshold": 100,
-            },
-        },
+        "risk_management": risk_management,
         "logging": {
             "log_level": "WARNING",
             "log_to_file": False,
@@ -89,8 +94,8 @@ def _build_config_dict(strategy_type: str, spacing: str, **grid_overrides) -> di
 def make_config_file(tmp_path):
     """Factory fixture that writes a config JSON to tmp_path and returns its path."""
 
-    def _make(strategy_type: str, spacing: str, **grid_overrides) -> str:
-        config_dict = _build_config_dict(strategy_type, spacing, **grid_overrides)
+    def _make(strategy_type: str, spacing: str, risk_management_overrides: dict | None = None, **grid_overrides) -> str:
+        config_dict = _build_config_dict(strategy_type, spacing, risk_management_overrides, **grid_overrides)
         suffix = "_".join(f"{k}{v}" for k, v in sorted(grid_overrides.items()))
         filename = f"config_{strategy_type}_{spacing}{'_' + suffix if suffix else ''}.json"
         config_path = tmp_path / filename
@@ -112,8 +117,8 @@ async def run_backtest_bot(make_config_file):
 
     bots_and_event_buses = []
 
-    async def _run(strategy_type: str, spacing: str, **grid_overrides):
-        config_path = make_config_file(strategy_type, spacing, **grid_overrides)
+    async def _run(strategy_type: str, spacing: str, risk_management_overrides: dict | None = None, **grid_overrides):
+        config_path = make_config_file(strategy_type, spacing, risk_management_overrides, **grid_overrides)
         config_manager = ConfigManager(config_path, ConfigValidator())
         event_bus = EventBus()
         notification_handler = NotificationHandler(event_bus, [], TradingMode.BACKTEST)

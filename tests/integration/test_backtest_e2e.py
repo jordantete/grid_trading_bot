@@ -246,3 +246,96 @@ async def test_asymmetric_ratio_reduces_sell_volume(strategy_type, spacing, run_
     assert asym_crypto >= sym_crypto, (
         f"Asymmetric crypto should be >= symmetric: asym={asym_crypto:.6f} vs sym={sym_crypto:.6f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ATR trailing stop-loss + dynamic spacing (feature-ON E2E)
+# ---------------------------------------------------------------------------
+
+ATR_TRAILING_STOP_LOSS = {
+    "enabled": True,
+    "atr_period": 14,
+    "atr_multiplier": 2.5,
+    "on_trigger": "regrid",
+}
+
+ATR_DYNAMIC_SPACING = {
+    "enabled": True,
+    "atr_period": 14,
+    "atr_spacing_multiplier": 1.0,
+    "regrid_threshold": 0.3,
+    "cooldown_bars": 60,
+}
+
+ATR_SNAPSHOT_NAME = "simple_grid_arithmetic_atr"
+
+
+def _run_atr_scenario(run_backtest_bot):
+    return run_backtest_bot(
+        "simple_grid",
+        "arithmetic",
+        risk_management_overrides={"trailing_stop_loss": ATR_TRAILING_STOP_LOSS},
+        dynamic_spacing=ATR_DYNAMIC_SPACING,
+    )
+
+
+@pytest.mark.integration
+async def test_atr_scenario_completes_without_error(run_backtest_bot):
+    """The bot runs with trailing stop-loss (on_trigger=regrid) + dynamic spacing enabled without crashing."""
+    _bot, result = await _run_atr_scenario(run_backtest_bot)
+
+    assert result is not None, "run() returned None — backtest did not produce results"
+    assert "performance_summary" in result
+    assert "orders" in result
+    assert len(result["orders"]) > 0, "No trades were executed during backtest"
+
+
+@pytest.mark.integration
+async def test_atr_scenario_balance_coherence(run_backtest_bot):
+    """After the ATR scenario backtest, balances are non-negative and reservations accounted for."""
+    bot, result = await _run_atr_scenario(run_backtest_bot)
+    bt = bot.balance_tracker
+    order_book = bot.strategy.order_manager.order_book
+
+    assert bt.balance >= 0, f"Fiat balance is negative: {bt.balance}"
+    assert bt.crypto_balance >= 0, f"Crypto balance is negative: {bt.crypto_balance}"
+    assert bt.reserved_fiat >= 0, f"Reserved fiat is negative: {bt.reserved_fiat}"
+    assert bt.reserved_crypto >= 0, f"Reserved crypto is negative: {bt.reserved_crypto}"
+
+    open_buy_orders = [o for o in order_book.get_all_buy_orders() if o.is_open()]
+    open_sell_orders = [o for o in order_book.get_all_sell_orders() if o.is_open()]
+
+    if not open_buy_orders:
+        assert bt.reserved_fiat == 0, f"Reserved fiat={bt.reserved_fiat} but no open buy orders"
+    if not open_sell_orders:
+        assert bt.reserved_crypto == 0, f"Reserved crypto={bt.reserved_crypto} but no open sell orders"
+
+    assert bt.get_adjusted_fiat_balance() >= 0, "Adjusted fiat balance is negative"
+    assert bt.get_adjusted_crypto_balance() >= 0, "Adjusted crypto balance is negative"
+
+    summary = result["performance_summary"]
+    reported_final = float(summary["Final Balance (Fiat)"].split()[0])
+    final_price = bot.strategy.close_prices[-1]
+    computed_total = bt.get_total_balance_value(final_price)
+    assert abs(computed_total - reported_final) < 0.02, (
+        f"Balance mismatch: tracker says {computed_total:.4f}, summary says {reported_final:.4f}"
+    )
+
+
+@pytest.mark.integration
+async def test_atr_scenario_deterministic_results(run_backtest_bot, snapshot_dir, update_snapshots):
+    """With identical config and CSV data, the ATR scenario backtest produces identical results."""
+    _bot, result = await _run_atr_scenario(run_backtest_bot)
+    actual = extract_snapshot_data(result["performance_summary"], result["orders"])
+
+    if update_snapshots:
+        save_snapshot(ATR_SNAPSHOT_NAME, actual, snapshot_dir)
+        pytest.skip(f"Snapshot updated for {ATR_SNAPSHOT_NAME}")
+
+    expected = load_snapshot(ATR_SNAPSHOT_NAME, snapshot_dir)
+    if expected is None:
+        save_snapshot(ATR_SNAPSHOT_NAME, actual, snapshot_dir)
+        pytest.skip(f"Snapshot created for {ATR_SNAPSHOT_NAME} (first run). Re-run to validate.")
+
+    diffs = compare_snapshots(actual, expected)
+    assert not diffs, f"Snapshot mismatch for {ATR_SNAPSHOT_NAME}:\n" + "\n".join(diffs)
