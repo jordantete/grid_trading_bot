@@ -48,3 +48,6 @@ site/
 # Project specific
 /data/
 logs/*
+
+# Superpowers working files (plans, specs)
+docs/superpowers/
