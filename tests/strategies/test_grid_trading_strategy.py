@@ -332,22 +332,21 @@ class TestGridTradingStrategy:
         )
 
     @pytest.mark.asyncio
-    async def test_initialize_grid_orders_once_first_time(self, setup_strategy):
+    async def test_initialize_grid_orders_once_arms_when_price_in_range(self, setup_strategy):
         create_strategy, _, _, grid_manager, order_manager, _, _, _, _ = setup_strategy
         strategy = create_strategy()
 
-        grid_manager.get_trigger_price.return_value = 15000
+        grid_manager.is_within_grid_range.return_value = True
         order_manager.perform_initial_purchase = AsyncMock()
         order_manager.initialize_grid_orders = AsyncMock()
 
         result = await strategy._initialize_grid_orders_once(
             current_price=15100,
-            trigger_price=15000,
             grid_orders_initialized=False,
-            last_price=14900,
         )
 
         assert result is True
+        grid_manager.is_within_grid_range.assert_called_once_with(15100)
         order_manager.perform_initial_purchase.assert_called_once_with(15100)
         order_manager.initialize_grid_orders.assert_called_once_with(15100)
 
@@ -419,9 +418,7 @@ class TestGridTradingStrategy:
 
         result = await strategy._initialize_grid_orders_once(
             current_price=15100,
-            trigger_price=15000,
             grid_orders_initialized=True,
-            last_price=14900,
         )
 
         assert result is True
@@ -429,18 +426,17 @@ class TestGridTradingStrategy:
         order_manager.initialize_grid_orders.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_initialize_grid_orders_once_no_last_price(self, setup_strategy):
-        create_strategy, _, _, _, order_manager, _, _, _, _ = setup_strategy
+    async def test_initialize_grid_orders_once_waits_while_price_out_of_range(self, setup_strategy):
+        create_strategy, _, _, grid_manager, order_manager, _, _, _, _ = setup_strategy
         strategy = create_strategy()
 
+        grid_manager.is_within_grid_range.return_value = False
         order_manager.perform_initial_purchase = AsyncMock()
         order_manager.initialize_grid_orders = AsyncMock()
 
         result = await strategy._initialize_grid_orders_once(
             current_price=15100,
-            trigger_price=15000,
             grid_orders_initialized=False,
-            last_price=None,
         )
 
         assert result is False
@@ -496,22 +492,22 @@ class TestGridTradingStrategy:
         assert strategy._running is False
 
     @pytest.mark.asyncio
-    async def test_initialize_grid_orders_once_trigger_price_equals_last_price(self, setup_strategy):
-        create_strategy, _, _, _, order_manager, _, _, _, _ = setup_strategy
+    async def test_initialize_grid_orders_once_skips_initial_purchase_on_recovery(self, setup_strategy):
+        create_strategy, _, _, grid_manager, order_manager, _, _, _, _ = setup_strategy
         strategy = create_strategy()
 
+        grid_manager.is_within_grid_range.return_value = True
         order_manager.perform_initial_purchase = AsyncMock()
         order_manager.initialize_grid_orders = AsyncMock()
 
         result = await strategy._initialize_grid_orders_once(
             current_price=15000,
-            trigger_price=15000,
             grid_orders_initialized=False,
-            last_price=15000,
+            skip_initial_purchase=True,
         )
 
         assert result is True
-        order_manager.perform_initial_purchase.assert_called_once_with(15000)
+        order_manager.perform_initial_purchase.assert_not_called()
         order_manager.initialize_grid_orders.assert_called_once_with(15000)
 
     @pytest.mark.asyncio

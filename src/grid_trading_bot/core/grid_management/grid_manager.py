@@ -131,6 +131,10 @@ class GridManager:
     def get_trigger_price(self) -> float:
         return self.central_price
 
+    def is_within_grid_range(self, price: float) -> bool:
+        """Returns True when price falls inside the grid's [bottom, top] price range (bounds included)."""
+        return self._sorted_prices[0] <= price <= self._sorted_prices[-1]
+
     def get_order_size_for_grid_level(
         self,
         total_balance: float,

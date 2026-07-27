@@ -147,26 +147,21 @@ class GridTradingStrategy(TradingStrategyInterface):
         """
         self._running = True
         self.data = await self._initialize_historical_data()
-        trigger_price = self.grid_manager.get_trigger_price() if self.grid_manager.is_initialized else None
 
         if self.trading_mode == TradingMode.BACKTEST:
             self._precompute_backtest_atr()
             start_index = self._initialize_dynamic_grid_backtest()
-            if trigger_price is None:
-                trigger_price = self.grid_manager.get_trigger_price()
-            await self._run_backtest(trigger_price, start_index)
+            await self._run_backtest(start_index)
             self.logger.info("Ending backtest simulation")
             self._running = False
         else:
             await self._run_live_or_paper_trading(
-                trigger_price,
                 skip_initial_purchase=skip_initial_purchase,
                 skip_grid_init=skip_grid_init,
             )
 
     async def _run_live_or_paper_trading(
         self,
-        trigger_price: float,
         skip_initial_purchase: bool = False,
         skip_grid_init: bool = False,
     ):
@@ -174,10 +169,9 @@ class GridTradingStrategy(TradingStrategyInterface):
         Executes live or paper trading sessions based on real-time ticker updates.
 
         The method listens for ticker updates, initializes grid orders when
-        the trigger price is reached, and manages take-profit and stop-loss events.
+        the price is inside the grid range, and manages take-profit and stop-loss events.
 
         Args:
-            trigger_price (float): The price at which grid orders are triggered.
             skip_initial_purchase: If True, skip initial purchase on grid init (recovery).
             skip_grid_init: If True, mark grid orders as already initialized (recovery).
         """
@@ -190,14 +184,12 @@ class GridTradingStrategy(TradingStrategyInterface):
             atr = ATRCalculator.compute(candles, period)
             current_price = await self.exchange_service.get_current_price(self.trading_pair)
             self.grid_manager.regrid(current_price, atr)
-            trigger_price = self.grid_manager.get_trigger_price()
             self.logger.info(f"Initial dynamic grid built live (center {current_price}, ATR {atr}).")
 
-        last_price: float | None = None
         grid_orders_initialized = skip_grid_init
 
         async def on_ticker_update(current_price):
-            nonlocal last_price, grid_orders_initialized
+            nonlocal grid_orders_initialized
             try:
                 if not self._running:
                     self.logger.info("Trading stopped; halting price updates.")
@@ -208,14 +200,11 @@ class GridTradingStrategy(TradingStrategyInterface):
 
                 grid_orders_initialized = await self._initialize_grid_orders_once(
                     current_price,
-                    trigger_price,
                     grid_orders_initialized,
-                    last_price,
                     skip_initial_purchase=skip_initial_purchase,
                 )
 
                 if not grid_orders_initialized:
-                    last_price = current_price
                     return
 
                 fresh_candle = await self._maybe_refresh_live_atr(pd.Timestamp.now())
@@ -239,8 +228,6 @@ class GridTradingStrategy(TradingStrategyInterface):
                     )
                     await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
 
-                last_price = current_price
-
             except Exception as e:
                 self.logger.error(f"Error during ticker update: {e}", exc_info=True)
 
@@ -257,7 +244,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         finally:
             self.logger.info("Exiting live/paper trading loop.")
 
-    async def _run_backtest(self, trigger_price: float, start_index: int = 0) -> None:
+    async def _run_backtest(self, start_index: int = 0) -> None:
         """
         Executes the backtesting simulation based on historical OHLCV data.
 
@@ -265,7 +252,6 @@ class GridTradingStrategy(TradingStrategyInterface):
         executing orders, and updating account values over the timeframe.
 
         Args:
-            trigger_price (float): The price at which grid orders are triggered.
             start_index (int): Candle index at which trading may start (ATR warm-up for dynamic grids).
         """
         if self.data is None:
@@ -282,7 +268,6 @@ class GridTradingStrategy(TradingStrategyInterface):
             price=self.close_prices[0],
         )
         grid_orders_initialized = False
-        last_price = None
 
         for i, (current_price, high_price, low_price, timestamp) in enumerate(
             zip(self.close_prices, high_prices, low_prices, timestamps, strict=False),
@@ -291,21 +276,17 @@ class GridTradingStrategy(TradingStrategyInterface):
                 self.data.loc[timestamps[i], "account_value"] = self.balance_tracker.get_total_balance_value(
                     price=current_price,
                 )
-                last_price = current_price
                 continue
 
             grid_orders_initialized = await self._initialize_grid_orders_once(
                 current_price,
-                trigger_price,
                 grid_orders_initialized,
-                last_price,
             )
 
             if not grid_orders_initialized:
                 self.data.loc[timestamps[i], "account_value"] = self.balance_tracker.get_total_balance_value(
                     price=current_price,
                 )
-                last_price = current_price
                 continue
 
             await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
@@ -321,18 +302,16 @@ class GridTradingStrategy(TradingStrategyInterface):
             await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
 
             self.data.loc[timestamp, "account_value"] = self.balance_tracker.get_total_balance_value(current_price)
-            last_price = current_price
 
     async def _initialize_grid_orders_once(
         self,
         current_price: float,
-        trigger_price: float,
         grid_orders_initialized: bool,
-        last_price: float | None = None,
         skip_initial_purchase: bool = False,
     ) -> bool:
         """
-        Performs the initial purchase and grid order setup when the trigger price is first crossed.
+        Performs the initial purchase and grid order setup the first time the price
+        is inside the grid's price range (at startup or when entering it from either side).
 
         Returns:
             bool: True if grid orders have been initialized, False otherwise.
@@ -340,29 +319,22 @@ class GridTradingStrategy(TradingStrategyInterface):
         if grid_orders_initialized:
             return True
 
-        if last_price is None:
-            self.logger.debug("No previous price recorded yet. Waiting for the next price update.")
+        if not self.grid_manager.is_within_grid_range(current_price):
+            self.logger.debug(f"Current price {current_price} is outside the grid range. Waiting.")
             return False
 
-        if last_price <= trigger_price <= current_price or last_price == trigger_price:
-            if not skip_initial_purchase:
-                self.logger.info(
-                    f"Current price {current_price} reached trigger price {trigger_price}. "
-                    f"Will perform initial purchase",
-                )
-                await self.order_manager.perform_initial_purchase(current_price)
-                await self.event_bus.publish(Events.INITIAL_PURCHASE_DONE, None)
-            else:
-                self.logger.info("Skipping initial purchase (recovered from persisted state).")
-            self.logger.info("Initial purchase done, will initialize grid orders")
-            await self.order_manager.initialize_grid_orders(current_price)
-            await self.event_bus.publish(Events.GRID_ORDERS_INITIALIZED, None)
-            return True
-
-        self.logger.debug(
-            f"Current price {current_price} did not cross trigger price {trigger_price}. Last price: {last_price}.",
-        )
-        return False
+        if not skip_initial_purchase:
+            self.logger.info(
+                f"Current price {current_price} is within the grid range. Will perform initial purchase",
+            )
+            await self.order_manager.perform_initial_purchase(current_price)
+            await self.event_bus.publish(Events.INITIAL_PURCHASE_DONE, None)
+        else:
+            self.logger.info("Skipping initial purchase (recovered from persisted state).")
+        self.logger.info("Initial purchase done, will initialize grid orders")
+        await self.order_manager.initialize_grid_orders(current_price)
+        await self.event_bus.publish(Events.GRID_ORDERS_INITIALIZED, None)
+        return True
 
     def generate_performance_report(self) -> tuple[dict, list]:
         """

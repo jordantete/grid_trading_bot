@@ -55,6 +55,23 @@ class TestGridManager:
         grid_manager.initialize_grids_and_levels()
         assert grid_manager.get_trigger_price() == grid_manager.central_price
 
+    def test_is_within_grid_range_inside(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        assert grid_manager.is_within_grid_range(1500) is True
+
+    def test_is_within_grid_range_at_bounds(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        assert grid_manager.is_within_grid_range(1000) is True
+        assert grid_manager.is_within_grid_range(2000) is True
+
+    def test_is_within_grid_range_below_bottom(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        assert grid_manager.is_within_grid_range(999.99) is False
+
+    def test_is_within_grid_range_above_top(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        assert grid_manager.is_within_grid_range(2000.01) is False
+
     def test_get_order_size_for_grid_level(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
         current_price = 2000
