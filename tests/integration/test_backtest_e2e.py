@@ -51,6 +51,19 @@ async def test_backtest_completes_without_error(strategy_type, spacing, run_back
     assert len(result["orders"]) > 0, "No trades were executed during backtest"
 
 
+@pytest.mark.integration
+async def test_backtest_trades_when_price_stays_above_grid_center(run_backtest_bot):
+    """Regression: a market holding above the grid's central price but inside the
+    range must still arm the grid and trade. The old upward-trigger-crossing rule
+    idled forever in this situation (observed as 500/500 zero-trade walk-forward
+    test windows in grid_sweep)."""
+    _bot, result = await run_backtest_bot("simple_grid", "arithmetic", range={"top": 175, "bottom": 120})
+
+    assert len(result["orders"]) > 0, (
+        "Grid never armed: no trades although the price stayed inside the grid range the whole backtest"
+    )
+
+
 # ---------------------------------------------------------------------------
 # V2: Balance coherence after backtest
 # ---------------------------------------------------------------------------
