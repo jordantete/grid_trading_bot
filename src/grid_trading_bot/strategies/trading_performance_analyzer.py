@@ -9,8 +9,11 @@ from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.core.grid_management.grid_level import GridLevel
 from grid_trading_bot.core.order_handling.order import Order
 from grid_trading_bot.core.order_handling.order_book import OrderBook
+from grid_trading_bot.utils.constants import TIMEFRAME_MAPPINGS
 
 ANNUAL_RISK_FREE_RATE = 0.03  # annual risk free rate 3%
+MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000  # crypto trades 24/7, so a full calendar year
+MIN_STD_DEV = 1e-9  # below this, volatility is float noise on a flat account value
 
 
 class TradingPerformanceAnalyzer:
@@ -102,9 +105,14 @@ class TradingPerformanceAnalyzer:
         time_in_loss = (data["account_value"] <= initial_balance).mean() * 100
         return time_in_profit, time_in_loss
 
+    def _periods_per_year(self) -> float:
+        """Number of candles in a year for the configured timeframe (crypto trades 24/7)."""
+        return MS_PER_YEAR / TIMEFRAME_MAPPINGS[self.config_manager.get_timeframe()]
+
     def _calculate_sharpe_ratio(self, data: pd.DataFrame) -> float:
         """
-        Calculate the Sharpe ratio based on the account value.
+        Calculate the annualized Sharpe ratio based on the account value,
+        using per-candle returns at the configured timeframe.
 
         Args:
             data (pd.DataFrame): Historical account value data.
@@ -112,17 +120,19 @@ class TradingPerformanceAnalyzer:
         Returns:
             float: The Sharpe ratio.
         """
+        periods_per_year = self._periods_per_year()
         returns = data["account_value"].pct_change()
-        excess_returns = returns - ANNUAL_RISK_FREE_RATE / 252  # Adjusted daily
+        excess_returns = returns - ANNUAL_RISK_FREE_RATE / periods_per_year
         std_dev = excess_returns.std()
-        if std_dev == 0:
+        if not std_dev > MIN_STD_DEV:  # also catches NaN
             return 0.0
-        sharpe_ratio = excess_returns.mean() / std_dev * np.sqrt(252)
+        sharpe_ratio = excess_returns.mean() / std_dev * np.sqrt(periods_per_year)
         return round(sharpe_ratio, 2)
 
     def _calculate_sortino_ratio(self, data: pd.DataFrame) -> float:
         """
-        Calculate the Sortino ratio based on the account value.
+        Calculate the annualized Sortino ratio based on the account value,
+        using per-candle returns at the configured timeframe.
 
         Args:
             data (pd.DataFrame): Historical account value data.
@@ -130,14 +140,16 @@ class TradingPerformanceAnalyzer:
         Returns:
             float: The Sortino ratio.
         """
+        periods_per_year = self._periods_per_year()
         returns = data["account_value"].pct_change()
-        excess_returns = returns - ANNUAL_RISK_FREE_RATE / 252  # Adjusted daily
+        excess_returns = returns - ANNUAL_RISK_FREE_RATE / periods_per_year
         downside_returns = excess_returns[excess_returns < 0]
+        downside_std = downside_returns.std()
 
-        if len(downside_returns) == 0 or downside_returns.std() == 0:
-            return round(excess_returns.mean() * np.sqrt(252), 2)  # Positive ratio if no downside
+        if len(downside_returns) == 0 or not downside_std > MIN_STD_DEV:
+            return round(excess_returns.mean() * np.sqrt(periods_per_year), 2)  # Positive ratio if no downside
 
-        sortino_ratio = excess_returns.mean() / downside_returns.std() * np.sqrt(252)
+        sortino_ratio = excess_returns.mean() / downside_std * np.sqrt(periods_per_year)
         return round(sortino_ratio, 2)
 
     def get_formatted_orders(self) -> list[list[str | float]]:

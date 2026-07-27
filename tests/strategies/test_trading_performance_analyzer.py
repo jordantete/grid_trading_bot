@@ -17,6 +17,7 @@ class TestPerformanceAnalyzer:
         config_manager.get_base_currency.return_value = "BTC"
         config_manager.get_quote_currency.return_value = "USDT"
         config_manager.get_trading_fee.return_value = 0.001
+        config_manager.get_timeframe.return_value = "1d"
         order_book = Mock()
         analyzer = TradingPerformanceAnalyzer(config_manager, order_book)
         return analyzer, config_manager, order_book
@@ -92,6 +93,51 @@ class TestPerformanceAnalyzer:
         )
         sharpe_ratio = analyzer._calculate_sharpe_ratio(data)
         assert sharpe_ratio == 0.0  # Expected Sharpe ratio to be 0 when there is no volatility
+
+    def test_calculate_sharpe_ratio_near_flat_account_value_is_zero(self, setup_performance_analyzer):
+        """Float noise on a flat account value must not bypass the zero-volatility
+        guard (an exact == 0 check let std ~ 1e-14 produce Sharpe values of +/-1e16)."""
+        analyzer, _, _ = setup_performance_analyzer
+        data = pd.DataFrame(
+            {"account_value": [10000.0, 10000.00000001, 10000.0, 10000.00000001, 10000.0]},
+            index=pd.date_range("2024-01-01", periods=5, freq="1D"),
+        )
+        sharpe_ratio = analyzer._calculate_sharpe_ratio(data)
+        assert sharpe_ratio == 0.0
+
+    def test_calculate_sharpe_ratio_annualizes_by_timeframe(self, setup_performance_analyzer):
+        """The same return series sampled on 1m bars must annualize ~sqrt(1440) higher
+        than on 1d bars (the old code always used the daily sqrt(252) factor)."""
+        analyzer, config_manager, _ = setup_performance_analyzer
+        data = pd.DataFrame(
+            {"account_value": [10000, 10100, 10050, 10200, 10150, 10300]},
+            index=pd.date_range("2024-01-01", periods=6, freq="1D"),
+        )
+
+        config_manager.get_timeframe.return_value = "1d"
+        sharpe_daily = analyzer._calculate_sharpe_ratio(data)
+
+        config_manager.get_timeframe.return_value = "1m"
+        sharpe_minute = analyzer._calculate_sharpe_ratio(data)
+
+        assert sharpe_daily != 0.0
+        assert sharpe_minute == pytest.approx(sharpe_daily * (1440**0.5), rel=0.05)
+
+    def test_calculate_sortino_ratio_annualizes_by_timeframe(self, setup_performance_analyzer):
+        analyzer, config_manager, _ = setup_performance_analyzer
+        data = pd.DataFrame(
+            {"account_value": [10000, 10100, 10050, 10200, 10150, 10300]},
+            index=pd.date_range("2024-01-01", periods=6, freq="1D"),
+        )
+
+        config_manager.get_timeframe.return_value = "1d"
+        sortino_daily = analyzer._calculate_sortino_ratio(data)
+
+        config_manager.get_timeframe.return_value = "1m"
+        sortino_minute = analyzer._calculate_sortino_ratio(data)
+
+        assert sortino_daily != 0.0
+        assert sortino_minute == pytest.approx(sortino_daily * (1440**0.5), rel=0.05)
 
     def test_get_formatted_orders(self, setup_performance_analyzer):
         analyzer, _, order_book = setup_performance_analyzer
