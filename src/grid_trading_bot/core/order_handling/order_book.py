@@ -51,13 +51,23 @@ class OrderBook:
         return list(self._open_orders)
 
     def remove_open_order(self, order: Order) -> None:
-        self._open_orders.discard(order)
+        if order in self._open_orders:
+            self._open_orders.discard(order)
+            return
+        local = self._orders_by_id.get(order.identifier) if order.identifier else None
+        if local is not None:
+            self._open_orders.discard(local)
 
     def get_completed_orders(self) -> list[Order]:
         return [order for order in chain(self.buy_orders, self.sell_orders) if order.is_filled()]
 
     def get_grid_level_for_order(self, order: Order) -> GridLevel | None:
-        return self.order_to_grid_map.get(order)
+        grid_level = self.order_to_grid_map.get(order)
+        if grid_level is None and order.identifier:
+            local = self._orders_by_id.get(order.identifier)
+            if local is not None:
+                grid_level = self.order_to_grid_map.get(local)
+        return grid_level
 
     def update_order_status(
         self,

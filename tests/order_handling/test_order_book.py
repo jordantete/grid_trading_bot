@@ -2,8 +2,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from grid_trading_bot.core.grid_management.grid_level import GridLevel
-from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus
+from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
+from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 
 
@@ -135,3 +135,51 @@ class TestOrderBook:
         order_book.update_order_status("nonexistent_order", OrderStatus.CLOSED)
 
         assert order.status == OrderStatus.OPEN  # Ensure no changes for non-existent orders
+
+
+def _make_order(identifier="ord-1", side=OrderSide.BUY, status=OrderStatus.OPEN):
+    return Order(
+        identifier=identifier,
+        status=status,
+        order_type=OrderType.LIMIT,
+        side=side,
+        price=100.0,
+        average=None,
+        amount=1.0,
+        filled=0.0,
+        remaining=1.0,
+        timestamp=0,
+        datetime=None,
+        last_trade_timestamp=None,
+        symbol="SOL/USDT",
+        time_in_force="GTC",
+    )
+
+
+class TestRemoteOrderLookup:
+    def test_get_grid_level_falls_back_to_identifier(self):
+        book = OrderBook()
+        grid_level = GridLevel(price=100.0, state=GridCycleState.WAITING_FOR_BUY_FILL)
+        local = _make_order(identifier="abc")
+        book.add_order(local, grid_level)
+        remote = _make_order(identifier="abc")  # distinct object, same exchange id
+        assert book.get_grid_level_for_order(remote) is grid_level
+
+    def test_get_grid_level_identity_stays_primary(self):
+        book = OrderBook()
+        gl1 = GridLevel(price=100.0, state=GridCycleState.WAITING_FOR_BUY_FILL)
+        gl2 = GridLevel(price=110.0, state=GridCycleState.WAITING_FOR_BUY_FILL)
+        first = _make_order(identifier="dup")
+        second = _make_order(identifier="dup")  # backtest ids can collide
+        book.add_order(first, gl1)
+        book.add_order(second, gl2)
+        assert book.get_grid_level_for_order(first) is gl1
+        assert book.get_grid_level_for_order(second) is gl2
+
+    def test_remove_open_order_falls_back_to_identifier(self):
+        book = OrderBook()
+        local = _make_order(identifier="abc")
+        book.add_order(local)
+        remote = _make_order(identifier="abc")
+        book.remove_open_order(remote)
+        assert local not in book.get_open_orders()
