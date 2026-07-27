@@ -7,11 +7,39 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
-from grid_trading_bot.core.order_handling.order import OrderSide
+from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.validation.exceptions import (
     InsufficientBalanceError,
     InsufficientCryptoBalanceError,
 )
+
+
+def _make_order(
+    side: OrderSide,
+    price: float = 100.0,
+    average: float | None = None,
+    amount: float = 1.0,
+    filled: float = 1.0,
+    remaining: float = 0.0,
+    order_type: OrderType = OrderType.LIMIT,
+    status: OrderStatus = OrderStatus.OPEN,
+) -> Order:
+    return Order(
+        identifier="order-1",
+        status=status,
+        order_type=order_type,
+        side=side,
+        price=price,
+        average=average,
+        amount=amount,
+        filled=filled,
+        remaining=remaining,
+        timestamp=0,
+        datetime=None,
+        last_trade_timestamp=None,
+        symbol="BTC/USDT",
+        time_in_force=None,
+    )
 
 
 class TestBalanceTracker:
@@ -301,3 +329,80 @@ class TestBalanceTracker:
 
         assert balance_tracker.crypto_balance == 5
         assert balance_tracker.reserved_crypto == 0
+
+
+@pytest.fixture
+def balance_tracker():
+    event_bus = Mock(spec=EventBus)
+    fee_calculator = Mock(spec=FeeCalculator)
+    fee_calculator.calculate_fee.side_effect = lambda amount: amount * 0.001
+    bt = BalanceTracker(
+        event_bus=event_bus,
+        fee_calculator=fee_calculator,
+        trading_mode=TradingMode.LIVE,
+        base_currency="BTC",
+        quote_currency="USDT",
+    )
+    bt._balance = Decimal("1000")
+    return bt
+
+
+@pytest.fixture
+def balance_tracker_with_crypto(balance_tracker):
+    balance_tracker._crypto_balance = Decimal("2.0")
+    balance_tracker._balance = Decimal("0")
+    return balance_tracker
+
+
+class TestSettleCancelledOrder:
+    async def test_zero_fill_buy_releases_full_reservation(self, balance_tracker):
+        initial_balance = balance_tracker.balance
+        await balance_tracker.reserve_funds_for_buy(100.0)
+        order = _make_order(side=OrderSide.BUY, price=100.0, amount=1.0, filled=0.0, remaining=1.0)
+
+        await balance_tracker.settle_cancelled_order(order)
+
+        assert balance_tracker.reserved_fiat == 0.0
+        assert balance_tracker.balance == pytest.approx(initial_balance)
+
+    async def test_partial_fill_buy_credits_crypto_and_releases_remainder(self, balance_tracker):
+        await balance_tracker.reserve_funds_for_buy(100.0)
+        order = _make_order(side=OrderSide.BUY, price=100.0, average=100.0, amount=1.0, filled=0.4, remaining=0.6)
+
+        await balance_tracker.settle_cancelled_order(order)
+
+        assert balance_tracker.crypto_balance == pytest.approx(0.4)
+        # reserved consumed for the filled 40 (+fee) and released for the remaining 60
+        assert balance_tracker.reserved_fiat == pytest.approx(0.0, abs=1e-6)
+
+    async def test_partial_fill_sell_credits_fiat_and_releases_remainder(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto  # 2.0 crypto, 0 fiat
+        await bt.reserve_funds_for_sell(1.0)
+        order = _make_order(side=OrderSide.SELL, price=100.0, average=100.0, amount=1.0, filled=0.3, remaining=0.7)
+
+        await bt.settle_cancelled_order(order)
+
+        assert bt.reserved_crypto == pytest.approx(0.0, abs=1e-8)
+        assert bt.crypto_balance == pytest.approx(1.7)
+        assert bt.balance > 0  # proceeds of 0.3 * 100 minus fee
+
+
+class TestUpdateAfterLiquidation:
+    async def test_liquidation_credits_proceeds_and_debits_crypto(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto
+        order = _make_order(
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.CLOSED,
+            price=100.0,
+            average=99.0,
+            amount=2.0,
+            filled=2.0,
+            remaining=0.0,
+        )
+
+        await bt.update_after_liquidation(order)
+
+        fee = bt.fee_calculator.calculate_fee(2.0 * 99.0)
+        assert bt.balance == pytest.approx(2.0 * 99.0 - fee)
+        assert bt.crypto_balance == 0.0

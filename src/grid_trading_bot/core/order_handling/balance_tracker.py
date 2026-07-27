@@ -273,6 +273,20 @@ class BalanceTracker:
                 f"Reserved {quantity} crypto for a sell order. Remaining crypto balance: {self._crypto_balance}.",
             )
 
+    def _release_fiat_unlocked(self, amount: float) -> None:
+        """Sync body of `release_reserved_fiat`, callable from within a held lock."""
+        d_amount = self._to_decimal(amount)
+        if d_amount > self._reserved_fiat:
+            self.logger.warning(
+                f"Attempted to release {amount} fiat but only {self._reserved_fiat} reserved. "
+                f"Releasing all reserved fiat.",
+            )
+            d_amount = self._reserved_fiat
+
+        self._reserved_fiat = (self._reserved_fiat - d_amount).quantize(_QUANTIZE_EXP)
+        self._balance = (self._balance + d_amount).quantize(_QUANTIZE_EXP)
+        self.logger.info(f"Released {d_amount} reserved fiat. Available fiat balance: {self._balance}.")
+
     async def release_reserved_fiat(self, amount: float) -> None:
         """
         Releases reserved fiat back to available balance.
@@ -281,17 +295,23 @@ class BalanceTracker:
             amount: The amount of fiat to release from reserved.
         """
         async with self._lock:
-            d_amount = self._to_decimal(amount)
-            if d_amount > self._reserved_fiat:
-                self.logger.warning(
-                    f"Attempted to release {amount} fiat but only {self._reserved_fiat} reserved. "
-                    f"Releasing all reserved fiat.",
-                )
-                d_amount = self._reserved_fiat
+            self._release_fiat_unlocked(amount)
 
-            self._reserved_fiat = (self._reserved_fiat - d_amount).quantize(_QUANTIZE_EXP)
-            self._balance = (self._balance + d_amount).quantize(_QUANTIZE_EXP)
-            self.logger.info(f"Released {d_amount} reserved fiat. Available fiat balance: {self._balance}.")
+    def _release_crypto_unlocked(self, quantity: float) -> None:
+        """Sync body of `release_reserved_crypto`, callable from within a held lock."""
+        d_quantity = self._to_decimal(quantity)
+        if d_quantity > self._reserved_crypto:
+            self.logger.warning(
+                f"Attempted to release {quantity} crypto but only {self._reserved_crypto} reserved. "
+                f"Releasing all reserved crypto.",
+            )
+            d_quantity = self._reserved_crypto
+
+        self._reserved_crypto = (self._reserved_crypto - d_quantity).quantize(_QUANTIZE_EXP)
+        self._crypto_balance = (self._crypto_balance + d_quantity).quantize(_QUANTIZE_EXP)
+        self.logger.info(
+            f"Released {d_quantity} reserved crypto. Available crypto balance: {self._crypto_balance}.",
+        )
 
     async def release_reserved_crypto(self, quantity: float) -> None:
         """
@@ -301,19 +321,58 @@ class BalanceTracker:
             quantity: The quantity of crypto to release from reserved.
         """
         async with self._lock:
-            d_quantity = self._to_decimal(quantity)
-            if d_quantity > self._reserved_crypto:
-                self.logger.warning(
-                    f"Attempted to release {quantity} crypto but only {self._reserved_crypto} reserved. "
-                    f"Releasing all reserved crypto.",
-                )
-                d_quantity = self._reserved_crypto
+            self._release_crypto_unlocked(quantity)
 
-            self._reserved_crypto = (self._reserved_crypto - d_quantity).quantize(_QUANTIZE_EXP)
-            self._crypto_balance = (self._crypto_balance + d_quantity).quantize(_QUANTIZE_EXP)
-            self.logger.info(
-                f"Released {d_quantity} reserved crypto. Available crypto balance: {self._crypto_balance}.",
-            )
+    async def settle_cancelled_order(self, order: Order) -> None:
+        """
+        Settles a cancelled order: accounts the filled portion (credit crypto / fiat,
+        consume the matching reservation, track fees) and releases the reservation
+        still held for the unfilled remainder. A zero-fill cancel reduces to a pure release.
+
+        Args:
+            order: The cancelled Order, possibly partially filled.
+        """
+        async with self._lock:
+            filled = order.filled or 0.0
+            remaining = order.remaining or 0.0
+            fill_price = order.average if order.average is not None else order.price
+            if order.side == OrderSide.BUY:
+                if filled > 0:
+                    self._update_after_buy_order_filled(filled, fill_price)
+                if remaining > 0:
+                    self._release_fiat_unlocked(remaining * order.price)
+            elif order.side == OrderSide.SELL:
+                if filled > 0:
+                    self._update_after_sell_order_filled(filled, fill_price)
+                if remaining > 0:
+                    self._release_crypto_unlocked(remaining)
+
+    async def update_after_liquidation(self, order: Order) -> None:
+        """
+        Updates balances after a liquidation market sell (TP/SL/trailing/shutdown).
+        Mirror of update_after_initial_purchase: closed market orders never enter the
+        open-order tracking, so ORDER_FILLED is never published for them.
+
+        Args:
+            order: The CLOSED market SELL order.
+        """
+        async with self._lock:
+            if order.status != OrderStatus.CLOSED:
+                raise ValueError(f"Order {order.identifier} is not CLOSED. Cannot update balances.")
+
+            fill_price = order.average if order.average is not None else order.price
+            d_filled = self._to_decimal(order.filled)
+            d_price = self._to_decimal(fill_price)
+            fee = self._to_decimal(self.fee_calculator.calculate_fee(order.filled * fill_price))
+            proceeds = (d_filled * d_price - fee).quantize(_QUANTIZE_EXP)
+
+            self._crypto_balance = (self._crypto_balance - d_filled).quantize(_QUANTIZE_EXP)
+            if self._crypto_balance < 0:
+                self._crypto_balance = Decimal("0")
+
+            self._balance = (self._balance + proceeds).quantize(_QUANTIZE_EXP)
+            self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)
+            self._log_balance_update(fill_price)
 
     def _log_balance_update(self, price: float) -> None:
         """Logs a consistent balance snapshot after every balance-changing event."""
