@@ -141,10 +141,11 @@ class BalanceTracker:
                 (BUY/SELL), filled quantity, and price.
         """
         async with self._lock:
+            fill_price = order.average if order.average is not None else order.price
             if order.side == OrderSide.BUY:
-                self._update_after_buy_order_filled(order.filled, order.price)
+                self._update_after_buy_order_filled(order.filled, fill_price)
             elif order.side == OrderSide.SELL:
-                self._update_after_sell_order_filled(order.filled, order.price)
+                self._update_after_sell_order_filled(order.filled, fill_price)
 
     def _update_after_buy_order_filled(
         self,

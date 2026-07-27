@@ -73,12 +73,14 @@ class TradingPerformanceAnalyzer:
         closed_sell_orders = [order for order in self.order_book.get_all_sell_orders() if order.is_filled()]
 
         for buy_order in closed_buy_orders:
-            trade_value = buy_order.amount * buy_order.price
+            fill_price = buy_order.average if buy_order.average is not None else buy_order.price
+            trade_value = buy_order.amount * fill_price
             buy_fee = buy_order.fee.get("cost", 0.0) if buy_order.fee else 0.0
             total_buy_cost += trade_value + buy_fee
 
         for sell_order in closed_sell_orders:
-            trade_value = sell_order.amount * sell_order.price
+            fill_price = sell_order.average if sell_order.average is not None else sell_order.price
+            trade_value = sell_order.amount * fill_price
             sell_fee = sell_order.fee.get("cost", 0.0) if sell_order.fee else 0.0
             total_sell_revenue += trade_value - sell_fee
 

@@ -38,7 +38,11 @@ def snapshot_dir():
 
 
 def _build_config_dict(
-    strategy_type: str, spacing: str, risk_management_overrides: dict | None = None, **grid_overrides
+    strategy_type: str,
+    spacing: str,
+    risk_management_overrides: dict | None = None,
+    execution: dict | None = None,
+    **grid_overrides,
 ) -> dict:
     grid_strategy = {
         "type": strategy_type,
@@ -62,7 +66,7 @@ def _build_config_dict(
     }
     if risk_management_overrides:
         risk_management.update(risk_management_overrides)
-    return {
+    config = {
         "exchange": {
             "name": "binance",
             "trading_fee": 0.001,
@@ -88,15 +92,27 @@ def _build_config_dict(
             "log_to_file": False,
         },
     }
+    if execution:
+        config["execution"] = execution
+    return config
 
 
 @pytest.fixture
 def make_config_file(tmp_path):
     """Factory fixture that writes a config JSON to tmp_path and returns its path."""
 
-    def _make(strategy_type: str, spacing: str, risk_management_overrides: dict | None = None, **grid_overrides) -> str:
-        config_dict = _build_config_dict(strategy_type, spacing, risk_management_overrides, **grid_overrides)
-        suffix = "_".join(f"{k}{v}" for k, v in sorted(grid_overrides.items()))
+    def _make(
+        strategy_type: str,
+        spacing: str,
+        risk_management_overrides: dict | None = None,
+        execution: dict | None = None,
+        **grid_overrides,
+    ) -> str:
+        config_dict = _build_config_dict(strategy_type, spacing, risk_management_overrides, execution, **grid_overrides)
+        suffix_parts = [f"{k}{v}" for k, v in sorted(grid_overrides.items())]
+        if execution:
+            suffix_parts.append("_".join(f"{k}{v}" for k, v in sorted(execution.items())))
+        suffix = "_".join(suffix_parts)
         filename = f"config_{strategy_type}_{spacing}{'_' + suffix if suffix else ''}.json"
         config_path = tmp_path / filename
         config_path.write_text(json.dumps(config_dict, indent=2))
@@ -117,8 +133,14 @@ async def run_backtest_bot(make_config_file):
 
     bots_and_event_buses = []
 
-    async def _run(strategy_type: str, spacing: str, risk_management_overrides: dict | None = None, **grid_overrides):
-        config_path = make_config_file(strategy_type, spacing, risk_management_overrides, **grid_overrides)
+    async def _run(
+        strategy_type: str,
+        spacing: str,
+        risk_management_overrides: dict | None = None,
+        execution: dict | None = None,
+        **grid_overrides,
+    ):
+        config_path = make_config_file(strategy_type, spacing, risk_management_overrides, execution, **grid_overrides)
         config_manager = ConfigManager(config_path, ConfigValidator())
         event_bus = EventBus()
         notification_handler = NotificationHandler(event_bus, [], TradingMode.BACKTEST)

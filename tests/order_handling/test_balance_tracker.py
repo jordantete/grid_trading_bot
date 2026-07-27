@@ -117,19 +117,40 @@ class TestBalanceTracker:
         balance_tracker._crypto_balance = Decimal("5")
         fee_calculator.calculate_fee.return_value = 5  # Mock fee calculation
 
-        buy_order = Mock(side=OrderSide.BUY, filled=1, price=100)
+        buy_order = Mock(side=OrderSide.BUY, filled=1, price=100, average=None)
         balance_tracker._reserved_fiat = Decimal("105")  # Reserved fiat for the buy order (price + fee)
         await balance_tracker._update_balance_on_order_completion(buy_order)
         assert balance_tracker.crypto_balance == 6  # Crypto balance increases by 1
         assert balance_tracker.total_fees == 5  # Total fees reflect the buy order fee
         assert balance_tracker.reserved_fiat == 0  # Reserved fiat should be fully consumed
 
-        sell_order = Mock(side=OrderSide.SELL, filled=1, price=200)
+        sell_order = Mock(side=OrderSide.SELL, filled=1, price=200, average=None)
         balance_tracker._reserved_crypto = Decimal("1")  # Reserved crypto for the sell order
         await balance_tracker._update_balance_on_order_completion(sell_order)
         assert balance_tracker.total_fees == 10  # Total fees include the sell order fee
         assert balance_tracker.reserved_crypto == 0  # Reserved crypto should be fully consumed
         assert balance_tracker.balance == 1195  # Remaining balance after the sell order
+
+    @pytest.mark.asyncio
+    async def test_update_balance_on_order_completion_uses_average_fill_price(self, setup_balance_tracker):
+        """Slipped fills must hit the balances at the actual fill price (order.average),
+        not the requested price — otherwise backtest_slippage has zero P&L effect."""
+        balance_tracker, fee_calculator, _ = setup_balance_tracker
+        balance_tracker._balance = Decimal("1000")
+        balance_tracker._crypto_balance = Decimal("5")
+        fee_calculator.calculate_fee.return_value = 0
+
+        buy_order = Mock(side=OrderSide.BUY, filled=1, price=100, average=101.0)
+        balance_tracker._reserved_fiat = Decimal("101")
+        await balance_tracker._update_balance_on_order_completion(buy_order)
+        assert balance_tracker.reserved_fiat == 0  # 101 consumed at the slipped price, not 100
+        assert balance_tracker.crypto_balance == 6
+
+        sell_order = Mock(side=OrderSide.SELL, filled=1, price=200, average=198.0)
+        balance_tracker._reserved_crypto = Decimal("1")
+        await balance_tracker._update_balance_on_order_completion(sell_order)
+        assert balance_tracker.balance == 1198  # proceeds at 198, not 200
+        assert balance_tracker.reserved_crypto == 0
 
     def test_get_total_balance_value(self, setup_balance_tracker):
         balance_tracker, _, _ = setup_balance_tracker

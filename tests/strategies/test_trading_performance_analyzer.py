@@ -56,11 +56,19 @@ class TestPerformanceAnalyzer:
     def test_calculate_trading_gains(self, setup_performance_analyzer):
         analyzer, _, order_book = setup_performance_analyzer
 
-        buy_order_1 = Mock(spec=Order, amount=1.0, price=1000.0, fee={"cost": 2.0}, is_filled=Mock(return_value=True))
-        buy_order_2 = Mock(spec=Order, amount=0.5, price=1100.0, fee={"cost": 1.0}, is_filled=Mock(return_value=True))
+        buy_order_1 = Mock(
+            spec=Order, amount=1.0, price=1000.0, average=None, fee={"cost": 2.0}, is_filled=Mock(return_value=True)
+        )
+        buy_order_2 = Mock(
+            spec=Order, amount=0.5, price=1100.0, average=None, fee={"cost": 1.0}, is_filled=Mock(return_value=True)
+        )
 
-        sell_order_1 = Mock(spec=Order, amount=1.0, price=1200.0, fee={"cost": 1.5}, is_filled=Mock(return_value=True))
-        sell_order_2 = Mock(spec=Order, amount=0.5, price=1300.0, fee={"cost": 0.5}, is_filled=Mock(return_value=True))
+        sell_order_1 = Mock(
+            spec=Order, amount=1.0, price=1200.0, average=None, fee={"cost": 1.5}, is_filled=Mock(return_value=True)
+        )
+        sell_order_2 = Mock(
+            spec=Order, amount=0.5, price=1300.0, average=None, fee={"cost": 0.5}, is_filled=Mock(return_value=True)
+        )
 
         order_book.get_all_buy_orders.return_value = [buy_order_1, buy_order_2]
         order_book.get_all_sell_orders.return_value = [sell_order_1, sell_order_2]
@@ -71,6 +79,25 @@ class TestPerformanceAnalyzer:
         # Total sell revenue: (1 * 1200 - 1.5) + (0.5 * 1300 - 0.5) = 1198.5 + 649.5 = 1848
         # Gains: 1848 - 1553 = 295.00
         assert result == "295.00"
+
+    def test_calculate_trading_gains_uses_average_fill_price(self, setup_performance_analyzer):
+        """Gains must be computed at the actual (slipped) fill price when available."""
+        analyzer, _, order_book = setup_performance_analyzer
+
+        buy_order = Mock(
+            spec=Order, amount=1.0, price=1000.0, average=1010.0, fee={"cost": 0.0}, is_filled=Mock(return_value=True)
+        )
+        sell_order = Mock(
+            spec=Order, amount=1.0, price=1200.0, average=1190.0, fee={"cost": 0.0}, is_filled=Mock(return_value=True)
+        )
+
+        order_book.get_all_buy_orders.return_value = [buy_order]
+        order_book.get_all_sell_orders.return_value = [sell_order]
+
+        result = analyzer._calculate_trading_gains()
+
+        # Buy at 1010 (slipped), sell at 1190 (slipped): 1190 - 1010 = 180.00, not 200.00
+        assert result == "180.00"
 
     def test_calculate_trading_gains_zero_trades(self, setup_performance_analyzer):
         analyzer, _, order_book = setup_performance_analyzer

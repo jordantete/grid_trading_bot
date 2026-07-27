@@ -64,6 +64,24 @@ async def test_backtest_trades_when_price_stays_above_grid_center(run_backtest_b
     )
 
 
+@pytest.mark.integration
+async def test_backtest_slippage_degrades_results(run_backtest_bot):
+    """Regression: backtest_slippage must actually hit the P&L. It used to be applied
+    to order.average only, while balances and gains read order.price — so any slippage
+    value produced results identical to zero slippage."""
+    _, result_no_slip = await run_backtest_bot("simple_grid", "arithmetic")
+    _, result_slip = await run_backtest_bot("simple_grid", "arithmetic", execution={"backtest_slippage": 0.01})
+
+    roi_no_slip = float(result_no_slip["performance_summary"]["ROI"].strip("%"))
+    roi_slip = float(result_slip["performance_summary"]["ROI"].strip("%"))
+
+    # 1% slippage on every fill must cost well more than the initial-purchase-only
+    # effect (~0.5%) that existed while grid fills ignored the slipped price.
+    assert roi_slip < roi_no_slip - 1.0, (
+        f"Slippage had no meaningful P&L effect: ROI {roi_no_slip}% without vs {roi_slip}% with 1% slippage"
+    )
+
+
 # ---------------------------------------------------------------------------
 # V2: Balance coherence after backtest
 # ---------------------------------------------------------------------------
