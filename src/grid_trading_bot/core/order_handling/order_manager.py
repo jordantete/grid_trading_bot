@@ -8,7 +8,7 @@ from grid_trading_bot.core.bot_management.notification.notification_handler impo
 from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
-from ..grid_management.grid_level import GridCycleState, GridLevel
+from ..grid_management.grid_level import GridLevel
 from ..grid_management.grid_manager import GridManager
 from ..order_handling.balance_tracker import BalanceTracker
 from ..order_handling.order_book import OrderBook
@@ -121,12 +121,21 @@ class OrderManager:
                     self.logger.error(f"Failed to cancel order {order.identifier}; aborting bulk cancellation.")
                     return False
 
-                await self._release_funds(order.side, order.amount, order.price)
+                final_order = order
+                if self.trading_mode != TradingMode.BACKTEST:
+                    try:
+                        fetched = await self.order_execution_strategy.get_order(order.identifier, self.trading_pair)
+                        if fetched is not None:
+                            final_order = fetched
+                    except DataFetchError as e:
+                        self.logger.warning(
+                            f"Could not refetch cancelled order {order.identifier}; using local state: {e}",
+                        )
+
+                await self.balance_tracker.settle_cancelled_order(final_order)
                 self.order_book.remove_open_order(order)
                 if grid_level is not None:
-                    grid_level.state = (
-                        GridCycleState.READY_TO_BUY if order.side == OrderSide.BUY else GridCycleState.READY_TO_SELL
-                    )
+                    self.grid_manager.rollback_order_placement(grid_level, order.side)
                 self.logger.info(f"Cancelled {order.side.value} order {order.identifier} at {order.price}.")
 
             return True

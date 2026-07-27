@@ -335,6 +335,20 @@ class GridManager:
         """
         return self.grid_strategy.can_place_order(grid_level, order_side)
 
+    def rollback_order_placement(
+        self,
+        grid_level: GridLevel,
+        order_side: OrderSide,
+    ) -> None:
+        """
+        Reverts a grid level to a placeable state after its pending order was cancelled.
+
+        Args:
+            grid_level: The grid level whose order was cancelled.
+            order_side: The side of the cancelled order (buy or sell).
+        """
+        self.grid_strategy.rollback_order_placement(grid_level, order_side, self.logger)
+
     def _extract_grid_config(self) -> tuple[float, float, int, str]:
         """
         Extracts grid configuration parameters from the configuration manager.

@@ -257,6 +257,37 @@ class TestGridManager:
         assert grid_manager.can_place_order(buy_grid_level, OrderSide.BUY) is True
         assert grid_manager.can_place_order(sell_grid_level, OrderSide.SELL) is True
 
+    def test_rollback_order_placement_simple_grid_buy(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
+        grid_level.state = GridCycleState.WAITING_FOR_BUY_FILL
+
+        grid_manager.rollback_order_placement(grid_level, OrderSide.BUY)
+
+        assert grid_level.state == GridCycleState.READY_TO_BUY
+
+    def test_rollback_order_placement_simple_grid_sell(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
+        grid_level.state = GridCycleState.WAITING_FOR_SELL_FILL
+
+        grid_manager.rollback_order_placement(grid_level, OrderSide.SELL)
+
+        assert grid_level.state == GridCycleState.READY_TO_SELL
+
+    def test_rollback_order_placement_hedged_grid_allows_both_sides(self, config_manager):
+        grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
+        grid_manager.initialize_grids_and_levels()
+
+        grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
+        grid_level.state = GridCycleState.WAITING_FOR_BUY_FILL
+        grid_manager.rollback_order_placement(grid_level, OrderSide.BUY)
+        assert grid_level.state == GridCycleState.READY_TO_BUY_OR_SELL
+
+        grid_level.state = GridCycleState.WAITING_FOR_SELL_FILL
+        grid_manager.rollback_order_placement(grid_level, OrderSide.SELL)
+        assert grid_level.state == GridCycleState.READY_TO_BUY_OR_SELL
+
     def test_get_or_create_paired_buy_level_with_valid_paired_level(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
         sell_grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]

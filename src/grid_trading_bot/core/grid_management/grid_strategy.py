@@ -53,6 +53,16 @@ class GridStrategy(ABC):
         """Determines if an order can be placed on the given grid level."""
         pass
 
+    @abstractmethod
+    def rollback_order_placement(
+        self,
+        grid_level: GridLevel,
+        order_side: OrderSide,
+        logger,
+    ) -> None:
+        """Reverts a WAITING_FOR_*_FILL level to a placeable state after its order was cancelled."""
+        pass
+
 
 class SimpleGridStrategy(GridStrategy):
     def initialize_levels(
@@ -115,6 +125,15 @@ class SimpleGridStrategy(GridStrategy):
         elif order_side == OrderSide.SELL:
             return grid_level.state == GridCycleState.READY_TO_SELL
         return False
+
+    def rollback_order_placement(
+        self,
+        grid_level: GridLevel,
+        order_side: OrderSide,
+        logger,
+    ) -> None:
+        grid_level.state = GridCycleState.READY_TO_BUY if order_side == OrderSide.BUY else GridCycleState.READY_TO_SELL
+        logger.info(f"Rolled back grid level {grid_level.price} to {grid_level.state} after cancellation.")
 
 
 class HedgedGridStrategy(GridStrategy):
@@ -187,3 +206,12 @@ class HedgedGridStrategy(GridStrategy):
         elif order_side == OrderSide.SELL:
             return grid_level.state in {GridCycleState.READY_TO_SELL, GridCycleState.READY_TO_BUY_OR_SELL}
         return False
+
+    def rollback_order_placement(
+        self,
+        grid_level: GridLevel,
+        order_side: OrderSide,
+        logger,
+    ) -> None:
+        grid_level.state = GridCycleState.READY_TO_BUY_OR_SELL
+        logger.info(f"Rolled back grid level {grid_level.price} to READY_TO_BUY_OR_SELL after cancellation.")

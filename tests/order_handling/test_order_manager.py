@@ -5,7 +5,6 @@ import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
-from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError, OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
 from grid_trading_bot.core.services.exceptions import DataFetchError
@@ -713,47 +712,100 @@ class TestCancelOpenGridOrders:
     # ── cancel_open_grid_orders ─────────────────────────────────────────
 
     @pytest.mark.asyncio
-    async def test_cancels_all_open_orders_and_releases_funds(self, setup_order_manager):
-        manager, _, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
-        buy_order = Mock(identifier="b1", side=OrderSide.BUY, amount=1.0, price=95.0)
-        sell_order = Mock(identifier="s1", side=OrderSide.SELL, amount=1.0, price=105.0)
-        buy_level = Mock(price=95.0)
-        sell_level = Mock(price=105.0)
-        order_book.get_buy_orders_with_grid.return_value = [(buy_order, buy_level)]
-        order_book.get_sell_orders_with_grid.return_value = [(sell_order, sell_level)]
-        order_book.get_open_orders.return_value = [buy_order, sell_order]
+    async def test_cancel_settles_remaining_not_amount(self, setup_order_manager):
+        # trading_mode defaults to LIVE on setup_order_manager
+        manager, grid_manager, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
+        order = Mock(identifier="b1", side=OrderSide.BUY, amount=1.0, filled=0.4, remaining=0.6, price=95.0)
+        refetched = Mock(identifier="b1", side=OrderSide.BUY, amount=1.0, filled=0.4, remaining=0.6, price=95.0)
+        grid_level = Mock(price=95.0)
+        order_book.get_buy_orders_with_grid.return_value = [(order, grid_level)]
+        order_book.get_sell_orders_with_grid.return_value = []
+        order_book.get_open_orders.return_value = [order]
         order_execution_strategy.cancel_order = AsyncMock(return_value=True)
+        order_execution_strategy.get_order = AsyncMock(return_value=refetched)
 
         result = await manager.cancel_open_grid_orders()
 
         assert result is True
-        assert order_execution_strategy.cancel_order.await_count == 2
-        order_book.remove_open_order.assert_any_call(buy_order)
-        order_book.remove_open_order.assert_any_call(sell_order)
-        assert buy_level.state == GridCycleState.READY_TO_BUY
-        assert sell_level.state == GridCycleState.READY_TO_SELL
-        # buy order (amount=1.0, price=95.0) releases fiat = amount * price
-        balance_tracker.release_reserved_fiat.assert_awaited_once_with(95.0)
-        # sell order (amount=1.0) releases crypto = amount
-        balance_tracker.release_reserved_crypto.assert_awaited_once_with(1.0)
+        order_execution_strategy.get_order.assert_awaited_once_with("b1", manager.trading_pair)
+        # settles the refetched (authoritative) order, not the locally-cached one
+        balance_tracker.settle_cancelled_order.assert_awaited_once_with(refetched)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY)
+        order_book.remove_open_order.assert_called_once_with(order)
+
+    @pytest.mark.asyncio
+    async def test_cancel_refetch_failure_falls_back_to_local_order(self, setup_order_manager):
+        manager, grid_manager, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
+        order = Mock(identifier="b1", side=OrderSide.BUY, amount=1.0, filled=0.4, remaining=0.6, price=95.0)
+        grid_level = Mock(price=95.0)
+        order_book.get_buy_orders_with_grid.return_value = [(order, grid_level)]
+        order_book.get_sell_orders_with_grid.return_value = []
+        order_book.get_open_orders.return_value = [order]
+        order_execution_strategy.cancel_order = AsyncMock(return_value=True)
+        order_execution_strategy.get_order = AsyncMock(side_effect=DataFetchError("boom"))
+
+        result = await manager.cancel_open_grid_orders()
+
+        assert result is True
+        balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY)
+
+    @pytest.mark.asyncio
+    async def test_cancel_backtest_skips_refetch(self, setup_order_manager):
+        manager, grid_manager, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
+        manager.trading_mode = TradingMode.BACKTEST
+        order = Mock(identifier="b1", side=OrderSide.BUY, amount=1.0, filled=0.0, remaining=1.0, price=95.0)
+        grid_level = Mock(price=95.0)
+        order_book.get_buy_orders_with_grid.return_value = [(order, grid_level)]
+        order_book.get_sell_orders_with_grid.return_value = []
+        order_book.get_open_orders.return_value = [order]
+        order_execution_strategy.cancel_order = AsyncMock(return_value=True)
+        order_execution_strategy.get_order = AsyncMock()
+
+        result = await manager.cancel_open_grid_orders()
+
+        assert result is True
+        order_execution_strategy.get_order.assert_not_awaited()
+        balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY)
+
+    @pytest.mark.asyncio
+    async def test_cancels_all_open_orders_sell_side(self, setup_order_manager):
+        manager, grid_manager, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
+        sell_order = Mock(identifier="s1", side=OrderSide.SELL, amount=1.0, filled=0.0, remaining=1.0, price=105.0)
+        sell_level = Mock(price=105.0)
+        order_book.get_buy_orders_with_grid.return_value = []
+        order_book.get_sell_orders_with_grid.return_value = [(sell_order, sell_level)]
+        order_book.get_open_orders.return_value = [sell_order]
+        order_execution_strategy.cancel_order = AsyncMock(return_value=True)
+        order_execution_strategy.get_order = AsyncMock(return_value=sell_order)
+
+        result = await manager.cancel_open_grid_orders()
+
+        assert result is True
+        order_book.remove_open_order.assert_called_once_with(sell_order)
+        balance_tracker.settle_cancelled_order.assert_awaited_once_with(sell_order)
+        grid_manager.rollback_order_placement.assert_called_once_with(sell_level, OrderSide.SELL)
 
     @pytest.mark.asyncio
     async def test_partial_failure_returns_false_and_stops(self, setup_order_manager):
-        manager, _, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
-        o1 = Mock(identifier="b1", side=OrderSide.BUY, amount=1.0, price=95.0)
-        o2 = Mock(identifier="b2", side=OrderSide.BUY, amount=1.0, price=90.0)
+        manager, grid_manager, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
+        o1 = Mock(identifier="b1", side=OrderSide.BUY, amount=1.0, filled=0.0, remaining=1.0, price=95.0)
+        o2 = Mock(identifier="b2", side=OrderSide.BUY, amount=1.0, filled=0.0, remaining=1.0, price=90.0)
         lvl1, lvl2 = Mock(price=95.0), Mock(price=90.0)
         order_book.get_buy_orders_with_grid.return_value = [(o1, lvl1), (o2, lvl2)]
         order_book.get_sell_orders_with_grid.return_value = []
         order_book.get_open_orders.return_value = [o1, o2]
         order_execution_strategy.cancel_order = AsyncMock(side_effect=[True, False])
+        order_execution_strategy.get_order = AsyncMock(return_value=o1)
 
         result = await manager.cancel_open_grid_orders()
 
         assert result is False
         order_book.remove_open_order.assert_called_once_with(o1)
-        # only o1's release happened; o2's cancel failed before any release was attempted
-        balance_tracker.release_reserved_fiat.assert_awaited_once_with(95.0)
+        # only o1's settlement happened; o2's cancel failed before any settlement was attempted
+        balance_tracker.settle_cancelled_order.assert_awaited_once_with(o1)
+        grid_manager.rollback_order_placement.assert_called_once_with(lvl1, OrderSide.BUY)
 
     @pytest.mark.asyncio
     async def test_no_open_orders_is_success(self, setup_order_manager):
