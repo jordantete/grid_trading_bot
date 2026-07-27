@@ -15,6 +15,7 @@ from grid_trading_bot.core.services.exceptions import (
     UnsupportedExchangeError,
     UnsupportedTimeframeError,
 )
+from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 
 @pytest.fixture(autouse=True)
@@ -155,6 +156,25 @@ class TestGridTradingBot:
             logger_instance.error.assert_any_call("An unexpected error occurred.")
             logger_instance.error.assert_any_call(ANY)
 
+    @patch("grid_trading_bot.core.bot_management.grid_trading_bot.GridTradingStrategy")
+    @pytest.mark.asyncio
+    async def test_run_loads_markets_and_sets_constraints_in_live_mode(self, mock_strategy, bot):
+        bot.balance_tracker = Mock()
+        bot.balance_tracker.setup_balances = AsyncMock()
+        bot.order_status_tracker.start_tracking = Mock()
+        bot.strategy.run = AsyncMock()
+        bot.strategy.grid_manager = Mock()
+        bot.exchange_service.load_exchange_markets = AsyncMock()
+        constraints = MarketConstraints(min_amount=0.001, min_cost=10.0)
+        bot.exchange_service.get_market_constraints = Mock(return_value=constraints)
+        bot.order_manager.set_market_constraints = Mock()
+
+        await bot.run()
+
+        bot.exchange_service.load_exchange_markets.assert_awaited_once_with(bot.trading_pair)
+        bot.exchange_service.get_market_constraints.assert_called_once_with(bot.trading_pair)
+        bot.order_manager.set_market_constraints.assert_called_once_with(constraints)
+
     @pytest.mark.asyncio
     async def test_get_bot_health_status(self, bot):
         bot._check_strategy_health = AsyncMock(return_value=True)
@@ -225,6 +245,10 @@ class TestGridTradingBot:
         # Arrange: Mock dependencies
         bot.balance_tracker = Mock()
         bot.balance_tracker.setup_balances = AsyncMock()
+        bot.exchange_service.load_exchange_markets = AsyncMock()
+        bot.exchange_service.get_market_constraints = Mock(
+            return_value=MarketConstraints(min_amount=None, min_cost=None),
+        )
         bot.order_status_tracker.start_tracking = Mock()
         bot.strategy.run = AsyncMock(side_effect=Exception("Test Exception"))
         mock_grid_manager = Mock()
@@ -329,6 +353,10 @@ class TestGridTradingBot:
     async def test_run_with_plotting_enabled(self, mock_strategy, bot):
         bot.no_plot = False
         bot.balance_tracker.setup_balances = AsyncMock()
+        bot.exchange_service.load_exchange_markets = AsyncMock()
+        bot.exchange_service.get_market_constraints = Mock(
+            return_value=MarketConstraints(min_amount=None, min_cost=None),
+        )
         bot._generate_and_log_performance = Mock()
         bot.strategy.plot_results = Mock()
         bot.strategy.run = AsyncMock()
@@ -404,6 +432,10 @@ class TestStrategyStatePersistenceWiring:
         bot.order_status_tracker.start_tracking = Mock()
         bot._generate_and_log_performance = Mock(return_value={})
         bot.reconciliation_service = None
+        bot.exchange_service.load_exchange_markets = AsyncMock()
+        bot.exchange_service.get_market_constraints = Mock(
+            return_value=MarketConstraints(min_amount=None, min_cost=None),
+        )
 
         recovery_result = RecoveryResult(
             recovered=True,
@@ -427,6 +459,10 @@ class TestStrategyStatePersistenceWiring:
         bot.order_status_tracker.start_tracking = Mock()
         bot._generate_and_log_performance = Mock(return_value={})
         bot.reconciliation_service = None
+        bot.exchange_service.load_exchange_markets = AsyncMock()
+        bot.exchange_service.get_market_constraints = Mock(
+            return_value=MarketConstraints(min_amount=None, min_cost=None),
+        )
 
         recovery_result = RecoveryResult(
             recovered=True,

@@ -61,6 +61,7 @@ class GridTradingBot:
             base_currency: str = self.config_manager.get_base_currency()
             quote_currency: str = self.config_manager.get_quote_currency()
             trading_pair = f"{base_currency}/{quote_currency}"
+            self.trading_pair = trading_pair
             strategy_type: StrategyType = self.config_manager.get_strategy_type()
             self.logger.info(
                 f"Starting Grid Trading Bot in {self.trading_mode.value} mode with strategy: {strategy_type.value}",
@@ -191,6 +192,12 @@ class GridTradingBot:
             skip_initial_purchase = False
             skip_grid_init = False
             recovery_result = None
+
+            if self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}:
+                await self.exchange_service.load_exchange_markets(self.trading_pair)
+                self.order_manager.set_market_constraints(
+                    self.exchange_service.get_market_constraints(self.trading_pair)
+                )
 
             # Attempt state recovery for live trading
             if self.state_recovery_service:

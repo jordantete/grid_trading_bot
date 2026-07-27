@@ -17,3 +17,7 @@ class OrderExecutionFailedError(Exception):
         self.pair = pair
         self.quantity = quantity
         self.price = price
+
+
+class GridFeasibilityError(Exception):
+    """Raised when the configured grid produces orders below exchange minimums."""

@@ -11,6 +11,7 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.indicators.atr_calculator import ATRCalculator
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
+from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.risk_management.trailing_stop_loss import TrailingStopLoss
@@ -321,6 +322,13 @@ class GridTradingStrategy(TradingStrategyInterface):
 
         if not self.grid_manager.is_within_grid_range(current_price):
             self.logger.debug(f"Current price {current_price} is outside the grid range. Waiting.")
+            return False
+
+        try:
+            self.order_manager.validate_grid_feasibility(current_price)
+        except GridFeasibilityError as e:
+            self.logger.error(f"Grid infeasible: {e}")
+            await self.event_bus.publish(Events.STOP_BOT, f"Grid infeasible: {e}")
             return False
 
         if not skip_initial_purchase:

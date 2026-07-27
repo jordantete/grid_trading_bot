@@ -1,5 +1,5 @@
 import logging
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import numpy as np
 import pandas as pd
@@ -7,9 +7,10 @@ import pytest
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
+from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
+from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.risk_management.trailing_stop_loss import TrailingStopLoss
@@ -805,6 +806,33 @@ class TestVolatilityRegrid:
         # cancelled-but-not-regridded orders are re-placed at original levels
         s.order_manager.initialize_grid_orders.assert_awaited_once_with(100.0)
         assert s._bars_since_regrid == 0  # failed attempt restarts cooldown
+
+
+class TestGridFeasibilityOrchestration:
+    async def test_grid_feasibility_error_stops_bot(self, strategy_fixture):
+        strategy = strategy_fixture
+        strategy.grid_manager.is_within_grid_range.return_value = True
+        strategy.order_manager.perform_initial_purchase = AsyncMock()
+        strategy.order_manager.validate_grid_feasibility = Mock(
+            side_effect=GridFeasibilityError("num_grids too high"),
+        )
+
+        result = await strategy._initialize_grid_orders_once(100.0, False)
+
+        assert result is False
+        strategy.event_bus.publish.assert_awaited_with(Events.STOP_BOT, ANY)
+        strategy.order_manager.perform_initial_purchase.assert_not_awaited()
+
+    async def test_grid_feasibility_ok_proceeds_to_initial_purchase(self, strategy_fixture):
+        strategy = strategy_fixture
+        strategy.grid_manager.is_within_grid_range.return_value = True
+        strategy.order_manager.perform_initial_purchase = AsyncMock()
+        strategy.order_manager.validate_grid_feasibility = Mock()
+
+        result = await strategy._initialize_grid_orders_once(100.0, False)
+
+        assert result is True
+        strategy.order_manager.perform_initial_purchase.assert_awaited_once_with(100.0)
 
 
 class TestLiveAtrRefresh:

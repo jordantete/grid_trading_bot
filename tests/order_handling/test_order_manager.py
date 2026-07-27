@@ -6,9 +6,10 @@ import pytest
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
-from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
+from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError, OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
 from grid_trading_bot.core.services.exceptions import DataFetchError
+from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 
 class TestOrderManager:
@@ -762,3 +763,91 @@ class TestCancelOpenGridOrders:
         order_book.get_open_orders.return_value = []
 
         assert await manager.cancel_open_grid_orders() is True
+
+
+class TestMarketConstraintsEnforcement:
+    # ── validate_grid_feasibility ────────────────────────────────────────
+
+    def test_validate_grid_feasibility_raises_on_dust_level(self, setup_order_manager):
+        manager, grid_manager, _, balance_tracker, _, _, _, _ = setup_order_manager
+        manager.set_market_constraints(MarketConstraints(min_amount=None, min_cost=50.0))
+        grid_manager.sorted_buy_grids = [90.0, 95.0]
+        grid_manager.sorted_sell_grids = [105.0, 110.0]
+        balance_tracker.get_total_balance_value.return_value = 100.0
+        grid_manager.get_order_size_for_grid_level.return_value = 0.1  # notional ~10 < 50
+
+        with pytest.raises(GridFeasibilityError, match="minimum cost"):
+            manager.validate_grid_feasibility(current_price=100.0)
+
+    def test_validate_grid_feasibility_noop_without_constraints(self, setup_order_manager):
+        manager, *_ = setup_order_manager
+
+        manager.validate_grid_feasibility(current_price=100.0)  # must not raise
+
+    def test_validate_grid_feasibility_passes_when_above_minimums(self, setup_order_manager):
+        manager, grid_manager, _, balance_tracker, _, _, _, _ = setup_order_manager
+        manager.set_market_constraints(MarketConstraints(min_amount=None, min_cost=50.0))
+        grid_manager.sorted_buy_grids = [90.0, 95.0]
+        grid_manager.sorted_sell_grids = [105.0, 110.0]
+        balance_tracker.get_total_balance_value.return_value = 100000.0
+        grid_manager.get_order_size_for_grid_level.return_value = 1.0  # notional ~100 > 50
+
+        manager.validate_grid_feasibility(current_price=100.0)  # must not raise
+
+    # ── _place_order dust guard ──────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_place_order_skips_below_minimum(self, setup_order_manager):
+        (
+            manager,
+            grid_manager,
+            order_validator,
+            balance_tracker,
+            order_book,
+            _,
+            order_execution_strategy,
+            _,
+        ) = setup_order_manager
+        manager.set_market_constraints(MarketConstraints(min_amount=1.0, min_cost=None))
+        source_grid_level = Mock(price=48000)
+        target_grid_level = Mock(price=52000)
+        order_validator.adjust_and_validate_buy_quantity.return_value = 0.5
+        order_execution_strategy.execute_limit_order = AsyncMock()
+
+        await manager._place_order(OrderSide.BUY, source_grid_level, target_grid_level, 0.5)
+
+        order_execution_strategy.execute_limit_order.assert_not_awaited()
+        balance_tracker.reserve_funds_for_buy.assert_not_awaited()
+        grid_manager.pair_grid_levels.assert_not_called()
+        order_book.add_order.assert_not_called()
+
+    # ── perform_initial_purchase dust guard ──────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_initial_purchase_skipped_when_dust(self, setup_order_manager):
+        manager, grid_manager, _, _, _, _, order_execution_strategy, _ = setup_order_manager
+        manager.set_market_constraints(MarketConstraints(min_amount=None, min_cost=1000.0))
+        grid_manager.get_initial_order_quantity.return_value = 0.1
+
+        await manager.perform_initial_purchase(current_price=100.0)
+
+        order_execution_strategy.execute_market_order.assert_not_called()
+
+    # ── _initialize_orders defensive skip ────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_initialize_orders_skips_dust_level(self, setup_order_manager):
+        manager, grid_manager, order_validator, balance_tracker, _, _, order_execution_strategy, _ = setup_order_manager
+        manager.set_market_constraints(MarketConstraints(min_amount=1.0, min_cost=None))
+        grid_manager.sorted_buy_grids = [48000]
+        grid_manager.sorted_sell_grids = []
+        grid_manager.grid_levels = {48000: Mock()}
+        grid_manager.can_place_order.return_value = True
+        grid_manager.get_order_size_for_grid_level.return_value = 0.1
+        order_validator.adjust_and_validate_buy_quantity.return_value = 0.1
+        balance_tracker.get_total_balance_value.return_value = 50000
+        order_execution_strategy.execute_limit_order = AsyncMock()
+
+        await manager.initialize_grid_orders(50000)
+
+        order_execution_strategy.execute_limit_order.assert_not_awaited()

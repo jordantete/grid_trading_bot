@@ -6,6 +6,7 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.services.exceptions import DataFetchError
+from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 from ..grid_management.grid_level import GridCycleState, GridLevel
 from ..grid_management.grid_manager import GridManager
@@ -16,7 +17,7 @@ from ..validation.exceptions import (
     InsufficientCryptoBalanceError,
 )
 from ..validation.order_validator import OrderValidator
-from .exceptions import OrderExecutionFailedError
+from .exceptions import GridFeasibilityError, OrderExecutionFailedError
 from .execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
@@ -49,6 +50,7 @@ class OrderManager:
         self.order_simulator = order_simulator
         self.trading_mode: TradingMode = trading_mode
         self.trading_pair = trading_pair
+        self.market_constraints: MarketConstraints | None = None
         self._lock = asyncio.Lock()
         self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
@@ -57,6 +59,32 @@ class OrderManager:
         """Unsubscribes from all EventBus events."""
         self.event_bus.unsubscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.unsubscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
+
+    def set_market_constraints(self, constraints: MarketConstraints) -> None:
+        self.market_constraints = constraints
+
+    def validate_grid_feasibility(self, current_price: float) -> None:
+        """
+        Validates that every grid level produces an order above the exchange minimums.
+        Raises GridFeasibilityError naming the offending levels; no-op without constraints.
+        """
+        if self.market_constraints is None:
+            return
+        total_balance_value = self.balance_tracker.get_total_balance_value(current_price)
+        violations = []
+        for side, grids in (
+            (OrderSide.BUY, self.grid_manager.sorted_buy_grids),
+            (OrderSide.SELL, self.grid_manager.sorted_sell_grids),
+        ):
+            quantity = self.grid_manager.get_order_size_for_grid_level(total_balance_value, current_price, side)
+            for price in grids:
+                violation = self.market_constraints.violation(quantity, price)
+                if violation:
+                    violations.append(f"{side.value} level {price}: {violation}")
+        if violations:
+            raise GridFeasibilityError(
+                "Grid is not feasible on this exchange — increase capital or reduce num_grids. " + "; ".join(violations)
+            )
 
     async def initialize_grid_orders(
         self,
@@ -123,6 +151,12 @@ class OrderManager:
             if self.grid_manager.can_place_order(grid_level, side):
                 try:
                     adjusted_quantity = self._validate_order_quantity(side, order_quantity, price)
+
+                    if self.market_constraints is not None:
+                        violation = self.market_constraints.violation(adjusted_quantity, price)
+                        if violation:
+                            self.logger.warning(f"Skipping initial {side.value} order at {price}: {violation}")
+                            continue
 
                     await self._reserve_funds(side, adjusted_quantity, price)
 
@@ -327,6 +361,18 @@ class OrderManager:
         """
         adjusted_quantity = self._validate_order_quantity(order_side, quantity, target_grid_level.price)
 
+        if self.market_constraints is not None:
+            violation = self.market_constraints.violation(adjusted_quantity, target_grid_level.price)
+            if violation:
+                self.logger.warning(
+                    f"Skipping {order_side.value} order at {target_grid_level.price}: {violation}",
+                )
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ORDER_FAILED,
+                    error_details=f"Order at {target_grid_level.price} skipped: {violation}",
+                )
+                return
+
         try:
             await self._reserve_funds(order_side, adjusted_quantity, target_grid_level.price)
         except (InsufficientBalanceError, InsufficientCryptoBalanceError) as e:
@@ -419,6 +465,16 @@ class OrderManager:
             if initial_quantity <= 0:
                 self.logger.warning("Initial purchase quantity is zero or negative. Skipping initial purchase.")
                 return
+
+            if self.market_constraints is not None:
+                violation = self.market_constraints.violation(initial_quantity, current_price)
+                if violation:
+                    self.logger.warning(f"Skipping initial purchase: {violation}")
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.ORDER_FAILED,
+                        error_details=f"Initial purchase skipped: {violation}",
+                    )
+                    return
 
             self.logger.info(f"Performing initial crypto purchase: {initial_quantity} at price {current_price}.")
 
