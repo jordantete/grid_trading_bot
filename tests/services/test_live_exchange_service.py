@@ -36,6 +36,8 @@ class TestLiveExchangeService:
         exchange.fetch_ticker.return_value = {"last": 50000.0}
         exchange.fetch_order.return_value = {"status": "closed"}
         exchange.cancel_order.return_value = {"status": "canceled"}
+        exchange.amount_to_precision = Mock(side_effect=lambda pair, amount: str(amount))
+        exchange.price_to_precision = Mock(side_effect=lambda pair, price: str(price))
         return exchange
 
     @pytest.fixture
@@ -629,6 +631,117 @@ class TestLiveExchangeService:
         with pytest.raises(DataFetchError, match="Invalid price received"):
             await service.get_current_price("BTC/USD")
 
+    # ── load_exchange_markets / get_market_constraints ──────────────────
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_load_exchange_markets_success(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+        mock_exchange_instance.load_markets = AsyncMock()
+        mock_exchange_instance.markets = {"SOL/USDT": {"limits": {"amount": {"min": 0.01}, "cost": {"min": 5.0}}}}
+
+        await service.load_exchange_markets("SOL/USDT")
+
+        mock_exchange_instance.load_markets.assert_awaited_once()
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_load_exchange_markets_unknown_pair_raises(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+        mock_exchange_instance.load_markets = AsyncMock()
+        mock_exchange_instance.markets = {"BTC/USDT": {}}
+
+        with pytest.raises(DataFetchError, match="SOL/USDT"):
+            await service.load_exchange_markets("SOL/USDT")
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_get_market_constraints_reads_limits(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+        mock_exchange_instance.markets = {"SOL/USDT": {"limits": {"amount": {"min": 0.01}, "cost": {"min": 5.0}}}}
+
+        constraints = service.get_market_constraints("SOL/USDT")
+
+        assert constraints.min_amount == 0.01
+        assert constraints.min_cost == 5.0
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_get_market_constraints_without_markets_raises(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+        mock_exchange_instance.markets = {}
+
+        with pytest.raises(DataFetchError):
+            service.get_market_constraints("SOL/USDT")
+
+    # ── place_order precision ────────────────────────────────────────────
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_place_order_applies_precision(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+        mock_exchange_instance.amount_to_precision = Mock(return_value="0.123")
+        mock_exchange_instance.price_to_precision = Mock(return_value="100.45")
+        mock_exchange_instance.create_order = AsyncMock(return_value={"id": "1"})
+
+        await service.place_order("SOL/USDT", "limit", "buy", 0.12345678, 100.4567)
+
+        mock_exchange_instance.create_order.assert_awaited_once_with(
+            "SOL/USDT",
+            "limit",
+            "buy",
+            0.123,
+            100.45,
+        )
+
 
 class TestLiveExchangeServiceCircuitBreaker:
     @pytest.fixture
@@ -650,6 +763,8 @@ class TestLiveExchangeServiceCircuitBreaker:
         exchange.fetch_ticker.return_value = {"last": 50000.0}
         exchange.fetch_order.return_value = {"status": "closed"}
         exchange.cancel_order.return_value = {"status": "canceled"}
+        exchange.amount_to_precision = Mock(side_effect=lambda pair, amount: str(amount))
+        exchange.price_to_precision = Mock(side_effect=lambda pair, price: str(price))
         return exchange
 
     @pytest.fixture

@@ -20,6 +20,7 @@ from .exceptions import (
     UnsupportedExchangeError,
 )
 from .exchange_interface import ExchangeInterface
+from .market_constraints import MarketConstraints
 
 
 class LiveExchangeService(ExchangeInterface):
@@ -215,6 +216,28 @@ class LiveExchangeService(ExchangeInterface):
         except BaseError as e:
             raise DataFetchError(f"Error fetching current price: {e!s}") from e
 
+    async def load_exchange_markets(self, pair: str) -> None:
+        try:
+            await self.circuit_breaker.call(self.exchange.load_markets)
+        except CircuitBreakerOpenError as e:
+            raise DataFetchError(f"Circuit breaker open: {e!s}") from e
+        except BaseError as e:
+            raise DataFetchError(f"Failed to load markets for {self.exchange_name}: {e!s}") from e
+
+        if pair not in (self.exchange.markets or {}):
+            raise DataFetchError(f"Pair {pair} is not available on {self.exchange_name}.")
+        self.logger.info(f"Loaded {len(self.exchange.markets)} markets from {self.exchange_name}.")
+
+    def get_market_constraints(self, pair: str) -> MarketConstraints:
+        market = (self.exchange.markets or {}).get(pair)
+        if market is None:
+            raise DataFetchError(f"Market metadata for {pair} not loaded. Call load_exchange_markets first.")
+        limits = market.get("limits") or {}
+        return MarketConstraints(
+            min_amount=(limits.get("amount") or {}).get("min"),
+            min_cost=(limits.get("cost") or {}).get("min"),
+        )
+
     async def place_order(
         self,
         pair: str,
@@ -224,8 +247,10 @@ class LiveExchangeService(ExchangeInterface):
         price: float | None = None,
     ) -> dict[str, str | float]:
         try:
+            precise_amount = float(self.exchange.amount_to_precision(pair, amount))
+            precise_price = float(self.exchange.price_to_precision(pair, price)) if price is not None else None
             order = await self.circuit_breaker.call(
-                self.exchange.create_order, pair, order_type, order_side, amount, price
+                self.exchange.create_order, pair, order_type, order_side, precise_amount, precise_price
             )
             return order
 
