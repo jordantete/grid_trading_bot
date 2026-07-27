@@ -5,10 +5,22 @@ import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
+from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError, OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
 from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
+
+
+def _mock_order(
+    side=OrderSide.BUY,
+    amount=1.0,
+    filled=0.0,
+    remaining=1.0,
+    price=95.0,
+    identifier="o1",
+):
+    return Mock(identifier=identifier, side=side, amount=amount, filled=filled, remaining=remaining, price=price)
 
 
 class TestOrderManager:
@@ -630,21 +642,6 @@ class TestOrderManager:
             error_details="Failed to place Take profit order: Connection lost",
         )
 
-    # ── _on_order_cancelled ─────────────────────────────────────────────
-
-    @pytest.mark.asyncio
-    async def test_on_order_cancelled(self, setup_order_manager):
-        manager, _, _, _, _, _, _, notification_handler = setup_order_manager
-        mock_order = Mock()
-        notification_handler.async_send_notification = AsyncMock()
-
-        await manager._on_order_cancelled(mock_order)
-
-        notification_handler.async_send_notification.assert_awaited_with(
-            NotificationType.ORDER_CANCELLED,
-            order_details=str(mock_order),
-        )
-
     # ── Buy/Sell Ratio ──────────────────────────────────────────────────
 
     @pytest.mark.asyncio
@@ -903,3 +900,80 @@ class TestMarketConstraintsEnforcement:
         await manager.initialize_grid_orders(50000)
 
         order_execution_strategy.execute_limit_order.assert_not_awaited()
+
+
+class TestOnOrderCancelled:
+    # ── _on_order_cancelled ─────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_settles_rolls_back_and_replaces(self, setup_order_manager):
+        (
+            manager,
+            grid_manager,
+            order_validator,
+            balance_tracker,
+            order_book,
+            _,
+            order_execution_strategy,
+            _,
+        ) = setup_order_manager
+        grid_level = GridLevel(price=95.0, state=GridCycleState.WAITING_FOR_BUY_FILL)
+        order = _mock_order(side=OrderSide.BUY, amount=1.0, filled=0.0, remaining=1.0, price=95.0)
+        order_book.get_grid_level_for_order.return_value = grid_level
+        order_validator.adjust_and_validate_buy_quantity.return_value = 1.0
+        new_order = _mock_order(side=OrderSide.BUY, amount=1.0, filled=0.0, remaining=1.0, price=95.0)
+        order_execution_strategy.execute_limit_order = AsyncMock(return_value=new_order)
+
+        await manager._on_order_cancelled(order)
+
+        balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY)
+        grid_manager.mark_order_pending.assert_called_once_with(grid_level, new_order)
+        order_book.add_order.assert_called_once_with(new_order, grid_level)
+
+    @pytest.mark.asyncio
+    async def test_skips_when_level_already_rolled_back(self, setup_order_manager):
+        manager, _, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
+        # bulk cancel already handled it (level no longer WAITING_FOR_*)
+        grid_level = GridLevel(price=95.0, state=GridCycleState.READY_TO_BUY)
+        order = _mock_order(side=OrderSide.BUY)
+        order_book.get_grid_level_for_order.return_value = grid_level
+        order_execution_strategy.execute_limit_order = AsyncMock()
+
+        await manager._on_order_cancelled(order)
+
+        balance_tracker.settle_cancelled_order.assert_not_awaited()
+        order_execution_strategy.execute_limit_order.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_grid_level_notifies_only(self, setup_order_manager):
+        manager, _, _, balance_tracker, order_book, _, _, notification_handler = setup_order_manager
+        order = _mock_order(side=OrderSide.BUY)
+        order_book.get_grid_level_for_order.return_value = None
+
+        await manager._on_order_cancelled(order)
+
+        balance_tracker.settle_cancelled_order.assert_not_awaited()
+        notification_handler.async_send_notification.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_replacement_failure_releases_reservation(self, setup_order_manager):
+        (
+            manager,
+            _,
+            order_validator,
+            balance_tracker,
+            order_book,
+            _,
+            order_execution_strategy,
+            _,
+        ) = setup_order_manager
+        grid_level = GridLevel(price=95.0, state=GridCycleState.WAITING_FOR_BUY_FILL)
+        order = _mock_order(side=OrderSide.BUY)
+        order_book.get_grid_level_for_order.return_value = grid_level
+        order_validator.adjust_and_validate_buy_quantity.return_value = 1.0
+        order_execution_strategy.execute_limit_order = AsyncMock(side_effect=OrderExecutionFailedError("boom"))
+
+        await manager._on_order_cancelled(order)  # must not raise
+
+        balance_tracker.release_reserved_fiat.assert_awaited()
