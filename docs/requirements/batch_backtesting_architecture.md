@@ -84,14 +84,16 @@ Parses the sweep YAML into a typed dataclass. Separates fixed params from sweep 
 @dataclass(frozen=True)
 class PairsConfig:
     mode: Literal["auto", "manual"]  # auto = top N by volume
-    count: int                        # used when mode=auto
-    quote_currency: str               # e.g. "USDT"
-    manual_list: list[str] | None     # used when mode=manual
+    count: int  # used when mode=auto
+    quote_currency: str  # e.g. "USDT"
+    manual_list: list[str] | None  # used when mode=manual
+
 
 @dataclass(frozen=True)
 class WalkForwardConfig:
     train_months: int
     test_months: int
+
 
 @dataclass(frozen=True)
 class SweepConfig:
@@ -101,8 +103,8 @@ class SweepConfig:
     initial_balance: float
     timeframe: str
     backtest_slippage: float
-    period_start: str                 # ISO 8601
-    period_end: str                   # ISO 8601
+    period_start: str  # ISO 8601
+    period_end: str  # ISO 8601
 
     # Data config
     pairs: PairsConfig
@@ -201,13 +203,15 @@ class WindowRange:
     bottom: float
     std_dev: float
 
+
 @dataclass(frozen=True)
 class WalkForwardWindow:
     index: int
-    train_start: str    # ISO 8601
+    train_start: str  # ISO 8601
     train_end: str
     test_start: str
     test_end: str
+
 
 class WalkForwardEngine:
     def generate_windows(
@@ -248,7 +252,8 @@ Generates all valid backtest jobs from the cartesian product.
 @dataclass(frozen=True)
 class BacktestJob:
     """Immutable, hashable, serializable. One unit of work."""
-    job_id: str                          # deterministic hash for checkpoint
+
+    job_id: str  # deterministic hash for checkpoint
     pair: str
     window: WalkForwardWindow
     # Sweep params
@@ -269,13 +274,15 @@ class BacktestJob:
     backtest_slippage: float
     ohlcv_csv_path: str
 
+
 @dataclass
 class FilterStats:
     total_generated: int
     total_valid: int
-    spacing_too_tight: int              # grid spacing < 2 × fee
-    range_too_narrow: int               # range can't fit num_grids levels
-    tick_size_violation: int            # spacing < min tick
+    spacing_too_tight: int  # grid spacing < 2 × fee
+    range_too_narrow: int  # range can't fit num_grids levels
+    tick_size_violation: int  # spacing < min tick
+
 
 class CombinationGenerator:
     def __init__(self, trading_fee: float):
@@ -336,7 +343,8 @@ class BacktestResult:
     total_fees: float
     grid_trading_gains: float
     buy_and_hold_return: float
-    error: str | None = None           # non-None if backtest crashed
+    error: str | None = None  # non-None if backtest crashed
+
 
 class CheckpointManager:
     def __init__(self, checkpoint_path: str):
@@ -348,10 +356,11 @@ class CheckpointManager:
     def save_batch(self, completed_job_ids: set[str], results: list[dict]):
         """Atomically append completed results and update checkpoint."""
 
+
 class SweepExecutor:
     def __init__(
         self,
-        max_workers: int | None = None,   # None = auto-detect
+        max_workers: int | None = None,  # None = auto-detect
         checkpoint_path: str | None = None,
         resume: bool = False,
     ):
@@ -406,6 +415,7 @@ def run_single_backtest(job: BacktestJob, phase: Literal["train", "test"]) -> Ba
     8. Return BacktestResult
     """
 
+
 def run_backtest_pair(job: BacktestJob) -> tuple[BacktestResult, BacktestResult]:
     """
     Entry point for the process pool.
@@ -456,7 +466,7 @@ def _build_config_dict(job: BacktestJob, start_date: str, end_date: str) -> dict
             "backtest_slippage": job.backtest_slippage,
         },
         "logging": {
-            "log_level": "WARNING",   # Suppress per-backtest logs in sweep mode
+            "log_level": "WARNING",  # Suppress per-backtest logs in sweep mode
             "log_to_file": False,
         },
     }
@@ -516,6 +526,7 @@ Add a `from_dict` classmethod so configs can be created programmatically without
 
 ```python
 # In grid_trading_bot/config/config_manager.py — add classmethod
+
 
 @classmethod
 def from_dict(cls, config_dict: dict[str, Any], config_validator: ConfigValidator | None = None) -> "ConfigManager":
@@ -705,10 +716,12 @@ grid_sweep run --config sweep.yaml --workers 8 --resume
 ```python
 # grid_sweep/cli.py
 
+
 @click.group()
 @click.version_option(package_name="grid_sweep")
 def main():
     """Grid Sweep — Parameter sweep with walk-forward validation."""
+
 
 @main.command()
 @click.option("--config", required=True, type=click.Path(exists=True), help="Path to sweep YAML file")
