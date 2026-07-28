@@ -243,6 +243,8 @@ class GridTradingStrategy(TradingStrategyInterface):
 
         except Exception as e:
             self.logger.error(f"Error in live/paper trading loop: {e}", exc_info=True)
+            self._running = False
+            await self.event_bus.publish(Events.STOP_BOT, f"Live trading loop failed: {e}")
 
         finally:
             self.logger.info("Exiting live/paper trading loop.")

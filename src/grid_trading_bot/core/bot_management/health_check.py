@@ -148,6 +148,11 @@ class HealthCheck:
             if self._should_send_alert("bot_health:exchange_status"):
                 alerts.append(f"Exchange status is not ok: {health_status['exchange_status']}")
 
+        if not health_status.get("ticker_feed", True):
+            self.logger.warning("Ticker price feed is stale.")
+            if self._should_send_alert("bot_health:ticker_feed"):
+                alerts.append("Ticker price feed is stale (no accepted price for over 120 seconds).")
+
         if alerts:
             self.logger.info(f"Bot health alerts generated: {alerts}")
             await self.notification_handler.async_send_notification(

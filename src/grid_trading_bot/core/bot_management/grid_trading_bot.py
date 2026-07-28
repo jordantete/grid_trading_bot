@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 import traceback
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +39,8 @@ from .notification.notification_handler import NotificationHandler
 
 
 class GridTradingBot:
+    TICKER_FEED_STALENESS_THRESHOLD = 120.0  # seconds
+
     def __init__(
         self,
         config_path: str,
@@ -347,6 +350,9 @@ class GridTradingBot:
             "exchange_status": await self._get_exchange_status(),
         }
 
+        if self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}:
+            health_status["ticker_feed"] = self._check_ticker_feed_health()
+
         health_status["overall"] = all(health_status.values())
         return health_status
 
@@ -359,6 +365,12 @@ class GridTradingBot:
     async def _get_exchange_status(self) -> str:
         exchange_status = await self.exchange_service.get_exchange_status()
         return exchange_status.get("status", "unknown")
+
+    def _check_ticker_feed_health(self) -> bool:
+        last_update = getattr(self.exchange_service, "last_price_update_ts", None)
+        if last_update is None:
+            return True  # feed not started yet
+        return (time.monotonic() - last_update) < self.TICKER_FEED_STALENESS_THRESHOLD
 
     def get_balances(self) -> dict[str, float]:
         return {

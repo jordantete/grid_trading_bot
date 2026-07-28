@@ -119,7 +119,12 @@ async def run_bot(
             bot_task = asyncio.create_task(bot.run(), name="BotTask")
             bot_controller_task = asyncio.create_task(bot_controller.command_listener(), name="BotControllerTask")
             health_check_task = asyncio.create_task(health_check.start(), name="HealthCheckTask")
-            await asyncio.gather(bot_task, bot_controller_task, health_check_task)
+            try:
+                await bot_task
+            finally:
+                for task in (bot_controller_task, health_check_task):
+                    task.cancel()
+                await asyncio.gather(bot_controller_task, health_check_task, return_exceptions=True)
         else:
             await bot.run()
 

@@ -538,6 +538,20 @@ class TestGridTradingStrategy:
         exchange_service.listen_to_ticker_updates.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_listen_failure_publishes_stop_bot(self, setup_strategy):
+        """A dead ticker feed (Task 13's DataFetchError) must stop the strategy and publish STOP_BOT
+        so the bot performs a clean shutdown instead of silently hanging."""
+        create_strategy, _, exchange_service, _, _, _, _, _, event_bus = setup_strategy
+        strategy = create_strategy(TradingMode.LIVE)
+
+        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=DataFetchError("feed died"))
+
+        await strategy._run_live_or_paper_trading()
+
+        event_bus.publish.assert_awaited_with(Events.STOP_BOT, ANY)
+        assert strategy._running is False
+
+    @pytest.mark.asyncio
     async def test_run_backtest_with_no_data(self, setup_strategy):
         create_strategy, _, _, _, _, _, _, _, _ = setup_strategy
         strategy = create_strategy(TradingMode.BACKTEST)

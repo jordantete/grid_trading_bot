@@ -1,4 +1,5 @@
 import os
+import time
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -202,6 +203,28 @@ class TestGridTradingBot:
         assert health_status["strategy"] is False
         assert health_status["exchange_status"] == "ok"
         assert health_status["overall"] is False
+
+    @pytest.mark.asyncio
+    async def test_health_status_flags_stale_ticker_feed(self, bot):
+        bot._check_strategy_health = AsyncMock(return_value=True)
+        bot._get_exchange_status = AsyncMock(return_value="ok")
+        bot.exchange_service.last_price_update_ts = time.monotonic() - 500
+
+        health_status = await bot.get_bot_health_status()
+
+        assert health_status["ticker_feed"] is False
+        assert health_status["overall"] is False
+
+    @pytest.mark.asyncio
+    async def test_health_status_fresh_ticker_feed_ok(self, bot):
+        bot._check_strategy_health = AsyncMock(return_value=True)
+        bot._get_exchange_status = AsyncMock(return_value="ok")
+        bot.exchange_service.last_price_update_ts = time.monotonic()
+
+        health_status = await bot.get_bot_health_status()
+
+        assert health_status["ticker_feed"] is True
+        assert health_status["overall"] is True
 
     @patch("grid_trading_bot.core.bot_management.grid_trading_bot.GridTradingBot._generate_and_log_performance")
     @pytest.mark.asyncio

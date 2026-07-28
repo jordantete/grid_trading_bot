@@ -254,6 +254,23 @@ class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
 
         self.notification_handler.async_send_notification.assert_not_awaited()
 
+    async def test_alert_sent_on_stale_ticker_feed(self):
+        health_status = {"strategy": True, "exchange_status": "ok", "ticker_feed": False, "overall": False}
+
+        await self.health_check._check_and_alert_bot_health(health_status)
+
+        self.notification_handler.async_send_notification.assert_awaited_once()
+        call_args = self.notification_handler.async_send_notification.await_args[1]
+        assert "Ticker price feed is stale" in call_args["alert_details"]
+
+    async def test_no_alert_when_ticker_feed_key_absent(self):
+        """Backtest/legacy health dicts have no 'ticker_feed' key and must not alert."""
+        health_status = {"strategy": True, "exchange_status": "ok"}
+
+        await self.health_check._check_and_alert_bot_health(health_status)
+
+        self.notification_handler.async_send_notification.assert_not_awaited()
+
     async def test_check_and_alert_resource_usage_with_alerts(self):
         usage = {"cpu": 95, "memory": 85, "disk": 10}
 
