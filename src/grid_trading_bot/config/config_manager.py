@@ -279,3 +279,6 @@ class ConfigManager:
         quote = self.get_quote_currency() or "QUOTE"
         config_hash_short = compute_config_hash(self)[:8]
         return f"data/{base}_{quote}/state_{config_hash_short}.db"
+
+    def get_checkpoint_interval_seconds(self) -> float:
+        return self.get_persistence_settings().get("checkpoint_interval_seconds", 60.0)

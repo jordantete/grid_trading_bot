@@ -40,6 +40,7 @@ class StatePersistenceService:
         self._config_hash = compute_config_hash(config_manager)
         self._initial_purchase_done = False
         self._grid_orders_initialized = False
+        self._periodic_task: asyncio.Task | None = None
 
         self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
@@ -100,7 +101,29 @@ class StatePersistenceService:
         self._initial_purchase_done = initial_purchase_done
         self._grid_orders_initialized = grid_orders_initialized
 
+    async def checkpoint_now(self) -> None:
+        """Writes a checkpoint immediately (shutdown, ad-hoc callers)."""
+        await self._checkpoint()
+
+    def start_periodic_checkpoints(self, interval_seconds: float) -> None:
+        """Starts the periodic checkpoint loop (captures state that changes between order events,
+        e.g. the trailing-stop ratchet)."""
+        if self._periodic_task and not self._periodic_task.done():
+            return
+        self._periodic_task = asyncio.create_task(self._periodic_checkpoint_loop(interval_seconds))
+
+    async def _periodic_checkpoint_loop(self, interval_seconds: float) -> None:
+        try:
+            while True:
+                await asyncio.sleep(interval_seconds)
+                await self._checkpoint()
+        except asyncio.CancelledError:
+            pass
+
     def cleanup(self) -> None:
+        if self._periodic_task:
+            self._periodic_task.cancel()
+            self._periodic_task = None
         self.event_bus.unsubscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.unsubscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
         self.event_bus.unsubscribe(Events.INITIAL_PURCHASE_DONE, self._on_initial_purchase_done)

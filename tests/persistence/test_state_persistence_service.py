@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
@@ -171,3 +172,41 @@ class TestCheckpointErrorHandling:
 
             mock_error.assert_called_once()
             assert "Failed to write checkpoint" in mock_error.call_args[0][0]
+
+
+class TestCheckpointTriggers:
+    async def test_checkpoint_now_writes(self, setup_persistence_service):
+        service, repository, *_ = setup_persistence_service
+
+        await service.checkpoint_now()
+
+        repository.save_bot_state.assert_called_once()
+
+    async def test_periodic_checkpoint_loop_writes_on_interval(self, setup_persistence_service):
+        service, repository, *_ = setup_persistence_service
+
+        service.start_periodic_checkpoints(interval_seconds=0.01)
+        await asyncio.sleep(0.05)
+        service.cleanup()
+
+        assert repository.save_bot_state.call_count >= 2
+
+    async def test_cleanup_cancels_periodic_task(self, setup_persistence_service):
+        service, *_ = setup_persistence_service
+
+        service.start_periodic_checkpoints(interval_seconds=10)
+        task = service._periodic_task
+        service.cleanup()
+        await asyncio.sleep(0)
+
+        assert task.cancelled() or task.done()
+
+    async def test_start_periodic_checkpoints_is_idempotent(self, setup_persistence_service):
+        service, *_ = setup_persistence_service
+
+        service.start_periodic_checkpoints(interval_seconds=10)
+        task = service._periodic_task
+        service.start_periodic_checkpoints(interval_seconds=10)
+
+        assert service._periodic_task is task
+        service.cleanup()

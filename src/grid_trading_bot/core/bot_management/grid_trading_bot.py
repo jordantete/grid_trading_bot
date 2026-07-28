@@ -248,6 +248,10 @@ class GridTradingBot:
                 )
 
             self.order_status_tracker.start_tracking()
+            if self.state_persistence_service:
+                self.state_persistence_service.start_periodic_checkpoints(
+                    self.config_manager.get_checkpoint_interval_seconds()
+                )
             if self.reconciliation_service:
                 self.reconciliation_service.start()
             await self.strategy.run(
@@ -289,6 +293,7 @@ class GridTradingBot:
             await self.order_status_tracker.stop_tracking()
             await self.strategy.stop()
             if self.state_persistence_service:
+                await self.state_persistence_service.checkpoint_now()
                 self.state_persistence_service.cleanup()
             self._cleanup_subscriptions()
             self.is_running = False

@@ -246,3 +246,12 @@ class TestDynamicSpacingAccessors:
         assert config_manager.get_atr_spacing_multiplier() == 1.5
         assert config_manager.get_regrid_threshold() == 0.5
         assert config_manager.get_cooldown_bars() == 120
+
+
+class TestPersistenceAccessors:
+    def test_checkpoint_interval_default(self, config_manager):
+        assert config_manager.get_checkpoint_interval_seconds() == 60.0
+
+    def test_checkpoint_interval_configured(self, config_manager):
+        config_manager.config["persistence"] = {"checkpoint_interval_seconds": 30.0}
+        assert config_manager.get_checkpoint_interval_seconds() == 30.0

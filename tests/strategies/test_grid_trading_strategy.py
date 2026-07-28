@@ -725,6 +725,17 @@ class TestTrailingStopOrchestration:
         assert s.trailing_stop.stop_price == 95.0  # ratchet preserved, protection not discarded
 
 
+class TestExecuteRegridEventPublish:
+    async def test_successful_regrid_publishes_grid_orders_initialized(self, strategy_fixture):
+        s = strategy_fixture
+        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+
+        result = await s._execute_regrid(100.0, 2.0)
+
+        assert result is True
+        s.event_bus.publish.assert_any_await(Events.GRID_ORDERS_INITIALIZED, None)
+
+
 class TestStrategyStateExportRestore:
     def test_export_includes_trailing_stop_atr_grid_and_geometry(self, strategy_fixture):
         s = strategy_fixture
@@ -768,7 +779,18 @@ class TestStrategyStateExportRestore:
 
         assert isinstance(s.trailing_stop, TrailingStopLoss)
         assert s.trailing_stop.stop_price == 94.0
-        assert s.trailing_stop.atr_multiplier == 2.0
+        # config wins over the persisted atr_multiplier (fixture default is 2.5)
+        assert s.trailing_stop.atr_multiplier == 2.5
+
+    def test_restore_strategy_state_prefers_config_atr_multiplier(self, strategy_fixture):
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.config_manager.get_trailing_atr_multiplier.return_value = 3.0
+
+        s.restore_strategy_state({"trailing_stop": {"stop_price": 90.0, "atr_multiplier": 2.0}, "atr_grid": None})
+
+        assert s.trailing_stop.atr_multiplier == 3.0
+        assert s.trailing_stop.stop_price == 90.0
 
     def test_restore_skips_trailing_stop_when_disabled(self, strategy_fixture):
         s = strategy_fixture

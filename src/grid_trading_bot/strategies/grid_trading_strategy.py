@@ -496,6 +496,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             return False
 
         await self.order_manager.initialize_grid_orders(center_price)
+        await self.event_bus.publish(Events.GRID_ORDERS_INITIALIZED, None)
         return True
 
     def export_strategy_state(self) -> dict:
@@ -518,6 +519,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         trailing = state.get("trailing_stop")
         if trailing is not None and self.config_manager.is_trailing_stop_loss_enabled():
             self.trailing_stop = TrailingStopLoss.from_dict(trailing)
+            self.trailing_stop.atr_multiplier = self.config_manager.get_trailing_atr_multiplier()
 
         atr_grid = state.get("atr_grid")
         if atr_grid is not None:

@@ -408,6 +408,7 @@ class TestStrategyStatePersistenceWiring:
         mock_config.get_strategy_type.return_value = StrategyType.SIMPLE_GRID
         mock_config.is_persistence_enabled.return_value = True
         mock_config.get_state_db_path.return_value = str(tmp_path / "state.db")
+        mock_config.get_checkpoint_interval_seconds.return_value = 60.0
         mock_config.get_grid_settings.return_value = {
             "type": "simple_grid",
             "spacing": "arithmetic",
@@ -523,3 +524,17 @@ class TestStrategyStatePersistenceWiring:
         bot.order_book.clear.assert_called_once()
         assert bot.strategy.initialize_strategy.call_count == 2  # once pre-recovery, once post-reset
         bot.balance_tracker.setup_balances.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_checkpoints_before_cleanup(self, bot):
+        bot.is_running = True
+        bot.order_status_tracker.stop_tracking = AsyncMock()
+        bot.reconciliation_service = None
+        call_order = []
+        bot.strategy.stop = AsyncMock(side_effect=lambda: call_order.append("strategy"))
+        bot.state_persistence_service.checkpoint_now = AsyncMock(side_effect=lambda: call_order.append("checkpoint"))
+        bot.state_persistence_service.cleanup = Mock(side_effect=lambda: call_order.append("cleanup"))
+
+        await bot._stop()
+
+        assert call_order == ["strategy", "checkpoint", "cleanup"]
