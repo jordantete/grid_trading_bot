@@ -128,6 +128,20 @@ class GridManager:
         self.atr_grid = atr_grid
         self.logger.info(f"Applied restored grid geometry around {central_price}. Grids: {self.price_grids}")
 
+    def reset(self) -> None:
+        """
+        Clears all runtime grid state so the grid can be rebuilt from config
+        (or from the live ATR warm-up). Used after a failed state recovery.
+        """
+        self.grid_levels = {}
+        self.price_grids = []
+        self.sorted_buy_grids = []
+        self.sorted_sell_grids = []
+        self._sorted_prices = []
+        self._price_index_map = {}
+        self.atr_grid = None
+        self._initialized = False
+
     def get_trigger_price(self) -> float:
         return self.central_price
 

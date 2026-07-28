@@ -79,3 +79,12 @@ class OrderBook:
             order.status = new_status
             if not order.is_open():
                 self._open_orders.discard(order)
+
+    def clear(self) -> None:
+        """Empties all order tracking (fresh-start after a failed recovery)."""
+        self.buy_orders.clear()
+        self.sell_orders.clear()
+        self.non_grid_orders.clear()
+        self.order_to_grid_map.clear()
+        self._open_orders.clear()
+        self._orders_by_id.clear()

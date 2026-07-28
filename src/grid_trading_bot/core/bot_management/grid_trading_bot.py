@@ -74,6 +74,7 @@ class GridTradingBot:
             )
             order_execution_strategy = OrderExecutionStrategyFactory.create(self.config_manager, self.exchange_service)
             grid_manager = GridManager(self.config_manager, strategy_type)
+            self.grid_manager = grid_manager
             order_validator = OrderValidator()
             fee_calculator = FeeCalculator(self.config_manager)
 
@@ -85,6 +86,7 @@ class GridTradingBot:
                 quote_currency=quote_currency,
             )
             order_book = OrderBook()
+            self.order_book = order_book
 
             self.order_status_tracker = OrderStatusTracker(
                 order_book=order_book,
@@ -218,6 +220,10 @@ class GridTradingBot:
                         f"skip_grid_init={skip_grid_init}"
                     )
                 else:
+                    self.logger.warning("Recovery failed; resetting in-memory state for a fresh start.")
+                    self.grid_manager.reset()
+                    self.order_book.clear()
+                    self.strategy.initialize_strategy()
                     await self.balance_tracker.setup_balances(
                         initial_balance=self.config_manager.get_initial_balance(),
                         initial_crypto_balance=0.0,

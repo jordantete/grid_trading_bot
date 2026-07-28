@@ -136,6 +136,19 @@ class TestOrderBook:
 
         assert order.status == OrderStatus.OPEN  # Ensure no changes for non-existent orders
 
+    def test_clear_empties_everything(self, setup_order_book):
+        book = setup_order_book
+        book.add_order(_make_order("a"), GridLevel(100.0, GridCycleState.WAITING_FOR_BUY_FILL))
+        book.add_order(_make_order("b"))
+
+        book.clear()
+
+        assert book.get_open_orders() == []
+        assert book.get_all_buy_orders() == []
+        assert book.get_all_sell_orders() == []
+        assert book.non_grid_orders == []
+        assert book.order_to_grid_map == {}
+
 
 def _make_order(identifier="ord-1", side=OrderSide.BUY, status=OrderStatus.OPEN):
     return Order(

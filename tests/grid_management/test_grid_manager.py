@@ -427,3 +427,20 @@ class TestApplyGeometry:
     def test_apply_geometry_rejects_empty_grid(self, grid_manager_simple):
         with pytest.raises(ValueError, match="empty grid geometry"):
             grid_manager_simple.apply_geometry([], central_price=100.0, atr_grid=1.0)
+
+
+class TestReset:
+    def test_reset_clears_grid_state(self, grid_manager_simple):
+        gm = grid_manager_simple
+        gm.apply_geometry([90.0, 100.0, 110.0], central_price=100.0, atr_grid=4.2)
+
+        gm.reset()
+
+        assert gm.is_initialized is False
+        assert gm.grid_levels == {}
+        assert gm.atr_grid is None
+        assert gm.price_grids == []
+        assert gm.sorted_buy_grids == []
+        assert gm.sorted_sell_grids == []
+        assert gm._sorted_prices == []
+        assert gm._price_index_map == {}

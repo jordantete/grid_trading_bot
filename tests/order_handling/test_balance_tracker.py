@@ -65,6 +65,18 @@ class TestBalanceTracker:
         assert balance_tracker.reserved_crypto == 0
 
     @pytest.mark.asyncio
+    async def test_setup_balances_clears_stale_reservations(self, setup_balance_tracker):
+        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker.trading_mode = TradingMode.PAPER_TRADING
+        balance_tracker._reserved_fiat = Decimal("50")
+        balance_tracker._reserved_crypto = Decimal("1")
+
+        await balance_tracker.setup_balances(initial_balance=1000.0, initial_crypto_balance=0.0)
+
+        assert balance_tracker.reserved_fiat == 0.0
+        assert balance_tracker.reserved_crypto == 0.0
+
+    @pytest.mark.asyncio
     async def test_reserve_funds_for_buy(self, setup_balance_tracker):
         balance_tracker, _, _ = setup_balance_tracker
         balance_tracker._balance = Decimal("1000")

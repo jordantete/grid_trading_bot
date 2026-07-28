@@ -497,3 +497,29 @@ class TestStrategyStatePersistenceWiring:
         await bot.run()
 
         bot.strategy.restore_strategy_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_recovery_resets_memory_state(self, bot):
+        bot.grid_manager = Mock()
+        bot.order_book = Mock()
+        bot.strategy.initialize_strategy = Mock()
+        bot.strategy.run = AsyncMock()
+        bot.balance_tracker.setup_balances = AsyncMock()
+        bot.order_status_tracker.start_tracking = Mock()
+        bot._generate_and_log_performance = Mock(return_value={})
+        bot.reconciliation_service = None
+        bot.exchange_service.load_exchange_markets = AsyncMock()
+        bot.exchange_service.get_market_constraints = Mock(
+            return_value=MarketConstraints(min_amount=None, min_cost=None),
+        )
+
+        bot.state_recovery_service.attempt_recovery = AsyncMock(
+            return_value=RecoveryResult(recovered=False, errors=["boom"])
+        )
+
+        await bot.run()
+
+        bot.grid_manager.reset.assert_called_once()
+        bot.order_book.clear.assert_called_once()
+        assert bot.strategy.initialize_strategy.call_count == 2  # once pre-recovery, once post-reset
+        bot.balance_tracker.setup_balances.assert_awaited_once()

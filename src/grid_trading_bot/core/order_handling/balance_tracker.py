@@ -96,6 +96,9 @@ class BalanceTracker:
             initial_crypto_balance: The initial crypto balance for backtest and paper trading modes.
             exchange_service: The exchange instance (required for live trading).
         """
+        self._reserved_fiat = Decimal("0")
+        self._reserved_crypto = Decimal("0")
+
         if self.trading_mode == TradingMode.BACKTEST or self.trading_mode == TradingMode.PAPER_TRADING:
             self._balance = self._to_decimal(initial_balance)
             self._crypto_balance = self._to_decimal(initial_crypto_balance)
