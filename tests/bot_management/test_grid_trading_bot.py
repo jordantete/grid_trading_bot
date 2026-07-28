@@ -8,6 +8,7 @@ from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
+from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.persistence.state_recovery_service import RecoveryResult
@@ -306,6 +307,8 @@ class TestGridTradingBot:
 
     @pytest.mark.asyncio
     async def test_restart_bot(self, bot):
+        # Backtest mode: in-process restart is allowed and exercised end to end.
+        bot.trading_mode = TradingMode.BACKTEST
         bot.is_running = True
         bot.strategy.restart = AsyncMock()
         bot.order_status_tracker.start_tracking = Mock()
@@ -319,6 +322,8 @@ class TestGridTradingBot:
 
     @pytest.mark.asyncio
     async def test_restart_when_not_running(self, bot):
+        # Backtest mode: in-process restart is allowed and exercised end to end.
+        bot.trading_mode = TradingMode.BACKTEST
         bot.is_running = False
         bot._stop = AsyncMock()
         bot.strategy.restart = AsyncMock()
@@ -411,7 +416,25 @@ class TestGridTradingBot:
         assert call_order == ["tracker", "strategy"]
 
     @pytest.mark.asyncio
-    async def test_restart_rearms_close_positions(self, bot):
+    async def test_restart_refuses_in_live_mode(self, bot):
+        # bot fixture defaults to TradingMode.LIVE.
+        bot.order_manager.reset_shutdown_state = Mock()
+        bot.order_status_tracker.start_tracking = Mock()
+        bot.strategy.restart = AsyncMock()
+        bot.reconciliation_service = None
+        bot.notification_handler.async_send_notification = AsyncMock()
+
+        await bot.restart()
+
+        bot.order_manager.reset_shutdown_state.assert_not_called()
+        bot.strategy.restart.assert_not_awaited()
+        bot.order_status_tracker.start_tracking.assert_not_called()
+        bot.notification_handler.async_send_notification.assert_awaited_once()
+        assert bot.notification_handler.async_send_notification.call_args.args[0] == NotificationType.ERROR_OCCURRED
+
+    @pytest.mark.asyncio
+    async def test_restart_rearms_close_positions_in_backtest_mode(self, bot):
+        bot.trading_mode = TradingMode.BACKTEST
         bot.order_manager.reset_shutdown_state = Mock()
         bot.order_status_tracker.start_tracking = Mock()
         bot.strategy.restart = AsyncMock()

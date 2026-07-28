@@ -111,12 +111,15 @@ Enter command (quit, orders, balance, stop, restart, pause):
 |---------|-------------|
 | `quit` | Gracefully shuts down the bot and exits the process. |
 | `stop` | Stops the bot's trading activity. The process remains alive. |
-| `restart` | Stops then immediately restarts the bot's trading activity. |
-| `pause <seconds>` | Pauses trading for the specified duration, then automatically resumes. |
+| `restart` | Stops the bot's trading activity. **Does not resume trading in-process** — restart the process instead; state recovery will resume from the last checkpoint. |
+| `pause <seconds>` | Stops the bot's trading activity for the specified duration. **Does not automatically resume in-process** — restart the process to resume trading. |
 | `orders` | Displays all active orders in a formatted table. |
 | `balance` | Displays current fiat and crypto balances. |
 
 Commands are case-insensitive. Invalid commands are logged as warnings.
+
+!!! warning "In-process restart is not supported in live/paper trading"
+    `restart` and `pause` both stop the bot's trading activity, but in-process resumption is not supported in live/paper trading mode — an ERROR_OCCURRED notification is sent and the bot stays stopped. Restart the bot process to resume; state recovery picks up where it left off.
 
 ### Examples
 

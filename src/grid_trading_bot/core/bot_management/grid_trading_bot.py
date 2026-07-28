@@ -35,6 +35,7 @@ from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerf
 if TYPE_CHECKING:
     from grid_trading_bot.core.domain.strategy_type import StrategyType
 
+from .notification.notification_content import NotificationType
 from .notification.notification_handler import NotificationHandler
 
 
@@ -317,6 +318,20 @@ class GridTradingBot:
         self.notification_handler.cleanup()
 
     async def restart(self) -> None:
+        if self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}:
+            self.logger.error(
+                "In-process restart/pause is not supported in live/paper trading mode. "
+                "Restart the process instead — state recovery will resume trading from the last checkpoint.",
+            )
+            await self.notification_handler.async_send_notification(
+                NotificationType.ERROR_OCCURRED,
+                error_details=(
+                    "Restart/pause requested but in-process restart is not supported in live/paper trading. "
+                    "Restart the bot process instead; state recovery will resume from the last checkpoint."
+                ),
+            )
+            return
+
         if self.is_running:
             self.logger.info("Bot is already running. Restarting...")
             await self._stop()

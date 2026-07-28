@@ -61,7 +61,7 @@ The bot distinguishes between a manual stop and a risk-triggered stop:
 Both paths go through the same shutdown routine and are idempotent — a stop command received after a TP/SL liquidation has already run is a no-op.
 
 !!! note "Restart vs. quit"
-    The `restart` command stops and immediately restarts trading (position and connections are re-established). `quit` stops the bot and exits the process entirely. See the [CLI reference](cli.md#runtime-commands) for the full command list.
+    The `restart`/`pause` commands are **not supported in-process** in live/paper trading — they stop trading but do not resume it; an error notification is sent and the bot stays stopped. To resume, restart the process instead; state recovery will pick up where it left off. `quit` stops the bot and exits the process entirely. See the [CLI reference](cli.md#runtime-commands) for the full command list.
 
 ## 5. Crash / restart behavior
 
