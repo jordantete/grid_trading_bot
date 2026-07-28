@@ -10,6 +10,8 @@ from grid_trading_bot.core.persistence.state_persistence_service import StatePer
 
 @pytest.fixture
 def setup_persistence_service():
+    from grid_trading_bot.config.trading_mode import TradingMode
+
     repository = MagicMock()
     event_bus = EventBus()
     order_book = MagicMock()
@@ -26,6 +28,11 @@ def setup_persistence_service():
         "range": [50000, 60000],
     }
     config_manager.get_pair.return_value = "BTC/USDT"
+    config_manager.get_dynamic_spacing.return_value = {}
+    config_manager.get_exchange_name.return_value = "binance"
+    config_manager.get_trading_mode.return_value = TradingMode.BACKTEST
+    config_manager.get_risk_management.return_value = {}
+    config_manager.get_timeframe.return_value = "1h"
 
     service = StatePersistenceService(
         repository=repository,

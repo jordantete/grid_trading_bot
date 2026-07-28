@@ -78,6 +78,7 @@ def balance_to_dict(tracker: BalanceTracker) -> dict[str, str]:
 def compute_config_hash(config_manager: ConfigManager) -> str:
     grid_settings = config_manager.get_grid_settings()
     pair = config_manager.get_pair()
+    trading_mode = config_manager.get_trading_mode()
     hash_input = {
         "strategy_type": grid_settings.get("type"),
         "spacing": grid_settings.get("spacing"),
@@ -86,6 +87,11 @@ def compute_config_hash(config_manager: ConfigManager) -> str:
         "buy_ratio": grid_settings.get("buy_ratio", 1.0),
         "sell_ratio": grid_settings.get("sell_ratio", 1.0),
         "pair": pair,
+        "dynamic_spacing": config_manager.get_dynamic_spacing() or None,
+        "exchange_name": config_manager.get_exchange_name(),
+        "trading_mode": trading_mode.value if trading_mode else None,
+        "risk_management": config_manager.get_risk_management() or None,
+        "timeframe": config_manager.get_timeframe(),
     }
     canonical = json.dumps(hash_input, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()

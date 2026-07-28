@@ -37,6 +37,11 @@ class TestGridTradingBot:
         mock_config.get_num_grids.return_value = 10
         mock_config.get_strategy_type.return_value = StrategyType.SIMPLE_GRID
         mock_config.is_persistence_enabled.return_value = False
+        mock_config.get_grid_settings.return_value = {}
+        mock_config.get_pair.return_value = {}
+        mock_config.get_dynamic_spacing.return_value = {}
+        mock_config.get_risk_management.return_value = {}
+        mock_config.get_timeframe.return_value = "1h"
         return mock_config
 
     @pytest.fixture
@@ -416,6 +421,9 @@ class TestStrategyStatePersistenceWiring:
             "range": [1500, 2000],
         }
         mock_config.get_pair.return_value = "BTC/USDT"
+        mock_config.get_dynamic_spacing.return_value = {}
+        mock_config.get_risk_management.return_value = {}
+        mock_config.get_timeframe.return_value = "1h"
         return mock_config
 
     @pytest.fixture

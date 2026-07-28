@@ -102,6 +102,8 @@ def _make_saved_balance(
 
 @pytest.fixture
 def mock_config_manager():
+    from grid_trading_bot.config.trading_mode import TradingMode
+
     cm = MagicMock()
     cm.get_grid_settings.return_value = {
         "type": "simple_grid",
@@ -112,6 +114,11 @@ def mock_config_manager():
     cm.get_pair.return_value = {"base_currency": "ETH", "quote_currency": "USDT"}
     cm.get_base_currency.return_value = "ETH"
     cm.get_quote_currency.return_value = "USDT"
+    cm.get_dynamic_spacing.return_value = {}
+    cm.get_exchange_name.return_value = "binance"
+    cm.get_trading_mode.return_value = TradingMode.BACKTEST
+    cm.get_risk_management.return_value = {}
+    cm.get_timeframe.return_value = "1h"
     return cm
 
 

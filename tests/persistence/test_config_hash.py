@@ -2,7 +2,41 @@ import hashlib
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
+from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
+
+
+@pytest.fixture
+def config_manager_factory():
+    """Factory fixture to create mock ConfigManager instances with customizable fields."""
+
+    def _factory(
+        grid_settings=None,
+        pair=None,
+        dynamic_spacing=None,
+        exchange_name=None,
+        trading_mode=None,
+        risk_management=None,
+        timeframe=None,
+    ):
+        cm = MagicMock()
+        cm.get_grid_settings.return_value = grid_settings or {
+            "type": "simple_grid",
+            "spacing": "arithmetic",
+            "num_grids": 10,
+            "range": [40000, 50000],
+        }
+        cm.get_pair.return_value = pair or {"base": "BTC", "quote": "USDT"}
+        cm.get_dynamic_spacing.return_value = dynamic_spacing or {}
+        cm.get_exchange_name.return_value = exchange_name or "binance"
+        cm.get_trading_mode.return_value = trading_mode or TradingMode.BACKTEST
+        cm.get_risk_management.return_value = risk_management or {}
+        cm.get_timeframe.return_value = timeframe or "1h"
+        return cm
+
+    return _factory
 
 
 class TestComputeConfigHash:
@@ -18,6 +52,11 @@ class TestComputeConfigHash:
             "range": [40000, 50000],
         }
         cm.get_pair.return_value = pair or {"base": "BTC", "quote": "USDT"}
+        cm.get_dynamic_spacing.return_value = {}
+        cm.get_exchange_name.return_value = "binance"
+        cm.get_trading_mode.return_value = TradingMode.BACKTEST
+        cm.get_risk_management.return_value = {}
+        cm.get_timeframe.return_value = "1h"
         return cm
 
     def test_hash_is_deterministic(self):
@@ -91,6 +130,11 @@ class TestComputeConfigHash:
             "buy_ratio": 1.0,
             "sell_ratio": 1.0,
             "pair": {"base": "BTC", "quote": "USDT"},
+            "dynamic_spacing": None,
+            "exchange_name": "binance",
+            "trading_mode": "backtest",
+            "risk_management": None,
+            "timeframe": "1h",
         }
         canonical = json.dumps(hash_input, sort_keys=True, separators=(",", ":"))
         expected_hash = hashlib.sha256(canonical.encode()).hexdigest()
@@ -145,3 +189,31 @@ class TestComputeConfigHash:
 
         assert len(result) == 64
         assert all(c in "0123456789abcdef" for c in result)
+
+    def test_hash_changes_when_dynamic_spacing_changes(self, config_manager_factory):
+        """Changing dynamic_spacing produces a different hash."""
+        base = config_manager_factory()
+        changed = config_manager_factory(dynamic_spacing={"enabled": True, "atr_period": 14})
+        assert compute_config_hash(base) != compute_config_hash(changed)
+
+    def test_hash_changes_when_exchange_or_mode_changes(self, config_manager_factory):
+        """Changing exchange_name produces a different hash."""
+        assert compute_config_hash(config_manager_factory(exchange_name="binance")) != compute_config_hash(
+            config_manager_factory(exchange_name="kraken")
+        )
+
+    def test_hash_changes_when_risk_management_changes(self, config_manager_factory):
+        """Changing risk_management produces a different hash."""
+        base = config_manager_factory()
+        changed = config_manager_factory(risk_management={"take_profit": {"enabled": True, "threshold": 3700}})
+        assert compute_config_hash(base) != compute_config_hash(changed)
+
+    def test_hash_changes_when_timeframe_changes(self, config_manager_factory):
+        """Changing timeframe produces a different hash."""
+        assert compute_config_hash(config_manager_factory(timeframe="1m")) != compute_config_hash(
+            config_manager_factory(timeframe="1h")
+        )
+
+    def test_hash_stable_for_identical_config(self, config_manager_factory):
+        """The same factory configuration always produces the same hash."""
+        assert compute_config_hash(config_manager_factory()) == compute_config_hash(config_manager_factory())
