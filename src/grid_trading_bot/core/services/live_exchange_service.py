@@ -3,6 +3,7 @@ from collections.abc import Callable
 import logging
 import math
 import os
+import time
 from typing import Any
 
 from ccxt.base.errors import BaseError, ExchangeError, NetworkError, OrderNotFound
@@ -46,6 +47,9 @@ class LiveExchangeService(ExchangeInterface):
         )
         self._last_known_price: float | None = None
         self._max_price_deviation: float = 0.50
+        self._consecutive_price_rejections = 0
+        self._max_consecutive_price_rejections = 5
+        self.last_price_update_ts: float | None = None
 
     def _get_env_variable(self, key: str) -> str:
         value = os.getenv(key)
@@ -110,13 +114,22 @@ class LiveExchangeService(ExchangeInterface):
         if self._last_known_price is not None:
             deviation = abs(price - self._last_known_price) / self._last_known_price
             if deviation > self._max_price_deviation:
+                self._consecutive_price_rejections += 1
+                if self._consecutive_price_rejections < self._max_consecutive_price_rejections:
+                    self.logger.warning(
+                        f"Price {price} for {pair} deviates {deviation:.1%} from last known price "
+                        f"{self._last_known_price} (max {self._max_price_deviation:.0%}). Rejecting "
+                        f"({self._consecutive_price_rejections}/{self._max_consecutive_price_rejections}).",
+                    )
+                    return None
                 self.logger.warning(
-                    f"Price {price} for {pair} deviates {deviation:.1%} from last known price "
-                    f"{self._last_known_price} (max {self._max_price_deviation:.0%}). Rejecting.",
+                    f"Accepting price {price} for {pair} after "
+                    f"{self._consecutive_price_rejections} consecutive deviation rejections — re-anchoring.",
                 )
-                return None
 
+        self._consecutive_price_rejections = 0
         self._last_known_price = price
+        self.last_price_update_ts = time.monotonic()
         return price
 
     async def _subscribe_to_ticker_updates(
@@ -156,7 +169,9 @@ class LiveExchangeService(ExchangeInterface):
                 if retry_count >= self.websocket_max_retries:
                     self.logger.error("Max retries reached. Stopping WebSocket connection.")
                     self.connection_active = False
-                    break
+                    raise DataFetchError(
+                        f"WebSocket feed for {pair} failed after {retry_count} retries: {e!s}",
+                    ) from e
 
                 await asyncio.sleep(retry_interval)
 
@@ -166,8 +181,18 @@ class LiveExchangeService(ExchangeInterface):
                 break
 
             except Exception as e:
-                self.logger.error(f"WebSocket connection error: {e}. Reconnecting...")
-                await asyncio.sleep(5)
+                retry_count += 1
+                retry_interval = min(retry_count * self.websocket_retry_base_delay, 60)
+                self.logger.error(
+                    f"WebSocket connection error: {e}. Retrying in {retry_interval} seconds "
+                    f"({retry_count}/{self.websocket_max_retries}).",
+                )
+                if retry_count >= self.websocket_max_retries:
+                    self.connection_active = False
+                    raise DataFetchError(
+                        f"WebSocket feed for {pair} failed after {retry_count} retries: {e!s}",
+                    ) from e
+                await asyncio.sleep(retry_interval)
 
             finally:
                 if not self.connection_active:
