@@ -60,18 +60,37 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
                     return self._aggregate_market_order(order_result, quantity, filled_total, cost_total)
 
                 elif order_result.status == OrderStatus.OPEN:
-                    filled_total += leg_filled
-                    cost_total += leg_filled * leg_price
-                    remaining_quantity -= leg_filled
-                    cancel_succeeded = await self._handle_partial_fill(order_result, pair)
-                    if not cancel_succeeded:
-                        # Cannot cancel — return what is accounted so far to avoid double-spend
+                    final_leg = await self._handle_partial_fill(order_result, pair)
+                    if final_leg is None:
+                        # Cannot cancel — account only the placement-response fill to avoid double-spend
+                        filled_total += leg_filled
+                        cost_total += leg_filled * leg_price
                         return self._aggregate_market_order(order_result, quantity, filled_total, cost_total)
 
+                    final_leg_filled = final_leg.filled or 0.0
+                    if final_leg.average is not None:
+                        final_leg_price = final_leg.average
+                    elif final_leg.price is not None:
+                        final_leg_price = final_leg.price
+                    else:
+                        final_leg_price = price
+                    filled_total += final_leg_filled
+                    cost_total += final_leg_filled * final_leg_price
+                    remaining_quantity -= final_leg_filled
+
                 else:
-                    self.logger.warning(
-                        f"Market order leg returned status {order_result.status}; retrying full remaining.",
-                    )
+                    if leg_filled > 0:
+                        filled_total += leg_filled
+                        cost_total += leg_filled * leg_price
+                        remaining_quantity -= leg_filled
+                        self.logger.warning(
+                            f"Market order leg returned status {order_result.status} with partial fill "
+                            f"{leg_filled}; retrying remaining {remaining_quantity}.",
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Market order leg returned status {order_result.status}; retrying full remaining.",
+                        )
 
                 await asyncio.sleep(self.retry_delay)
                 self.logger.info(f"Retrying order. Attempt {attempt + 1}/{self.max_retries}.")
@@ -227,19 +246,30 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         self,
         order: Order,
         pair: str,
-    ) -> bool:
+    ) -> Order | None:
         """
-        Handles a partially filled order by attempting to cancel it.
+        Handles a partially filled order by attempting to cancel it, then refetches it to
+        capture any fill that landed between the placement response and the cancel taking effect.
 
         Returns:
-            True if the cancel succeeded, False otherwise.
+            The authoritative Order to use for accounting (refetched, or the placement-response
+            order if the refetch itself fails), or None if the cancel could not be completed.
         """
         self.logger.info(f"Order partially filled with {order.filled}. Attempting to cancel and retry remaining.")
 
         if not await self._retry_cancel_order(order.identifier, pair):
             self.logger.error(f"Unable to cancel partially filled order {order.identifier} after retries.")
-            return False
-        return True
+            return None
+
+        try:
+            refetched = await self.get_order(order.identifier, pair)
+            if refetched is not None:
+                return refetched
+        except DataFetchError as e:
+            self.logger.warning(
+                f"Could not refetch cancelled order {order.identifier}; using placement-response values: {e!s}",
+            )
+        return order
 
     async def _retry_cancel_order(
         self,
@@ -250,13 +280,20 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
             try:
                 cancel_result = await self.exchange_service.cancel_order(order_id, pair)
 
-                if cancel_result["status"] == "canceled":
-                    self.logger.info(f"Successfully canceled order {order_id}.")
+                if cancel_result["status"] in ("canceled", "closed"):
+                    self.logger.info(f"Successfully canceled order {order_id} (status={cancel_result['status']}).")
                     return True
 
                 self.logger.warning(f"Cancel attempt {cancel_attempt + 1} for order {order_id} failed.")
 
             except OrderCancellationError as e:
+                # live_exchange_service.cancel_order wraps ccxt's OrderNotFound in an
+                # OrderCancellationError whose message says "not found for cancellation" —
+                # that means the order is already gone from the exchange, which is the
+                # outcome we wanted, so treat it as a successful cancellation.
+                if "not found for cancellation" in str(e):
+                    self.logger.info(f"Order {order_id} already gone from the exchange; treating as cancelled.")
+                    return True
                 self.logger.warning(f"Error during cancel attempt {cancel_attempt + 1} for order {order_id}: {e!s}")
 
             await asyncio.sleep(self.retry_delay)

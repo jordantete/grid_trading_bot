@@ -4,7 +4,7 @@ import pytest
 
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
-from grid_trading_bot.core.services.exceptions import DataFetchError
+from grid_trading_bot.core.services.exceptions import DataFetchError, OrderCancellationError
 
 
 @pytest.mark.asyncio
@@ -131,10 +131,23 @@ class TestLiveOrderExecutionStrategy:
         strategy, exchange_service = setup_live_strategy
         partial_order = Mock(identifier="partial-order", filled=0.5)
         exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+        refetched_raw = {
+            "id": "partial-order",
+            "status": "canceled",
+            "type": "market",
+            "side": "buy",
+            "price": 100.0,
+            "amount": 1.0,
+            "filled": 0.5,
+            "remaining": 0.5,
+            "symbol": "BTC/USDT",
+        }
+        exchange_service.fetch_order = AsyncMock(return_value=refetched_raw)
 
         result = await strategy._handle_partial_fill(partial_order, "BTC/USDT")
 
-        assert result is True
+        assert result is not None
+        assert result.identifier == "partial-order"
         exchange_service.cancel_order.assert_called_once_with("partial-order", "BTC/USDT")
 
     async def test_handle_partial_fill_cancel_fails(self, setup_live_strategy):
@@ -144,7 +157,18 @@ class TestLiveOrderExecutionStrategy:
 
         result = await strategy._handle_partial_fill(partial_order, "BTC/USDT")
 
-        assert result is False
+        assert result is None
+
+    async def test_handle_partial_fill_refetch_failure_falls_back_to_placement_order(self, setup_live_strategy):
+        """If cancel succeeds but the refetch fails, the placement-response order is used as-is."""
+        strategy, exchange_service = setup_live_strategy
+        partial_order = Mock(identifier="partial-order", filled=0.5)
+        exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+        exchange_service.fetch_order = AsyncMock(side_effect=DataFetchError("boom"))
+
+        result = await strategy._handle_partial_fill(partial_order, "BTC/USDT")
+
+        assert result is partial_order
 
     async def test_execute_market_order_partial_fill_cancel_succeeds_retries_remaining(self, setup_live_strategy):
         """Partial fill → cancel succeeds → retry with remaining quantity → fills are aggregated."""
@@ -179,6 +203,7 @@ class TestLiveOrderExecutionStrategy:
 
         exchange_service.place_order = AsyncMock(side_effect=[partial_raw, closed_raw])
         exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+        exchange_service.fetch_order = AsyncMock(return_value=partial_raw)
 
         order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
 
@@ -246,6 +271,7 @@ class TestLiveOrderExecutionStrategy:
 
         exchange_service.place_order = AsyncMock(return_value=partial_raw)
         exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+        exchange_service.fetch_order = AsyncMock(return_value=partial_raw)
 
         order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
 
@@ -338,11 +364,105 @@ class TestLiveOrderExecutionStrategy:
 
         exchange_service.place_order = AsyncMock(side_effect=[partial_raw, closed_raw])
         exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+        exchange_service.fetch_order = AsyncMock(return_value=partial_raw)
 
         order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
 
         assert order.filled == pytest.approx(1.0)
         assert order.average == pytest.approx((0.4 * 100.0 + 0.6 * 105.0) / 1.0)
+
+    async def test_cancel_window_fill_uses_refetched_amount(self, setup_live_strategy):
+        """Fills landing between the placement response and the cancel must be captured via refetch."""
+        strategy, exchange_service = setup_live_strategy
+        strategy.retry_delay = 0
+        pair = "SOL/USDT"
+        quantity = 1.0
+        price = 100.0
+
+        partial_raw = {
+            "id": "partial-order",
+            "status": "open",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": quantity,
+            "filled": 0.2,
+            "remaining": 0.8,
+            "symbol": pair,
+        }
+        refetched_raw = {
+            "id": "partial-order",
+            "status": "canceled",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "average": 101.0,
+            "amount": quantity,
+            "filled": 0.35,
+            "remaining": 0.65,
+            "symbol": pair,
+        }
+        closed_raw = {
+            "id": "final-order",
+            "status": "closed",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": 0.65,
+            "filled": 0.65,
+            "remaining": 0,
+            "symbol": pair,
+        }
+
+        exchange_service.place_order = AsyncMock(side_effect=[partial_raw, closed_raw])
+        exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+        exchange_service.fetch_order = AsyncMock(return_value=refetched_raw)
+
+        order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
+
+        # 0.35 (refetched, not the 0.2 from the placement response) + 0.65
+        assert order.filled == pytest.approx(1.0)
+        second_call = exchange_service.place_order.call_args_list[1]
+        assert second_call[0][3] == pytest.approx(0.65)
+
+    async def test_expired_leg_accounts_partial_fill_and_retries_remainder(self, setup_live_strategy):
+        """An expired leg that reports a partial fill must be accounted, not dropped."""
+        strategy, exchange_service = setup_live_strategy
+        strategy.retry_delay = 0
+        pair = "SOL/USDT"
+        quantity = 1.0
+        price = 100.0
+
+        expired_raw = {
+            "id": "expired-order",
+            "status": "expired",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": quantity,
+            "filled": 0.3,
+            "remaining": 0.7,
+            "symbol": pair,
+        }
+        closed_raw = {
+            "id": "final-order",
+            "status": "closed",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": 0.7,
+            "filled": 0.7,
+            "remaining": 0,
+            "symbol": pair,
+        }
+
+        exchange_service.place_order = AsyncMock(side_effect=[expired_raw, closed_raw])
+
+        order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
+
+        assert order.filled == pytest.approx(1.0)
+        second_call = exchange_service.place_order.call_args_list[1]
+        assert second_call[0][3] == pytest.approx(0.7)
 
     async def test_retry_cancel_order(self, setup_live_strategy):
         strategy, exchange_service = setup_live_strategy
@@ -360,6 +480,53 @@ class TestLiveOrderExecutionStrategy:
 
         assert result is True
         assert exchange_service.cancel_order.call_count == 2
+
+    async def test_retry_cancel_order_status_closed_is_success(self, setup_live_strategy):
+        """A "closed" cancellation result (order already filled by the time cancel landed) is a success."""
+        strategy, exchange_service = setup_live_strategy
+        exchange_service.cancel_order = AsyncMock(return_value={"status": "closed"})
+
+        result = await strategy._retry_cancel_order("order-id", "BTC/USDT")
+
+        assert result is True
+        exchange_service.cancel_order.assert_called_once()
+
+    async def test_retry_cancel_order_treats_order_not_found_as_success(self, setup_live_strategy):
+        """OrderNotFound means the order is already gone from the exchange — treat as cancelled."""
+        strategy, exchange_service = setup_live_strategy
+        exchange_service.cancel_order = AsyncMock(
+            side_effect=OrderCancellationError(
+                "Order abc not found for cancellation. It may already be completed or canceled.",
+            ),
+        )
+
+        result = await strategy._retry_cancel_order("abc", "BTC/USDT")
+
+        assert result is True
+        exchange_service.cancel_order.assert_called_once()
+
+    async def test_cancel_order_bulk_all_processed_when_middle_order_not_found(self, setup_live_strategy):
+        """A stale (already-gone) order among a batch must not abort processing of the others."""
+        strategy, exchange_service = setup_live_strategy
+        pair = "BTC/USDT"
+        results_by_id = {
+            "order-1": {"status": "canceled"},
+            "order-3": {"status": "canceled"},
+        }
+
+        async def fake_cancel(order_id, _pair):
+            if order_id == "order-2":
+                raise OrderCancellationError(
+                    f"Order {order_id} not found for cancellation. It may already be completed or canceled.",
+                )
+            return results_by_id[order_id]
+
+        exchange_service.cancel_order = AsyncMock(side_effect=fake_cancel)
+
+        results = [await strategy.cancel_order(order_id, pair) for order_id in ("order-1", "order-2", "order-3")]
+
+        assert results == [True, True, True]
+        assert exchange_service.cancel_order.call_count == 3
 
     async def test_adjust_price_buy(self, setup_live_strategy):
         strategy, _ = setup_live_strategy
