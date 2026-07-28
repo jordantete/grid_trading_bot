@@ -17,7 +17,7 @@
     "initial_balance": 150
   },
   "grid_strategy": {
-    "type": "hedged_grid",
+    "type": "simple_grid",
     "spacing": "arithmetic",
     "num_grids": 8,
     "range": {
@@ -37,11 +37,11 @@
   "risk_management": {
     "take_profit": {
       "enabled": true,
-      "threshold": 3700
+      "threshold": 260
     },
     "stop_loss": {
       "enabled": true,
-      "threshold": 2830
+      "threshold": 190
     },
     "trailing_stop_loss": {
       "enabled": true,

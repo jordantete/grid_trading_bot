@@ -4,6 +4,9 @@ This page walks through moving a strategy from backtesting to real (or paper) mo
 
 A ready-to-use starting point is provided at [`config/config.live.example.json`](https://github.com/jordantete/grid_trading_bot/blob/master/config/config.live.example.json). It targets `paper_trading` mode with persistence, dynamic ATR-based grid spacing, and an ATR trailing stop already enabled.
 
+!!! warning "Use `simple_grid` for live/paper trading"
+    Stick with `grid_strategy.type: "simple_grid"` for live and paper trading. `hedged_grid` has known unfixed edge cases around order cancellation that can leave paired grid levels in an inconsistent state — it is not yet hardened for real capital.
+
 ## 1. Prerequisites
 
 ### API credentials
