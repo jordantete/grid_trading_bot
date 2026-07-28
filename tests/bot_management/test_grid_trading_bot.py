@@ -371,6 +371,28 @@ class TestGridTradingBot:
         bot.strategy.run.assert_awaited_once()
         bot.order_status_tracker.start_tracking.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_stop_orders_tracker_before_strategy(self, bot):
+        call_order = []
+        bot.order_status_tracker.stop_tracking = AsyncMock(side_effect=lambda: call_order.append("tracker"))
+        bot.strategy.stop = AsyncMock(side_effect=lambda: call_order.append("strategy"))
+        bot.is_running = True
+
+        await bot._stop()
+
+        assert call_order == ["tracker", "strategy"]
+
+    @pytest.mark.asyncio
+    async def test_restart_rearms_close_positions(self, bot):
+        bot.order_manager.reset_shutdown_state = Mock()
+        bot.order_status_tracker.start_tracking = Mock()
+        bot.strategy.restart = AsyncMock()
+        bot.reconciliation_service = None
+
+        await bot.restart()
+
+        bot.order_manager.reset_shutdown_state.assert_called_once()
+
 
 class TestStrategyStatePersistenceWiring:
     @pytest.fixture

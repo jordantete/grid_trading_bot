@@ -135,6 +135,42 @@ class TestGridTradingStrategy:
         exchange_service.close_connection.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_stop_cancels_open_orders_live(self, setup_strategy):
+        create_strategy, _, exchange_service, _, order_manager, *_ = setup_strategy
+        strategy = create_strategy(TradingMode.LIVE)
+        exchange_service.close_connection = AsyncMock()
+        order_manager.close_positions = AsyncMock()
+
+        await strategy.stop()
+
+        order_manager.close_positions.assert_awaited_once_with(liquidate=False)
+        exchange_service.close_connection.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_open_orders_paper(self, setup_strategy):
+        create_strategy, _, exchange_service, _, order_manager, *_ = setup_strategy
+        strategy = create_strategy(TradingMode.PAPER_TRADING)
+        exchange_service.close_connection = AsyncMock()
+        order_manager.close_positions = AsyncMock()
+
+        await strategy.stop()
+
+        order_manager.close_positions.assert_awaited_once_with(liquidate=False)
+        exchange_service.close_connection.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_backtest_does_not_touch_order_manager(self, setup_strategy):
+        create_strategy, _, exchange_service, _, order_manager, *_ = setup_strategy
+        strategy = create_strategy(TradingMode.BACKTEST)
+        exchange_service.close_connection = AsyncMock()
+        order_manager.close_positions = AsyncMock()
+
+        await strategy.stop()
+
+        order_manager.close_positions.assert_not_awaited()
+        exchange_service.close_connection.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_restart_live_trading(self, setup_strategy):
         create_strategy, _, exchange_service, grid_manager, _, _, _, _, _ = setup_strategy
         strategy = create_strategy(TradingMode.LIVE)

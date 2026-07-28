@@ -109,13 +109,15 @@ class GridTradingStrategy(TradingStrategyInterface):
 
     async def stop(self):
         """
-        Stops the trading execution.
-
-        This method halts all trading activities, closes active exchange
-        connections, and updates the internal state to indicate the bot
-        is no longer running.
+        Stops trading: cancels every open grid order on the exchange (live/paper,
+        position kept), closes the connection, and marks the strategy stopped.
         """
         self._running = False
+        if self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}:
+            try:
+                await self.order_manager.close_positions(liquidate=False)
+            except Exception as e:
+                self.logger.error(f"Failed to cancel open orders during stop: {e}", exc_info=True)
         await self.exchange_service.close_connection()
         self.logger.info("Trading execution stopped.")
 

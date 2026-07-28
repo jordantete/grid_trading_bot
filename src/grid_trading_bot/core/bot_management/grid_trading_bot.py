@@ -311,6 +311,7 @@ class GridTradingBot:
         self.is_running = True
 
         try:
+            self.order_manager.reset_shutdown_state()
             self.order_status_tracker.start_tracking()
             if self.reconciliation_service:
                 self.reconciliation_service.start()
