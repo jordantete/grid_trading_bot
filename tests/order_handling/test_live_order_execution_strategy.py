@@ -147,19 +147,19 @@ class TestLiveOrderExecutionStrategy:
         assert result is False
 
     async def test_execute_market_order_partial_fill_cancel_succeeds_retries_remaining(self, setup_live_strategy):
-        """Partial fill → cancel succeeds → retry with remaining quantity."""
+        """Partial fill → cancel succeeds → retry with remaining quantity → fills are aggregated."""
         strategy, exchange_service = setup_live_strategy
         strategy.retry_delay = 0  # Speed up test
         pair = "BTC/USDT"
         quantity = 1.0
-        price = 30000
+        price = 100.0
 
         partial_raw = {
             "id": "partial-order",
             "status": "open",
             "type": "market",
             "side": "buy",
-            "price": price,
+            "price": 100.0,
             "amount": quantity,
             "filled": 0.3,
             "remaining": 0.7,
@@ -170,7 +170,7 @@ class TestLiveOrderExecutionStrategy:
             "status": "closed",
             "type": "market",
             "side": "buy",
-            "price": price,
+            "price": 102.0,
             "amount": 0.7,
             "filled": 0.7,
             "remaining": 0,
@@ -184,12 +184,15 @@ class TestLiveOrderExecutionStrategy:
 
         assert order is not None
         assert order.status == OrderStatus.CLOSED
+        assert order.filled == pytest.approx(1.0)
+        assert order.amount == pytest.approx(1.0)
+        assert order.average == pytest.approx((0.3 * 100.0 + 0.7 * 102.0) / 1.0)
         # Second call should use remaining quantity (0.7)
         second_call = exchange_service.place_order.call_args_list[1]
         assert second_call[0][3] == pytest.approx(0.7)
 
     async def test_execute_market_order_partial_fill_cancel_fails_returns_partial(self, setup_live_strategy):
-        """Partial fill → cancel fails → returns partial result (no double-spend)."""
+        """Partial fill → cancel fails → returns partial aggregate (no double-spend)."""
         strategy, exchange_service = setup_live_strategy
         strategy.retry_delay = 0
         pair = "BTC/USDT"
@@ -214,10 +217,93 @@ class TestLiveOrderExecutionStrategy:
         order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
 
         assert order is not None
-        assert order.status == OrderStatus.OPEN
-        assert order.filled == 0.3
+        assert order.status == OrderStatus.CLOSED
+        assert order.filled == pytest.approx(0.3)
+        assert order.amount == pytest.approx(1.0)
+        assert order.remaining == pytest.approx(0.7)
         # Should have only placed ONE order (no retry after failed cancel)
         assert exchange_service.place_order.call_count == 1
+
+    async def test_exhaustion_with_partial_fills_returns_aggregate(self, setup_live_strategy):
+        """Every leg partially fills and retries are exhausted → aggregate of all legs is returned."""
+        strategy, exchange_service = setup_live_strategy
+        strategy.retry_delay = 0
+        pair = "SOL/USDT"
+        quantity = 1.0
+        price = 100.0
+
+        partial_raw = {
+            "id": "partial-order",
+            "status": "open",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": quantity,
+            "filled": 0.2,
+            "remaining": 0.8,
+            "symbol": pair,
+        }
+
+        exchange_service.place_order = AsyncMock(return_value=partial_raw)
+        exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+
+        order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
+
+        assert exchange_service.place_order.call_count == strategy.max_retries
+        assert order.filled == pytest.approx(0.6)
+        assert order.remaining == pytest.approx(0.4)
+        assert order.status == OrderStatus.CLOSED
+
+    async def test_exhaustion_with_zero_fill_raises(self, setup_live_strategy):
+        """No leg ever fills anything → raises instead of returning an empty aggregate."""
+        strategy, exchange_service = setup_live_strategy
+        strategy.retry_delay = 0
+        pair = "SOL/USDT"
+
+        exchange_service.place_order = AsyncMock(side_effect=DataFetchError("Order failed"))
+
+        with pytest.raises(OrderExecutionFailedError):
+            await strategy.execute_market_order(OrderSide.BUY, pair, 1.0, 100.0)
+
+    async def test_rejected_leg_retries_full_remaining(self, setup_live_strategy):
+        """A rejected leg contributes no fill and must not shrink the quantity of the next retry."""
+        strategy, exchange_service = setup_live_strategy
+        strategy.retry_delay = 0
+        pair = "SOL/USDT"
+        quantity = 1.0
+        price = 100.0
+
+        rejected_raw = {
+            "id": "rejected-order",
+            "status": "rejected",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": quantity,
+            "filled": 0,
+            "remaining": quantity,
+            "symbol": pair,
+        }
+        closed_raw = {
+            "id": "final-order",
+            "status": "closed",
+            "type": "market",
+            "side": "buy",
+            "price": price,
+            "amount": quantity,
+            "filled": 1.0,
+            "remaining": 0,
+            "symbol": pair,
+        }
+
+        exchange_service.place_order = AsyncMock(side_effect=[rejected_raw, closed_raw])
+
+        order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
+
+        assert order.filled == pytest.approx(1.0)
+        # Second call must still use the full original quantity, not decremented by the rejected leg.
+        second_call = exchange_service.place_order.call_args_list[1]
+        assert second_call[0][3] == pytest.approx(quantity)
 
     async def test_retry_cancel_order(self, setup_live_strategy):
         strategy, exchange_service = setup_live_strategy

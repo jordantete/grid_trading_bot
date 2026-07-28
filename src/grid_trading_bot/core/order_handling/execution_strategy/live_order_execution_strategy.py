@@ -31,6 +31,10 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         price: float,
     ) -> Order | None:
         remaining_quantity = quantity
+        filled_total = 0.0
+        cost_total = 0.0
+        last_order: Order | None = None
+
         for attempt in range(self.max_retries):
             try:
                 raw_order = await self.exchange_service.place_order(
@@ -41,15 +45,28 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
                     price,
                 )
                 order_result = await self._parse_order_result(raw_order)
+                last_order = order_result
+                leg_filled = order_result.filled or 0.0
+                leg_price = order_result.average if order_result.average is not None else order_result.price
 
                 if order_result.status == OrderStatus.CLOSED:
-                    return order_result  # Order fully filled
+                    filled_total += leg_filled
+                    cost_total += leg_filled * leg_price
+                    return self._aggregate_market_order(order_result, quantity, filled_total, cost_total)
 
                 elif order_result.status == OrderStatus.OPEN:
-                    remaining_quantity -= order_result.filled
+                    filled_total += leg_filled
+                    cost_total += leg_filled * leg_price
+                    remaining_quantity -= leg_filled
                     cancel_succeeded = await self._handle_partial_fill(order_result, pair)
                     if not cancel_succeeded:
-                        return order_result  # Cannot cancel — return partial to avoid double-spend
+                        # Cannot cancel — return what is accounted so far to avoid double-spend
+                        return self._aggregate_market_order(order_result, quantity, filled_total, cost_total)
+
+                else:
+                    self.logger.warning(
+                        f"Market order leg returned status {order_result.status}; retrying full remaining.",
+                    )
 
                 await asyncio.sleep(self.retry_delay)
                 self.logger.info(f"Retrying order. Attempt {attempt + 1}/{self.max_retries}.")
@@ -59,6 +76,13 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
                 self.logger.error(f"Attempt {attempt + 1} failed with error: {e!s}")
                 await asyncio.sleep(self.retry_delay)
 
+        if filled_total > 0 and last_order is not None:
+            self.logger.error(
+                f"Market order exhausted retries with partial fill {filled_total}/{quantity}. "
+                f"Returning aggregate so fills stay accounted.",
+            )
+            return self._aggregate_market_order(last_order, quantity, filled_total, cost_total)
+
         raise OrderExecutionFailedError(
             "Failed to execute Market order after maximum retries.",
             order_side,
@@ -66,6 +90,36 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
             pair,
             quantity,
             price,
+        )
+
+    def _aggregate_market_order(
+        self,
+        last_order: Order,
+        requested_quantity: float,
+        filled_total: float,
+        cost_total: float,
+    ) -> Order:
+        """Synthesizes one Order covering every executed leg of a retried market order."""
+        average = cost_total / filled_total if filled_total > 0 else last_order.average
+        return Order(
+            identifier=last_order.identifier,
+            status=OrderStatus.CLOSED,
+            order_type=OrderType.MARKET,
+            side=last_order.side,
+            price=last_order.price,
+            average=average,
+            amount=requested_quantity,
+            filled=filled_total,
+            remaining=max(requested_quantity - filled_total, 0.0),
+            timestamp=last_order.timestamp,
+            datetime=last_order.datetime,
+            last_trade_timestamp=last_order.last_trade_timestamp,
+            symbol=last_order.symbol,
+            time_in_force=last_order.time_in_force,
+            trades=last_order.trades,
+            fee=last_order.fee,
+            cost=cost_total,
+            info=last_order.info,
         )
 
     async def execute_limit_order(
