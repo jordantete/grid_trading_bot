@@ -171,6 +171,25 @@ class TestGridTradingStrategy:
         exchange_service.close_connection.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_stop_closes_connection_even_when_close_positions_fails(self, setup_strategy):
+        """
+        Resilience test: close_connection must run even if close_positions raises.
+        Validates the exception-swallowing try/except in stop() prevents order cancellation
+        failures from blocking graceful shutdown.
+        """
+        create_strategy, _, exchange_service, _, order_manager, *_ = setup_strategy
+        strategy = create_strategy(TradingMode.LIVE)
+        exchange_service.close_connection = AsyncMock()
+        order_manager.close_positions = AsyncMock(side_effect=Exception("Order cancellation failed"))
+
+        # Should not raise; exception must be swallowed
+        await strategy.stop()
+
+        # Verify connection still closes despite close_positions failure
+        exchange_service.close_connection.assert_awaited_once()
+        assert strategy._running is False
+
+    @pytest.mark.asyncio
     async def test_restart_live_trading(self, setup_strategy):
         create_strategy, _, exchange_service, grid_manager, _, _, _, _, _ = setup_strategy
         strategy = create_strategy(TradingMode.LIVE)
