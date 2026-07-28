@@ -7,7 +7,7 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError, OrderExecutionFailedError
-from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
@@ -19,8 +19,17 @@ def _mock_order(
     remaining=1.0,
     price=95.0,
     identifier="o1",
+    status=None,
 ):
-    return Mock(identifier=identifier, side=side, amount=amount, filled=filled, remaining=remaining, price=price)
+    return Mock(
+        identifier=identifier,
+        side=side,
+        amount=amount,
+        filled=filled,
+        remaining=remaining,
+        price=price,
+        status=status,
+    )
 
 
 class TestOrderManager:
@@ -559,6 +568,7 @@ class TestOrderManager:
     @pytest.mark.asyncio
     async def test_execute_take_profit_or_stop_loss_order(self, setup_order_manager):
         manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
+        manager.trading_mode = TradingMode.BACKTEST
         balance_tracker.crypto_balance = 0.5
         order_execution_strategy.execute_market_order = AsyncMock(return_value=Mock())
         notification_handler.async_send_notification = AsyncMock()
@@ -576,6 +586,7 @@ class TestOrderManager:
     @pytest.mark.asyncio
     async def test_execute_stop_loss_order(self, setup_order_manager):
         manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
+        manager.trading_mode = TradingMode.BACKTEST
         balance_tracker.crypto_balance = 0.3
         order_execution_strategy.execute_market_order = AsyncMock(return_value=Mock())
         notification_handler.async_send_notification = AsyncMock()
@@ -604,6 +615,7 @@ class TestOrderManager:
     @pytest.mark.asyncio
     async def test_execute_take_profit_or_stop_loss_order_failure(self, setup_order_manager):
         manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
+        manager.trading_mode = TradingMode.BACKTEST
         balance_tracker.crypto_balance = 0.5
 
         order_execution_strategy.execute_market_order = AsyncMock(
@@ -628,6 +640,7 @@ class TestOrderManager:
     @pytest.mark.asyncio
     async def test_execute_take_profit_or_stop_loss_order_generic_exception(self, setup_order_manager):
         manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
+        manager.trading_mode = TradingMode.BACKTEST
         balance_tracker.crypto_balance = 0.5
 
         order_execution_strategy.execute_market_order = AsyncMock(
@@ -977,3 +990,137 @@ class TestOnOrderCancelled:
         await manager._on_order_cancelled(order)  # must not raise
 
         balance_tracker.release_reserved_fiat.assert_awaited()
+
+
+class TestClosePositions:
+    # ── close_positions ──────────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_cancel_only_keeps_position(self, setup_order_manager):
+        manager, _, _, _, _, _, order_execution_strategy, _ = setup_order_manager
+        manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        order_execution_strategy.execute_market_order = AsyncMock()
+
+        await manager.close_positions(liquidate=False)
+
+        manager.cancel_open_grid_orders.assert_awaited_once()
+        order_execution_strategy.execute_market_order.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_liquidate_sells_full_crypto_balance_and_updates_tracker(self, setup_order_manager):
+        manager, _, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
+        manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        balance_tracker.crypto_balance = 2.5  # includes released reservations
+        closed_order = _mock_order(side=OrderSide.SELL, status=OrderStatus.CLOSED, filled=2.5, amount=2.5)
+        order_execution_strategy.execute_market_order = AsyncMock(return_value=closed_order)
+
+        await manager.close_positions(liquidate=True, current_price=100.0)
+
+        order_execution_strategy.execute_market_order.assert_awaited_once_with(
+            OrderSide.SELL,
+            manager.trading_pair,
+            2.5,
+            100.0,
+        )
+        balance_tracker.update_after_liquidation.assert_awaited_once_with(closed_order)
+        order_book.add_order.assert_called_once_with(closed_order)
+
+    @pytest.mark.asyncio
+    async def test_second_call_is_noop(self, setup_order_manager):
+        manager, _, _, balance_tracker, _, _, order_execution_strategy, _ = setup_order_manager
+        manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        balance_tracker.crypto_balance = 1.0
+        closed_order = _mock_order(side=OrderSide.SELL, status=OrderStatus.CLOSED, filled=1.0, amount=1.0)
+        order_execution_strategy.execute_market_order = AsyncMock(return_value=closed_order)
+
+        await manager.close_positions(liquidate=True, current_price=100.0)
+        await manager.close_positions(liquidate=False)
+
+        manager.cancel_open_grid_orders.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reset_shutdown_state_rearms(self, setup_order_manager):
+        manager, *_ = setup_order_manager
+        manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+
+        await manager.close_positions(liquidate=False)
+        manager.reset_shutdown_state()
+        await manager.close_positions(liquidate=False)
+
+        assert manager.cancel_open_grid_orders.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cancel_failure_still_attempts_liquidation_and_notifies(self, setup_order_manager):
+        manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
+        manager.cancel_open_grid_orders = AsyncMock(return_value=False)
+        balance_tracker.crypto_balance = 1.0
+        closed_order = _mock_order(side=OrderSide.SELL, status=OrderStatus.CLOSED, filled=1.0, amount=1.0)
+        order_execution_strategy.execute_market_order = AsyncMock(return_value=closed_order)
+
+        await manager.close_positions(liquidate=True, current_price=100.0)
+
+        order_execution_strategy.execute_market_order.assert_awaited_once()
+        notification_handler.async_send_notification.assert_awaited()  # cancel-failure alert
+
+    @pytest.mark.asyncio
+    async def test_dust_liquidation_skipped(self, setup_order_manager):
+        manager, _, _, balance_tracker, _, _, order_execution_strategy, _ = setup_order_manager
+        manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        manager.set_market_constraints(MarketConstraints(min_amount=None, min_cost=1000.0))
+        balance_tracker.crypto_balance = 0.001
+        order_execution_strategy.execute_market_order = AsyncMock()
+
+        await manager.close_positions(liquidate=True, current_price=100.0)
+
+        order_execution_strategy.execute_market_order.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_crypto_balance_skips_liquidation(self, setup_order_manager):
+        manager, _, _, balance_tracker, _, _, order_execution_strategy, _ = setup_order_manager
+        manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        balance_tracker.crypto_balance = 0.0
+        order_execution_strategy.execute_market_order = AsyncMock()
+
+        await manager.close_positions(liquidate=True, current_price=100.0)
+
+        order_execution_strategy.execute_market_order.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_does_not_deadlock_with_real_cancel_open_grid_orders(self, setup_order_manager):
+        # Regression test: cancel_open_grid_orders() acquires OrderManager._lock itself,
+        # so close_positions must call it *before* taking the lock for liquidation.
+        manager, _, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
+        order_book.get_open_orders.return_value = []
+        order_book.get_buy_orders_with_grid.return_value = []
+        order_book.get_sell_orders_with_grid.return_value = []
+        balance_tracker.crypto_balance = 1.0
+        closed_order = _mock_order(side=OrderSide.SELL, status=OrderStatus.CLOSED, filled=1.0, amount=1.0)
+        order_execution_strategy.execute_market_order = AsyncMock(return_value=closed_order)
+
+        await asyncio.wait_for(manager.close_positions(liquidate=True, current_price=100.0), timeout=2)
+
+
+class TestTakeProfitStopLossLive:
+    # ── execute_take_profit_or_stop_loss_order (LIVE/PAPER_TRADING) ─────
+
+    @pytest.mark.asyncio
+    async def test_tp_delegates_to_close_positions(self, setup_order_manager):
+        manager, *_ = setup_order_manager
+        manager.close_positions = AsyncMock()
+
+        await manager.execute_take_profit_or_stop_loss_order(current_price=100.0, take_profit_order=True)
+
+        manager.close_positions.assert_awaited_once_with(liquidate=True, current_price=100.0)
+
+    @pytest.mark.asyncio
+    async def test_sl_delegates_to_close_positions_and_notifies(self, setup_order_manager):
+        manager, _, _, _, _, _, _, notification_handler = setup_order_manager
+        manager.close_positions = AsyncMock()
+
+        await manager.execute_take_profit_or_stop_loss_order(current_price=90.0, stop_loss_order=True)
+
+        manager.close_positions.assert_awaited_once_with(liquidate=True, current_price=90.0)
+        notification_handler.async_send_notification.assert_awaited_once_with(
+            NotificationType.STOP_LOSS_TRIGGERED,
+            order_details="Stop loss at 90.0: open orders cancelled, position liquidated.",
+        )

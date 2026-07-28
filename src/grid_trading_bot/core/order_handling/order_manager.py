@@ -52,6 +52,7 @@ class OrderManager:
         self.trading_pair = trading_pair
         self.market_constraints: MarketConstraints | None = None
         self._lock = asyncio.Lock()
+        self._positions_closed = False
         self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
 
@@ -571,6 +572,81 @@ class OrderManager:
         if buy_order and self.trading_mode == TradingMode.BACKTEST:
             await self.order_simulator.simulate_fill(buy_order, buy_order.timestamp)
 
+    def reset_shutdown_state(self) -> None:
+        """Re-arms close_positions after a bot restart."""
+        self._positions_closed = False
+
+    async def close_positions(self, liquidate: bool, current_price: float | None = None) -> None:
+        """
+        Unified shutdown path: cancels every open grid order (releasing reservations),
+        then optionally liquidates the full crypto balance at market. Idempotent —
+        a second call (e.g. STOP_BOT after a TP liquidation) is a no-op.
+
+        Note: `cancel_open_grid_orders` acquires `self._lock` itself, so it must be
+        awaited outside any lock held by this method to avoid deadlocking.
+        """
+        if self._positions_closed:
+            self.logger.info("close_positions already executed; skipping.")
+            return
+        self._positions_closed = True
+
+        cancelled = await self.cancel_open_grid_orders()
+        if not cancelled:
+            self.logger.error("Could not cancel all open grid orders during shutdown.")
+            await self.notification_handler.async_send_notification(
+                NotificationType.ERROR_OCCURRED,
+                error_details="Shutdown: some open grid orders could not be cancelled on the exchange.",
+            )
+
+        if not liquidate:
+            return
+
+        async with self._lock:
+            quantity = self.balance_tracker.crypto_balance
+            if quantity <= 0:
+                self.logger.info("No crypto balance to liquidate.")
+                return
+            if self.market_constraints is not None and current_price is not None:
+                violation = self.market_constraints.violation(quantity, current_price)
+                if violation:
+                    self.logger.error(f"Cannot liquidate position: {violation}")
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.ERROR_OCCURRED,
+                        error_details=f"Liquidation skipped: {violation}",
+                    )
+                    return
+            try:
+                order = await self.order_execution_strategy.execute_market_order(
+                    OrderSide.SELL,
+                    self.trading_pair,
+                    quantity,
+                    current_price,
+                )
+                if not order:
+                    raise OrderExecutionFailedError(f"Liquidation order returned None at price {current_price}")
+                await self.balance_tracker.update_after_liquidation(order)
+                self.order_book.add_order(order)
+                if order.filled < quantity:
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.ERROR_OCCURRED,
+                        error_details=(
+                            f"Liquidation partially filled: {order.filled}/{quantity}. "
+                            f"Remaining position is still on the exchange account."
+                        ),
+                    )
+            except OrderExecutionFailedError as e:
+                self.logger.error(f"Liquidation failed: {e!s}")
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ORDER_FAILED,
+                    error_details=f"Failed to liquidate position: {e}",
+                )
+            except (DataFetchError, ValueError) as e:
+                self.logger.error(f"Failed to liquidate at {current_price}: {e}")
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ERROR_OCCURRED,
+                    error_details=f"Failed to liquidate position: {e}",
+                )
+
     async def execute_take_profit_or_stop_loss_order(
         self,
         current_price: float,
@@ -580,54 +656,64 @@ class OrderManager:
         """
         Executes a sell order triggered by either a take-profit or stop-loss event.
 
-        This method checks whether a take-profit or stop-loss condition has been met
-        and places a market sell order accordingly. It uses the crypto balance tracked
-        by the `BalanceTracker` and sends notifications upon success or failure.
+        In BACKTEST mode this places a direct market sell of the tracked crypto balance.
+        In LIVE/PAPER_TRADING mode it delegates to `close_positions`, which also cancels
+        any open grid orders before liquidating so the shutdown accounting stays coherent.
 
         Args:
             current_price (float): The current market price triggering the event.
             take_profit_order (bool): Indicates whether this is a take-profit event.
             stop_loss_order (bool): Indicates whether this is a stop-loss event.
         """
-        async with self._lock:
-            if not (take_profit_order or stop_loss_order):
-                self.logger.warning("No take profit or stop loss action specified.")
-                return
+        if not (take_profit_order or stop_loss_order):
+            self.logger.warning("No take profit or stop loss action specified.")
+            return
 
-            event = "Take profit" if take_profit_order else "Stop loss"
-            try:
-                quantity = self.balance_tracker.crypto_balance
-                order = await self.order_execution_strategy.execute_market_order(
-                    OrderSide.SELL,
-                    self.trading_pair,
-                    quantity,
-                    current_price,
-                )
+        event = "Take profit" if take_profit_order else "Stop loss"
 
-                if not order:
-                    raise OrderExecutionFailedError(
-                        f"{event} order execution returned None at price {current_price}",
+        if self.trading_mode == TradingMode.BACKTEST:
+            async with self._lock:
+                try:
+                    quantity = self.balance_tracker.crypto_balance
+                    order = await self.order_execution_strategy.execute_market_order(
+                        OrderSide.SELL,
+                        self.trading_pair,
+                        quantity,
+                        current_price,
                     )
 
-                self.order_book.add_order(order)
-                await self.notification_handler.async_send_notification(
-                    NotificationType.TAKE_PROFIT_TRIGGERED
-                    if take_profit_order
-                    else NotificationType.STOP_LOSS_TRIGGERED,
-                    order_details=str(order),
-                )
-                self.logger.info(f"{event} triggered at {current_price} and sell order executed.")
+                    if not order:
+                        raise OrderExecutionFailedError(
+                            f"{event} order execution returned None at price {current_price}",
+                        )
 
-            except OrderExecutionFailedError as e:
-                self.logger.error(f"Order execution failed: {e!s}")
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ORDER_FAILED,
-                    error_details=f"Failed to place {event} order: {e}",
-                )
+                    self.order_book.add_order(order)
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.TAKE_PROFIT_TRIGGERED
+                        if take_profit_order
+                        else NotificationType.STOP_LOSS_TRIGGERED,
+                        order_details=str(order),
+                    )
+                    self.logger.info(f"{event} triggered at {current_price} and sell order executed.")
 
-            except (DataFetchError, ValueError) as e:
-                self.logger.error(f"Failed to execute {event} sell order at {current_price}: {e}")
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ERROR_OCCURRED,
-                    error_details=f"Failed to place {event} order: {e}",
-                )
+                except OrderExecutionFailedError as e:
+                    self.logger.error(f"Order execution failed: {e!s}")
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.ORDER_FAILED,
+                        error_details=f"Failed to place {event} order: {e}",
+                    )
+
+                except (DataFetchError, ValueError) as e:
+                    self.logger.error(f"Failed to execute {event} sell order at {current_price}: {e}")
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.ERROR_OCCURRED,
+                        error_details=f"Failed to place {event} order: {e}",
+                    )
+            return
+
+        await self.close_positions(liquidate=True, current_price=current_price)
+        await self.notification_handler.async_send_notification(
+            NotificationType.TAKE_PROFIT_TRIGGERED if take_profit_order else NotificationType.STOP_LOSS_TRIGGERED,
+            order_details=f"{event} at {current_price}: open orders cancelled, position liquidated.",
+        )
+        self.logger.info(f"{event} triggered at {current_price}; close_positions executed.")

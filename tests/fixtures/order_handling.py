@@ -24,6 +24,7 @@ def setup_order_manager():
     balance_tracker.release_reserved_crypto = AsyncMock()
     balance_tracker.settle_cancelled_order = AsyncMock()
     balance_tracker.update_after_initial_purchase = AsyncMock()
+    balance_tracker.update_after_liquidation = AsyncMock()
     order_book = Mock()
     event_bus = Mock(spec=EventBus)
     order_execution_strategy = Mock()
