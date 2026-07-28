@@ -308,6 +308,11 @@ class OrderManager:
             order: The filled Order instance.
         """
         async with self._lock:
+            if self._positions_closed:
+                self.logger.info(
+                    f"Positions already closed; ignoring fill for order {order.identifier}.",
+                )
+                return
             try:
                 grid_level = self.order_book.get_grid_level_for_order(order)
 

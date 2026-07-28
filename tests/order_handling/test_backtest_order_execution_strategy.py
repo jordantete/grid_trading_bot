@@ -25,7 +25,7 @@ class TestBacktestOrderExecutionStrategy:
         order = await strategy.execute_market_order(order_side, pair, quantity, price)
 
         assert order is not None
-        assert order.identifier == "backtest-1680000000"
+        assert order.identifier == "backtest-0"
         assert order.status == OrderStatus.OPEN
         assert order.order_type == OrderType.MARKET
         assert order.side == order_side
@@ -48,7 +48,7 @@ class TestBacktestOrderExecutionStrategy:
         order = await strategy.execute_limit_order(order_side, pair, quantity, price)
 
         assert order is not None
-        assert order.identifier == "backtest-1680000000"
+        assert order.identifier == "backtest-0"
         assert order.status == OrderStatus.OPEN
         assert order.order_type == OrderType.LIMIT
         assert order.side == order_side
@@ -87,6 +87,18 @@ class TestBacktestOrderExecutionStrategy:
 
         assert order.price == 30000
         assert order.average == 30000
+
+    @patch("time.time", return_value=1680000000)
+    async def test_order_ids_are_unique_within_the_same_second(self, mock_time, setup_strategy):
+        """Orders placed within the same wall-clock second must not collide on identifier."""
+        strategy = setup_strategy
+
+        market_order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000)
+        limit_order = await strategy.execute_limit_order(OrderSide.SELL, "BTC/USDT", 0.5, 30000)
+        another_market_order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000)
+
+        ids = {market_order.identifier, limit_order.identifier, another_market_order.identifier}
+        assert len(ids) == 3
 
     async def test_get_order(self, setup_strategy):
         strategy = setup_strategy

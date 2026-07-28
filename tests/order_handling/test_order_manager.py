@@ -200,6 +200,16 @@ class TestOrderManager:
         manager._handle_order_completion.assert_awaited_once_with(mock_order, mock_grid_level)
 
     @pytest.mark.asyncio
+    async def test_on_order_filled_ignored_after_positions_closed(self, setup_order_manager):
+        manager, _, _, _, order_book, _, _, _ = setup_order_manager
+        manager._positions_closed = True
+        mock_order = Mock(side=OrderSide.BUY, price=50000, identifier="o1")
+
+        await manager._on_order_filled(mock_order)
+
+        order_book.get_grid_level_for_order.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_on_order_filled_no_grid_level(self, setup_order_manager):
         manager, _, _, _, order_book, _, _, _ = setup_order_manager
         mock_order = Mock()
@@ -941,6 +951,32 @@ class TestOnOrderCancelled:
 
         balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
         grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY)
+        grid_manager.mark_order_pending.assert_called_once_with(grid_level, new_order)
+        order_book.add_order.assert_called_once_with(new_order, grid_level)
+
+    @pytest.mark.asyncio
+    async def test_settles_rolls_back_and_replaces_sell_side(self, setup_order_manager):
+        (
+            manager,
+            grid_manager,
+            order_validator,
+            balance_tracker,
+            order_book,
+            _,
+            order_execution_strategy,
+            _,
+        ) = setup_order_manager
+        grid_level = GridLevel(price=105.0, state=GridCycleState.WAITING_FOR_SELL_FILL)
+        order = _mock_order(side=OrderSide.SELL, amount=1.0, filled=0.0, remaining=1.0, price=105.0)
+        order_book.get_grid_level_for_order.return_value = grid_level
+        order_validator.adjust_and_validate_sell_quantity.return_value = 1.0
+        new_order = _mock_order(side=OrderSide.SELL, amount=1.0, filled=0.0, remaining=1.0, price=105.0)
+        order_execution_strategy.execute_limit_order = AsyncMock(return_value=new_order)
+
+        await manager._on_order_cancelled(order)
+
+        balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.SELL)
         grid_manager.mark_order_pending.assert_called_once_with(grid_level, new_order)
         order_book.add_order.assert_called_once_with(new_order, grid_level)
 

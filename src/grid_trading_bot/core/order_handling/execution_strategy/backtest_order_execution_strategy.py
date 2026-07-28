@@ -1,3 +1,4 @@
+import itertools
 import time
 
 from ..order import Order, OrderSide, OrderStatus, OrderType
@@ -7,6 +8,7 @@ from .order_execution_strategy_interface import OrderExecutionStrategyInterface
 class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
     def __init__(self, slippage: float = 0.0) -> None:
         self.slippage = slippage
+        self._id_counter = itertools.count()
 
     async def execute_market_order(
         self,
@@ -15,7 +17,7 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
         quantity: float,
         price: float,
     ) -> Order | None:
-        order_id = f"backtest-{int(time.time())}"
+        order_id = f"backtest-{next(self._id_counter)}"
         timestamp = int(time.time() * 1000)
         if self.slippage:
             average = price * (1 + self.slippage) if order_side == OrderSide.BUY else price * (1 - self.slippage)
@@ -45,7 +47,7 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
         quantity: float,
         price: float,
     ) -> Order | None:
-        order_id = f"backtest-{int(time.time())}"
+        order_id = f"backtest-{next(self._id_counter)}"
         return Order(
             identifier=order_id,
             status=OrderStatus.OPEN,
