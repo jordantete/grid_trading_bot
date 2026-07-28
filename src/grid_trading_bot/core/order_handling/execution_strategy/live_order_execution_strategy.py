@@ -47,7 +47,12 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
                 order_result = await self._parse_order_result(raw_order)
                 last_order = order_result
                 leg_filled = order_result.filled or 0.0
-                leg_price = order_result.average if order_result.average is not None else order_result.price
+                if order_result.average is not None:
+                    leg_price = order_result.average
+                elif order_result.price is not None:
+                    leg_price = order_result.price
+                else:
+                    leg_price = price
 
                 if order_result.status == OrderStatus.CLOSED:
                     filled_total += leg_filled

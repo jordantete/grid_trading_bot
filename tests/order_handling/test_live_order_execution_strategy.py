@@ -305,6 +305,45 @@ class TestLiveOrderExecutionStrategy:
         second_call = exchange_service.place_order.call_args_list[1]
         assert second_call[0][3] == pytest.approx(quantity)
 
+    async def test_leg_with_no_average_or_price_falls_back_to_attempt_price(self, setup_live_strategy):
+        """A leg reporting neither average nor price must not crash; falls back to the attempt's reference price."""
+        strategy, exchange_service = setup_live_strategy
+        strategy.retry_delay = 0
+        pair = "SOL/USDT"
+        quantity = 1.0
+        price = 100.0
+
+        partial_raw = {
+            "id": "partial-order",
+            "status": "open",
+            "type": "market",
+            "side": "buy",
+            "price": None,
+            "amount": quantity,
+            "filled": 0.4,
+            "remaining": 0.6,
+            "symbol": pair,
+        }
+        closed_raw = {
+            "id": "final-order",
+            "status": "closed",
+            "type": "market",
+            "side": "buy",
+            "price": 105.0,
+            "amount": 0.6,
+            "filled": 0.6,
+            "remaining": 0,
+            "symbol": pair,
+        }
+
+        exchange_service.place_order = AsyncMock(side_effect=[partial_raw, closed_raw])
+        exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+
+        order = await strategy.execute_market_order(OrderSide.BUY, pair, quantity, price)
+
+        assert order.filled == pytest.approx(1.0)
+        assert order.average == pytest.approx((0.4 * 100.0 + 0.6 * 105.0) / 1.0)
+
     async def test_retry_cancel_order(self, setup_live_strategy):
         strategy, exchange_service = setup_live_strategy
         order_id = "test-order-id"
