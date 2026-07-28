@@ -17,7 +17,8 @@ nav = [
   ]},
   {"Usage" = [
     "usage/cli.md",
-    "usage/notifications.md"
+    "usage/notifications.md",
+    "usage/going-live.md"
   ]},
   {"Monitoring" = [
     "monitoring/setup.md",

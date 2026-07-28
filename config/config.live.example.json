@@ -1,0 +1,71 @@
+{
+  "exchange": {
+    "name": "binance",
+    "trading_fee": 0.001,
+    "trading_mode": "paper_trading"
+  },
+  "pair": {
+    "base_currency": "SOL",
+    "quote_currency": "USDT"
+  },
+  "trading_settings": {
+    "timeframe": "1m",
+    "period": {
+      "start_date": "2024-12-10T09:00:00Z",
+      "end_date": "2024-12-15T23:00:00Z"
+    },
+    "initial_balance": 150
+  },
+  "grid_strategy": {
+    "type": "hedged_grid",
+    "spacing": "arithmetic",
+    "num_grids": 8,
+    "range": {
+      "top": 240,
+      "bottom": 210
+    },
+    "buy_ratio": 1.0,
+    "sell_ratio": 1.0,
+    "dynamic_spacing": {
+      "enabled": true,
+      "atr_period": 14,
+      "atr_spacing_multiplier": 0.5,
+      "regrid_threshold": 0.3,
+      "cooldown_bars": 60
+    }
+  },
+  "risk_management": {
+    "take_profit": {
+      "enabled": true,
+      "threshold": 3700
+    },
+    "stop_loss": {
+      "enabled": true,
+      "threshold": 2830
+    },
+    "trailing_stop_loss": {
+      "enabled": true,
+      "atr_period": 14,
+      "atr_multiplier": 2.0,
+      "on_trigger": "stop"
+    }
+  },
+  "persistence": {
+    "enabled": true,
+    "checkpoint_interval_seconds": 60
+  },
+  "execution": {
+    "max_retries": 3,
+    "retry_delay": 1.0,
+    "max_slippage": 0.01,
+    "order_polling_interval": 15.0,
+    "websocket_max_retries": 5,
+    "websocket_retry_base_delay": 5,
+    "health_check_interval": 60,
+    "reconciliation_interval": 300.0
+  },
+  "logging": {
+    "log_level": "INFO",
+    "log_to_file": true
+  }
+}
