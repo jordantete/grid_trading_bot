@@ -11,6 +11,7 @@ CANDLE_LIMITS = {
     "poloniex": 500,
     "gateio": 1000,
     "kucoin": 1500,
+    "mexc": 500,  # docs advertise 1000 for spot, but the API returns at most 500 (see ccxt mexc.fetch_ohlcv)
 }
 
 TIMEFRAME_MAPPINGS = {
