@@ -31,6 +31,48 @@ This starts three services:
 | **Grafana** | `grafana/grafana:12.4.0` | 3000 | Visualization and dashboards |
 | **Alloy** | `grafana/alloy:v1.13.2` | 12345 | Log collection agent |
 
+## Run the Bot with Docker Compose
+
+The bot itself is available as an optional Compose service behind the `bot` profile, so `docker-compose up -d` keeps starting the monitoring stack only.
+
+```bash
+# Build the bot image and start everything (monitoring + bot)
+docker-compose --profile bot up -d --build
+```
+
+The service is defined for 24/7 operation on a VPS:
+
+- **`restart: unless-stopped`** — auto-restart on crash and on reboot
+- **`./data` volume** — the SQLite state survives restarts, and the recovery service reconciles it with the exchange on startup
+- **`./logs` volume** — the bot writes its logs where Alloy tails them, so they show up in Grafana automatically
+- **`stdin_open: true`** — keeps the live-mode command listener idle instead of spinning on EOF in a detached container
+
+By default the bot runs with `config/config.json`, which is a **backtest** configuration: it runs once, exits, and the restart policy would run it again. For a long-running deployment, point the service at a live configuration via the `BOT_CONFIG` variable in your `.env` file:
+
+```bash
+# .env
+BOT_CONFIG=config/config.live.json
+EXCHANGE_API_KEY=your_api_key
+EXCHANGE_SECRET_KEY=your_secret_key
+```
+
+See `config/config.live.example.json` for a live configuration template.
+
+To follow the bot output, stop it, or deploy a new version:
+
+```bash
+docker-compose logs -f bot
+
+# Graceful stop (sends SIGINT so the bot shuts down cleanly)
+docker-compose --profile bot stop bot
+
+# Rebuild and restart after a git pull
+docker-compose --profile bot up -d --build bot
+```
+
+!!! warning "Protect Grafana on a public VPS"
+    Port 3000 on a public IP gets scanned constantly. Bind it to localhost and reach it through an SSH tunnel (`ssh -L 3000:127.0.0.1:3000 user@vps`), or put it behind a reverse proxy with authentication.
+
 ## Access Grafana
 
 1. Navigate to [http://localhost:3000](http://localhost:3000)

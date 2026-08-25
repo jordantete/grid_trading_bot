@@ -1,4 +1,29 @@
 services:
+  bot:
+    build: .
+    container_name: grid_trading_bot
+    profiles: ["bot"]
+    restart: unless-stopped
+    # Keep stdin open: the live-mode command listener blocks on input();
+    # without this it would spin on EOFError in a detached container
+    stdin_open: true
+    # SIGINT triggers the asyncio cancellation path for a clean shutdown;
+    # the default SIGTERM would terminate the process abruptly
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    command: ["run", "--config", "${BOT_CONFIG:-config/config.json}", "--no-plot"]
+    environment:
+      - EXCHANGE_API_KEY=${EXCHANGE_API_KEY:-}
+      - EXCHANGE_SECRET_KEY=${EXCHANGE_SECRET_KEY:-}
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+    cpus: 1.0
+    mem_limit: 1g
+    networks:
+      - default
+
   loki:
     image: grafana/loki:3.6.7
     container_name: loki

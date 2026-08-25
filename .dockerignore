@@ -1,0 +1,16 @@
+.git
+.venv
+.env
+.pytest_cache
+.ruff_cache
+__pycache__
+**/__pycache__
+data/
+logs/
+site/
+docs/
+tests/
+monitoring/
+htmlcov/
+*.prof
+*.log
