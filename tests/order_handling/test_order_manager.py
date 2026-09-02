@@ -8,7 +8,7 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError, OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
-from grid_trading_bot.core.services.exceptions import DataFetchError
+from grid_trading_bot.core.services.exceptions import DataFetchError, PostOnlyRejectedError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 
@@ -1160,3 +1160,139 @@ class TestTakeProfitStopLossLive:
             NotificationType.STOP_LOSS_TRIGGERED,
             order_details="Stop loss at 90.0: open orders cancelled, position liquidated.",
         )
+
+
+class TestOrderManagerPostOnlyRejection:
+    """
+    A maker-only order refused because it would cross means the grid level is simply not
+    placeable right now. It must release its reservation, leave the level untouched so the
+    next `initialize_grid_orders` retries it, and not be reported as a failed order.
+    """
+
+    @pytest.mark.asyncio
+    async def test_initialize_releases_the_reservation(self, setup_order_manager):
+        manager, grid_manager, order_validator, balance_tracker, _, _, order_execution_strategy, _ = setup_order_manager
+        grid_manager.sorted_buy_grids = [49000]
+        grid_manager.sorted_sell_grids = []
+        grid_manager.grid_levels = {49000: Mock()}
+        grid_manager.can_place_order.side_effect = lambda level, side: side == OrderSide.BUY
+        order_validator.adjust_and_validate_buy_quantity.return_value = 0.01
+        balance_tracker.balance = 1000
+        order_execution_strategy.execute_limit_order = AsyncMock(side_effect=PostOnlyRejectedError("would cross"))
+
+        await manager.initialize_grid_orders(49500)
+
+        balance_tracker.release_reserved_fiat.assert_awaited_once_with(0.01 * 49000)
+
+    @pytest.mark.asyncio
+    async def test_initialize_does_not_report_a_failure(self, setup_order_manager):
+        (
+            manager,
+            grid_manager,
+            order_validator,
+            balance_tracker,
+            _,
+            _,
+            order_execution_strategy,
+            notification_handler,
+        ) = setup_order_manager
+        grid_manager.sorted_buy_grids = [49000]
+        grid_manager.sorted_sell_grids = []
+        grid_manager.grid_levels = {49000: Mock()}
+        grid_manager.can_place_order.side_effect = lambda level, side: side == OrderSide.BUY
+        order_validator.adjust_and_validate_buy_quantity.return_value = 0.01
+        balance_tracker.balance = 1000
+        order_execution_strategy.execute_limit_order = AsyncMock(side_effect=PostOnlyRejectedError("would cross"))
+
+        await manager.initialize_grid_orders(49500)
+
+        notification_handler.async_send_notification.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_initialize_leaves_the_level_placeable(self, setup_order_manager):
+        manager, grid_manager, order_validator, balance_tracker, _, _, order_execution_strategy, _ = setup_order_manager
+        grid_manager.sorted_buy_grids = [49000]
+        grid_manager.sorted_sell_grids = []
+        grid_manager.grid_levels = {49000: Mock()}
+        grid_manager.can_place_order.side_effect = lambda level, side: side == OrderSide.BUY
+        order_validator.adjust_and_validate_buy_quantity.return_value = 0.01
+        balance_tracker.balance = 1000
+        order_execution_strategy.execute_limit_order = AsyncMock(side_effect=PostOnlyRejectedError("would cross"))
+
+        await manager.initialize_grid_orders(49500)
+
+        grid_manager.mark_order_pending.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_one_rejected_level_does_not_stop_the_others(self, setup_order_manager):
+        manager, grid_manager, order_validator, balance_tracker, order_book, _, order_execution_strategy, _ = (
+            setup_order_manager
+        )
+        grid_manager.sorted_buy_grids = [49000, 48000]
+        grid_manager.sorted_sell_grids = []
+        grid_manager.grid_levels = {49000: Mock(), 48000: Mock()}
+        grid_manager.can_place_order.side_effect = lambda level, side: side == OrderSide.BUY
+        order_validator.adjust_and_validate_buy_quantity.return_value = 0.01
+        balance_tracker.balance = 1000
+        placed = Mock()
+        order_execution_strategy.execute_limit_order = AsyncMock(
+            side_effect=[PostOnlyRejectedError("would cross"), placed],
+        )
+
+        await manager.initialize_grid_orders(49500)
+
+        assert order_execution_strategy.execute_limit_order.await_count == 2
+        order_book.add_order.assert_called_once_with(placed, grid_manager.grid_levels[48000])
+
+    @pytest.mark.asyncio
+    async def test_paired_order_rejection_releases_funds_and_stays_unpaired(self, setup_order_manager):
+        (
+            manager,
+            grid_manager,
+            order_validator,
+            balance_tracker,
+            _,
+            _,
+            order_execution_strategy,
+            notification_handler,
+        ) = setup_order_manager
+        source = GridLevel(price=95.0, state=GridCycleState.READY_TO_SELL)
+        target = GridLevel(price=105.0, state=GridCycleState.READY_TO_SELL)
+        order_validator.adjust_and_validate_sell_quantity.return_value = 0.5
+        balance_tracker.crypto_balance = 1
+        order_execution_strategy.execute_limit_order = AsyncMock(side_effect=PostOnlyRejectedError("would cross"))
+
+        await manager._place_order(OrderSide.SELL, source, target, 0.5)
+
+        balance_tracker.release_reserved_crypto.assert_awaited_once_with(0.5)
+        grid_manager.pair_grid_levels.assert_not_called()
+        grid_manager.mark_order_pending.assert_not_called()
+        notification_handler.async_send_notification.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_replacement_rejection_releases_funds_without_reporting(self, setup_order_manager):
+        (
+            manager,
+            grid_manager,
+            order_validator,
+            balance_tracker,
+            order_book,
+            _,
+            order_execution_strategy,
+            notification_handler,
+        ) = setup_order_manager
+        grid_level = GridLevel(price=95.0, state=GridCycleState.WAITING_FOR_BUY_FILL)
+        order = _mock_order(side=OrderSide.BUY, amount=1.0, filled=0.0, remaining=1.0, price=95.0)
+        order_book.get_grid_level_for_order.return_value = grid_level
+        order_validator.adjust_and_validate_buy_quantity.return_value = 1.0
+        order_execution_strategy.execute_limit_order = AsyncMock(side_effect=PostOnlyRejectedError("would cross"))
+
+        await manager._on_order_cancelled(order)
+
+        balance_tracker.release_reserved_fiat.assert_awaited_once_with(1.0 * 95.0)
+        grid_manager.mark_order_pending.assert_not_called()
+        # The ORDER_CANCELLED notification is expected; an error report on top of it is not.
+        sent = [c.args[0] for c in notification_handler.async_send_notification.await_args_list]
+        assert NotificationType.ORDER_CANCELLED in sent
+        assert NotificationType.ORDER_FAILED not in sent
+        assert NotificationType.ERROR_OCCURRED not in sent

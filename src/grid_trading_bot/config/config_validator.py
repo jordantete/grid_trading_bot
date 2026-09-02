@@ -55,6 +55,17 @@ class ConfigValidator:
             self.logger.error("Invalid or missing trading fee.")
             invalid_fields.append("exchange.trading_fee")
 
+        for fee_field in ("maker_fee", "taker_fee"):
+            fee = exchange.get(fee_field)
+            if fee is not None and (not isinstance(fee, float | int) or isinstance(fee, bool) or fee < 0):
+                self.logger.error(f"exchange.{fee_field} must be a non-negative number.")
+                invalid_fields.append(f"exchange.{fee_field}")
+
+        post_only = exchange.get("post_only")
+        if post_only is not None and not isinstance(post_only, bool):
+            self.logger.error("exchange.post_only must be a boolean.")
+            invalid_fields.append("exchange.post_only")
+
         trading_mode_str = exchange.get("trading_mode")
         if not trading_mode_str:
             invalid_fields.append("exchange.trading_mode")

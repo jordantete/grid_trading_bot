@@ -5,7 +5,7 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
-from grid_trading_bot.core.services.exceptions import DataFetchError
+from grid_trading_bot.core.services.exceptions import DataFetchError, PostOnlyRejectedError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 from ..grid_management.grid_level import GridCycleState, GridLevel
@@ -188,6 +188,11 @@ class OrderManager:
                             raise OrderExecutionFailedError(
                                 f"{side.value.capitalize()} order at {price} returned None",
                             )
+                    except PostOnlyRejectedError as e:
+                        await self._skip_post_only_rejection(
+                            side, adjusted_quantity, price, e, "Initial grid placement"
+                        )
+                        continue
                     except OrderExecutionFailedError:
                         await self._release_funds(side, adjusted_quantity, price)
                         raise
@@ -221,6 +226,28 @@ class OrderManager:
             await self.balance_tracker.release_reserved_fiat(quantity * price)
         else:
             await self.balance_tracker.release_reserved_crypto(quantity)
+
+    async def _skip_post_only_rejection(
+        self,
+        side: OrderSide,
+        quantity: float,
+        price: float,
+        error: PostOnlyRejectedError,
+        context: str,
+    ) -> None:
+        """
+        Handles a maker-only order the exchange refused because it would have crossed.
+
+        This is an expected market condition, not a failure: the reservation is released and
+        the grid level is left exactly as it was, so the next `initialize_grid_orders` (a
+        regrid or trailing-stop move) retries it. Logged at INFO with no failure
+        notification — reporting it as an error would drown the real ones.
+        """
+        await self._release_funds(side, quantity, price)
+        self.logger.info(
+            f"{context}: maker-only {side.value} order at grid level {price} would have crossed "
+            f"and was not placed ({error}). Level left available for a later cycle.",
+        )
 
     async def _handle_order_error(self, error: Exception, context: str) -> None:
         if isinstance(error, OrderExecutionFailedError):
@@ -282,6 +309,11 @@ class OrderManager:
                         adjusted_quantity,
                         grid_level.price,
                     )
+                except PostOnlyRejectedError as e:
+                    await self._skip_post_only_rejection(
+                        order.side, adjusted_quantity, grid_level.price, e, "Cancelled-order re-placement"
+                    )
+                    return
                 except Exception:
                     await self._release_funds(order.side, adjusted_quantity, grid_level.price)
                     raise
@@ -447,6 +479,11 @@ class OrderManager:
                 adjusted_quantity,
                 target_grid_level.price,
             )
+        except PostOnlyRejectedError as e:
+            await self._skip_post_only_rejection(
+                order_side, adjusted_quantity, target_grid_level.price, e, "Paired order placement"
+            )
+            return
         except Exception:
             await self._release_funds(order_side, adjusted_quantity, target_grid_level.price)
             raise

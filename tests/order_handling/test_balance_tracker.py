@@ -7,7 +7,7 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
-from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.order import Liquidity, Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.validation.exceptions import (
     InsufficientBalanceError,
     InsufficientCryptoBalanceError,
@@ -132,7 +132,7 @@ class TestBalanceTracker:
         fee_calculator.calculate_fee.return_value = 10
         balance_tracker._reserved_fiat = Decimal("500")
 
-        balance_tracker._update_after_buy_order_filled(quantity=1, price=100)
+        balance_tracker._update_after_buy_order_filled(quantity=1, price=100, liquidity=Liquidity.MAKER)
 
         assert balance_tracker.crypto_balance == 6
         assert balance_tracker.total_fees == 10
@@ -144,7 +144,7 @@ class TestBalanceTracker:
         fee_calculator.calculate_fee.return_value = 10
         balance_tracker._reserved_crypto = Decimal("2")
 
-        balance_tracker._update_after_sell_order_filled(quantity=1, price=200)
+        balance_tracker._update_after_sell_order_filled(quantity=1, price=200, liquidity=Liquidity.MAKER)
 
         assert balance_tracker.balance == 1190
         assert balance_tracker.total_fees == 10
@@ -347,7 +347,7 @@ class TestBalanceTracker:
 def balance_tracker():
     event_bus = Mock(spec=EventBus)
     fee_calculator = Mock(spec=FeeCalculator)
-    fee_calculator.calculate_fee.side_effect = lambda amount: amount * 0.001
+    fee_calculator.calculate_fee.side_effect = lambda amount, liquidity: amount * 0.001
     bt = BalanceTracker(
         event_bus=event_bus,
         fee_calculator=fee_calculator,
@@ -415,6 +415,110 @@ class TestUpdateAfterLiquidation:
 
         await bt.update_after_liquidation(order)
 
-        fee = bt.fee_calculator.calculate_fee(2.0 * 99.0)
+        fee = bt.fee_calculator.calculate_fee(2.0 * 99.0, Liquidity.TAKER)
         assert bt.balance == pytest.approx(2.0 * 99.0 - fee)
         assert bt.crypto_balance == 0.0
+
+
+class TestBalanceTrackerLiquidityAwareFees:
+    """
+    A fill must be charged at the rate matching its liquidity role: resting limit orders
+    pay the maker fee, market orders that cross the book pay the taker fee.
+    """
+
+    MAKER_RATE = 0.001
+    TAKER_RATE = 0.005
+
+    @pytest.fixture
+    def tracker(self):
+        config = Mock()
+        config.get_trading_fee.return_value = self.MAKER_RATE
+        config.get_maker_fee.return_value = self.MAKER_RATE
+        config.get_taker_fee.return_value = self.TAKER_RATE
+        bt = BalanceTracker(
+            event_bus=Mock(spec=EventBus),
+            fee_calculator=FeeCalculator(config),
+            trading_mode=TradingMode.LIVE,
+            base_currency="BTC",
+            quote_currency="USDT",
+        )
+        bt._balance = Decimal("100000")
+        return bt
+
+    @pytest.mark.asyncio
+    async def test_filled_limit_buy_pays_the_maker_fee(self, tracker):
+        tracker._reserved_fiat = Decimal("1000")
+        order = _make_order(
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            status=OrderStatus.CLOSED,
+            price=100.0,
+            average=100.0,
+        )
+
+        await tracker._update_balance_on_order_completion(order)
+
+        assert float(tracker.total_fees) == pytest.approx(100.0 * self.MAKER_RATE)
+
+    @pytest.mark.asyncio
+    async def test_filled_market_buy_pays_the_taker_fee(self, tracker):
+        tracker._reserved_fiat = Decimal("1000")
+        order = _make_order(
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.CLOSED,
+            price=100.0,
+            average=100.0,
+        )
+
+        await tracker._update_balance_on_order_completion(order)
+
+        assert float(tracker.total_fees) == pytest.approx(100.0 * self.TAKER_RATE)
+
+    @pytest.mark.asyncio
+    async def test_filled_limit_sell_pays_the_maker_fee(self, tracker):
+        tracker._reserved_crypto = Decimal("1")
+        order = _make_order(
+            side=OrderSide.SELL,
+            order_type=OrderType.LIMIT,
+            status=OrderStatus.CLOSED,
+            price=200.0,
+            average=200.0,
+        )
+
+        await tracker._update_balance_on_order_completion(order)
+
+        assert float(tracker.total_fees) == pytest.approx(200.0 * self.MAKER_RATE)
+
+    @pytest.mark.asyncio
+    async def test_initial_market_purchase_pays_the_taker_fee(self, tracker):
+        order = _make_order(
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.CLOSED,
+            price=100.0,
+            average=100.0,
+            amount=2.0,
+            filled=2.0,
+        )
+
+        await tracker.update_after_initial_purchase(order)
+
+        assert float(tracker.total_fees) == pytest.approx(2.0 * 100.0 * self.TAKER_RATE)
+
+    @pytest.mark.asyncio
+    async def test_liquidation_pays_the_taker_fee(self, tracker):
+        tracker._crypto_balance = Decimal("2")
+        order = _make_order(
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.CLOSED,
+            price=100.0,
+            average=99.0,
+            amount=2.0,
+            filled=2.0,
+        )
+
+        await tracker.update_after_liquidation(order)
+
+        assert float(tracker.total_fees) == pytest.approx(2.0 * 99.0 * self.TAKER_RATE)

@@ -6,7 +6,14 @@ import os
 import time
 from typing import Any
 
-from ccxt.base.errors import BaseError, ExchangeError, NetworkError, OrderNotFound
+from ccxt.base.errors import (
+    BaseError,
+    ExchangeError,
+    InvalidOrder,
+    NetworkError,
+    OrderImmediatelyFillable,
+    OrderNotFound,
+)
 import ccxt.pro as ccxtpro
 import pandas as pd
 
@@ -18,10 +25,31 @@ from .exceptions import (
     DataFetchError,
     MissingEnvironmentVariableError,
     OrderCancellationError,
+    PostOnlyRejectedError,
     UnsupportedExchangeError,
 )
 from .exchange_interface import ExchangeInterface
 from .market_constraints import MarketConstraints
+
+# Venues that do not map post-only rejections onto ccxt's OrderImmediatelyFillable report
+# them as a plain InvalidOrder, so the wording is the only signal left (e.g. Kraken's
+# "EOrder:Post only order").
+_POST_ONLY_REJECTION_MARKERS = (
+    "post only",
+    "postonly",
+    "immediately match",
+    "immediately fillable",
+)
+
+
+def _is_post_only_rejection(error: BaseException) -> bool:
+    """Whether a ccxt order error means "this maker-only order would have crossed"."""
+    if isinstance(error, OrderImmediatelyFillable):
+        return True
+    if not isinstance(error, InvalidOrder):
+        return False
+    message = str(error).lower().replace("-", " ").replace("_", " ")
+    return any(marker in message for marker in _POST_ONLY_REJECTION_MARKERS)
 
 
 class LiveExchangeService(ExchangeInterface):
@@ -40,10 +68,14 @@ class LiveExchangeService(ExchangeInterface):
         self.connection_active = False
         self.websocket_max_retries: int = self.config_manager.get_websocket_max_retries()
         self.websocket_retry_base_delay: int = self.config_manager.get_websocket_retry_base_delay()
+        self.post_only: bool = self.config_manager.get_post_only()
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=self.config_manager.get_circuit_breaker_failure_threshold(),
             recovery_timeout=self.config_manager.get_circuit_breaker_recovery_timeout(),
             half_open_max_calls=self.config_manager.get_circuit_breaker_half_open_max_calls(),
+            # A maker-only order that would cross is a normal market condition, not an
+            # exchange fault — a run of them must never open the breaker.
+            benign_exceptions=(PostOnlyRejectedError,),
         )
         self._last_known_price: float | None = None
         self._max_price_deviation: float = 0.50
@@ -263,6 +295,21 @@ class LiveExchangeService(ExchangeInterface):
             min_cost=(limits.get("cost") or {}).get("min"),
         )
 
+    def _order_params(self, order_type: str) -> dict[str, Any]:
+        """
+        Builds the exchange-specific params for an order.
+
+        `postOnly` is only ever set on limit orders: a market order crosses the book by
+        definition, and exchanges reject the combination. When `exchange.post_only` is
+        enabled the exchange rejects a limit order that would cross instead of filling it
+        as a taker; that rejection surfaces as `PostOnlyRejectedError` and leaves the grid
+        level untouched for a later cycle rather than counting as a failed placement.
+        """
+        params: dict[str, Any] = {}
+        if self.post_only and order_type.lower() == "limit":
+            params["postOnly"] = True
+        return params
+
     async def place_order(
         self,
         pair: str,
@@ -274,10 +321,24 @@ class LiveExchangeService(ExchangeInterface):
         try:
             precise_amount = float(self.exchange.amount_to_precision(pair, amount))
             precise_price = float(self.exchange.price_to_precision(pair, price)) if price is not None else None
-            order = await self.circuit_breaker.call(
-                self.exchange.create_order, pair, order_type, order_side, precise_amount, precise_price
-            )
-            return order
+            params = self._order_params(order_type)
+
+            async def create_order() -> dict[str, str | float]:
+                # The rejection is translated inside the breaker's callable so the breaker
+                # sees PostOnlyRejectedError — one of its benign types — rather than the raw
+                # ccxt error it would otherwise count as a failure.
+                try:
+                    return await self.exchange.create_order(
+                        pair, order_type, order_side, precise_amount, precise_price, params=params
+                    )
+                except BaseError as e:
+                    if self.post_only and _is_post_only_rejection(e):
+                        raise PostOnlyRejectedError(
+                            f"Maker-only {order_side} order on {pair} at {precise_price} would have crossed: {e!s}",
+                        ) from e
+                    raise
+
+            return await self.circuit_breaker.call(create_order)
 
         except CircuitBreakerOpenError as e:
             raise DataFetchError(f"Circuit breaker open: {e!s}") from e

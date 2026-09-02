@@ -4,7 +4,11 @@ import pytest
 
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
-from grid_trading_bot.core.services.exceptions import DataFetchError, OrderCancellationError
+from grid_trading_bot.core.services.exceptions import (
+    DataFetchError,
+    OrderCancellationError,
+    PostOnlyRejectedError,
+)
 
 
 @pytest.mark.asyncio
@@ -549,3 +553,29 @@ class TestLiveOrderExecutionStrategy:
         adjusted_price = await strategy._adjust_price(OrderSide.BUY, price, 0)
 
         assert adjusted_price == price
+
+
+@pytest.mark.asyncio
+class TestLiveOrderExecutionStrategyPostOnlyRejection:
+    """
+    Regression guard: PostOnlyRejectedError deliberately does not derive from DataFetchError,
+    so it must reach the OrderManager intact instead of being wrapped into the generic
+    OrderExecutionFailedError that triggers failure reporting.
+    """
+
+    async def test_rejection_reaches_the_caller_unwrapped(self, setup_live_strategy):
+        strategy, exchange_service = setup_live_strategy
+        exchange_service.place_order = AsyncMock(side_effect=PostOnlyRejectedError("would have crossed"))
+
+        with pytest.raises(PostOnlyRejectedError):
+            await strategy.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 100.0)
+
+    async def test_rejection_is_not_retried(self, setup_live_strategy):
+        """The price is a grid level; retrying the identical order would just be rejected again."""
+        strategy, exchange_service = setup_live_strategy
+        exchange_service.place_order = AsyncMock(side_effect=PostOnlyRejectedError("would have crossed"))
+
+        with pytest.raises(PostOnlyRejectedError):
+            await strategy.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 100.0)
+
+        assert exchange_service.place_order.await_count == 1

@@ -186,3 +186,67 @@ class TestCircuitBreaker:
 
             mock_warn.assert_called_once()
             assert "CLOSED to OPEN" in mock_warn.call_args[0][0]
+
+
+class BenignError(Exception):
+    """Stand-in for an expected, non-fault rejection (e.g. a post-only order that would cross)."""
+
+
+class TestCircuitBreakerBenignExceptions:
+    """
+    Some exchange rejections are expected outcomes, not faults. They must propagate to the
+    caller without counting toward the failure threshold, otherwise a run of them trips the
+    breaker and blocks every API call.
+    """
+
+    @pytest.fixture
+    def breaker(self):
+        return CircuitBreaker(
+            failure_threshold=3,
+            recovery_timeout=1.0,
+            half_open_max_calls=1,
+            benign_exceptions=(BenignError,),
+        )
+
+    @pytest.mark.asyncio
+    async def test_benign_exception_still_reaches_the_caller(self, breaker):
+        func = AsyncMock(side_effect=BenignError("would cross"))
+
+        with pytest.raises(BenignError, match="would cross"):
+            await breaker.call(func)
+
+    @pytest.mark.asyncio
+    async def test_benign_exceptions_never_open_the_breaker(self, breaker):
+        func = AsyncMock(side_effect=BenignError("would cross"))
+
+        for _ in range(10):
+            with pytest.raises(BenignError):
+                await breaker.call(func)
+
+        assert breaker.state == CircuitState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_benign_exception_does_not_reset_a_real_failure_count(self, breaker):
+        """A benign rejection is neither a fault nor a recovery — it must leave the tally alone."""
+        failing = AsyncMock(side_effect=Exception("real fault"))
+        benign = AsyncMock(side_effect=BenignError("would cross"))
+
+        for _ in range(2):
+            with pytest.raises(Exception, match="real fault"):
+                await breaker.call(failing)
+        with pytest.raises(BenignError):
+            await breaker.call(benign)
+        with pytest.raises(Exception, match="real fault"):
+            await breaker.call(failing)
+
+        assert breaker.state == CircuitState.OPEN
+
+    @pytest.mark.asyncio
+    async def test_non_benign_exceptions_still_open_the_breaker(self, breaker):
+        func = AsyncMock(side_effect=Exception("real fault"))
+
+        for _ in range(3):
+            with pytest.raises(Exception, match="real fault"):
+                await breaker.call(func)
+
+        assert breaker.state == CircuitState.OPEN

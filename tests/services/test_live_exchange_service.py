@@ -11,6 +11,7 @@ from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     MissingEnvironmentVariableError,
     OrderCancellationError,
+    PostOnlyRejectedError,
     UnsupportedExchangeError,
 )
 from grid_trading_bot.core.services.live_exchange_service import LiveExchangeService
@@ -27,6 +28,7 @@ class TestLiveExchangeService:
         config_manager.get_circuit_breaker_failure_threshold.return_value = 5
         config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
         config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+        config_manager.get_post_only.return_value = False
         return config_manager
 
     @pytest.fixture
@@ -123,7 +125,7 @@ class TestLiveExchangeService:
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
         await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
 
-        mock_exchange_instance.create_order.assert_called_once_with("BTC/USD", "limit", "buy", 1, 50000.0)
+        mock_exchange_instance.create_order.assert_called_once_with("BTC/USD", "limit", "buy", 1, 50000.0, params={})
 
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
@@ -143,7 +145,7 @@ class TestLiveExchangeService:
 
         with pytest.raises(DataFetchError, match="Error placing order"):
             await service.place_order("BTC/USD", "market", "buy", 1, 50000.0)
-        mock_exchange_instance.create_order.assert_awaited_once_with("BTC/USD", "market", "buy", 1, 50000.0)
+        mock_exchange_instance.create_order.assert_awaited_once_with("BTC/USD", "market", "buy", 1, 50000.0, params={})
 
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
@@ -742,6 +744,7 @@ class TestLiveExchangeService:
             "buy",
             0.123,
             100.45,
+            params={},
         )
 
 
@@ -756,6 +759,7 @@ class TestLiveExchangeServiceCircuitBreaker:
         config_manager.get_circuit_breaker_failure_threshold.return_value = 2
         config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
         config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+        config_manager.get_post_only.return_value = False
         return config_manager
 
     @pytest.fixture
@@ -937,6 +941,7 @@ class TestFetchRecentOhlcv:
         config_manager.get_circuit_breaker_failure_threshold.return_value = 5
         config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
         config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+        config_manager.get_post_only.return_value = False
         return config_manager
 
     @pytest.fixture
@@ -999,6 +1004,7 @@ class TestDeviationAnchorRelease:
         config_manager.get_circuit_breaker_failure_threshold.return_value = 5
         config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
         config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+        config_manager.get_post_only.return_value = False
         return config_manager
 
     @pytest.fixture
@@ -1058,6 +1064,7 @@ class TestWebSocketFailureHandling:
         config_manager.get_circuit_breaker_failure_threshold.return_value = 5
         config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
         config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+        config_manager.get_post_only.return_value = False
         return config_manager
 
     @pytest.fixture
@@ -1111,3 +1118,205 @@ class TestWebSocketFailureHandling:
 
         assert exchange_service.connection_active is False
         exchange_service.exchange.close.assert_awaited_once()
+
+
+class TestLiveExchangeServicePostOnly:
+    """
+    `exchange.post_only` makes grid limit orders maker-only: the exchange rejects them
+    instead of letting them cross and be charged the taker fee.
+    """
+
+    @pytest.fixture
+    def config_manager(self):
+        config_manager = Mock(spec=ConfigManager)
+        config_manager.get_exchange_name.return_value = "binance"
+        config_manager.get_trading_mode.return_value = TradingMode.LIVE
+        config_manager.get_websocket_max_retries.return_value = 5
+        config_manager.get_websocket_retry_base_delay.return_value = 5
+        config_manager.get_circuit_breaker_failure_threshold.return_value = 5
+        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
+        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+        config_manager.get_post_only.return_value = False
+        return config_manager
+
+    @pytest.fixture
+    def mock_exchange_instance(self):
+        exchange = AsyncMock()
+        exchange.amount_to_precision = Mock(side_effect=lambda pair, amount: str(amount))
+        exchange.price_to_precision = Mock(side_effect=lambda pair, price: str(price))
+        return exchange
+
+    @pytest.fixture
+    def setup_env_vars(self, monkeypatch):
+        monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
+        monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
+
+    def _service(self, mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        return LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_limit_order_is_posted_maker_only_when_enabled(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        config_manager.get_post_only.return_value = True
+        service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
+
+        await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+
+        _, kwargs = mock_exchange_instance.create_order.call_args
+        assert kwargs["params"]["postOnly"] is True
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_market_order_is_never_posted_maker_only(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        config_manager.get_post_only.return_value = True
+        service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
+
+        await service.place_order("BTC/USD", "market", "buy", 1, 50000.0)
+
+        _, kwargs = mock_exchange_instance.create_order.call_args
+        assert "postOnly" not in kwargs["params"]
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_limit_order_carries_no_post_only_flag_when_disabled(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
+
+        await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+
+        _, kwargs = mock_exchange_instance.create_order.call_args
+        assert "postOnly" not in kwargs["params"]
+
+
+class TestLiveExchangeServicePostOnlyRejection:
+    """
+    A maker-only order the exchange refuses because it would cross is an expected outcome,
+    not a fault: it must surface as its own type so callers can skip the level instead of
+    reporting a failed placement.
+    """
+
+    @pytest.fixture
+    def config_manager(self):
+        config_manager = Mock(spec=ConfigManager)
+        config_manager.get_exchange_name.return_value = "binance"
+        config_manager.get_trading_mode.return_value = TradingMode.LIVE
+        config_manager.get_websocket_max_retries.return_value = 5
+        config_manager.get_websocket_retry_base_delay.return_value = 5
+        config_manager.get_circuit_breaker_failure_threshold.return_value = 3
+        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
+        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+        config_manager.get_post_only.return_value = True
+        return config_manager
+
+    @pytest.fixture
+    def mock_exchange_instance(self):
+        exchange = AsyncMock()
+        exchange.amount_to_precision = Mock(side_effect=lambda pair, amount: str(amount))
+        exchange.price_to_precision = Mock(side_effect=lambda pair, price: str(price))
+        return exchange
+
+    @pytest.fixture
+    def setup_env_vars(self, monkeypatch):
+        monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
+        monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
+
+    def _service(self, mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        return LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_ccxt_post_only_error_becomes_post_only_rejected(
+        self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance
+    ):
+        service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
+        mock_exchange_instance.create_order.side_effect = ccxt.OrderImmediatelyFillable("would match")
+
+        with pytest.raises(PostOnlyRejectedError):
+            await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_generic_invalid_order_naming_post_only_is_recognised(
+        self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance
+    ):
+        """Not every venue maps to OrderImmediatelyFillable; Kraken reports 'Post only order'."""
+        service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
+        mock_exchange_instance.create_order.side_effect = ccxt.InvalidOrder("EOrder:Post only order")
+
+        with pytest.raises(PostOnlyRejectedError):
+            await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_unrelated_invalid_order_stays_a_data_fetch_error(
+        self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance
+    ):
+        """A genuinely bad order must not be laundered into a benign rejection."""
+        service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
+        mock_exchange_instance.create_order.side_effect = ccxt.InvalidOrder("Invalid price precision")
+
+        with pytest.raises(DataFetchError):
+            await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_post_only_wording_is_ignored_when_the_flag_is_off(
+        self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance
+    ):
+        """With post_only off no maker-only order was ever sent, so this cannot be that rejection."""
+        config_manager.get_post_only.return_value = False
+        service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
+        mock_exchange_instance.create_order.side_effect = ccxt.InvalidOrder("EOrder:Post only order")
+
+        with pytest.raises(DataFetchError):
+            await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_repeated_rejections_never_open_the_circuit_breaker(
+        self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance
+    ):
+        service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
+        mock_exchange_instance.create_order.side_effect = ccxt.OrderImmediatelyFillable("would match")
+
+        for _ in range(10):
+            with pytest.raises(PostOnlyRejectedError):
+                await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+
+        assert service.circuit_breaker.state == CircuitState.CLOSED
+
+    def test_post_only_rejection_is_not_a_data_fetch_error(self):
+        """The execution strategy wraps DataFetchError; this must slip past that wrapping."""
+        assert not issubclass(PostOnlyRejectedError, DataFetchError)

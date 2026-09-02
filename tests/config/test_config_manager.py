@@ -255,3 +255,32 @@ class TestPersistenceAccessors:
     def test_checkpoint_interval_configured(self, config_manager):
         config_manager.config["persistence"] = {"checkpoint_interval_seconds": 30.0}
         assert config_manager.get_checkpoint_interval_seconds() == 30.0
+
+
+class TestConfigManagerFeeAndPostOnly:
+    """Maker/taker fee split and the post-only execution flag."""
+
+    def test_get_maker_fee_falls_back_to_trading_fee(self, config_manager):
+        assert config_manager.get_maker_fee() == 0.001
+
+    def test_get_taker_fee_falls_back_to_trading_fee(self, config_manager):
+        assert config_manager.get_taker_fee() == 0.001
+
+    def test_get_maker_fee_uses_explicit_value(self, config_manager):
+        config_manager.config["exchange"]["maker_fee"] = 0.0016
+        assert config_manager.get_maker_fee() == 0.0016
+
+    def test_get_taker_fee_uses_explicit_value(self, config_manager):
+        config_manager.config["exchange"]["taker_fee"] = 0.0026
+        assert config_manager.get_taker_fee() == 0.0026
+
+    def test_explicit_maker_fee_does_not_change_taker_fee(self, config_manager):
+        config_manager.config["exchange"]["maker_fee"] = 0.0
+        assert config_manager.get_taker_fee() == 0.001
+
+    def test_get_post_only_defaults_to_false(self, config_manager):
+        assert config_manager.get_post_only() is False
+
+    def test_get_post_only_uses_explicit_value(self, config_manager):
+        config_manager.config["exchange"]["post_only"] = True
+        assert config_manager.get_post_only() is True

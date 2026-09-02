@@ -11,7 +11,7 @@ from ..validation.exceptions import (
     InsufficientCryptoBalanceError,
 )
 from .fee_calculator import FeeCalculator
-from .order import Order, OrderSide, OrderStatus
+from .order import Liquidity, Order, OrderSide, OrderStatus
 
 _QUANTIZE_EXP = Decimal("1e-8")
 
@@ -146,14 +146,15 @@ class BalanceTracker:
         async with self._lock:
             fill_price = order.average if order.average is not None else order.price
             if order.side == OrderSide.BUY:
-                self._update_after_buy_order_filled(order.filled, fill_price)
+                self._update_after_buy_order_filled(order.filled, fill_price, order.liquidity)
             elif order.side == OrderSide.SELL:
-                self._update_after_sell_order_filled(order.filled, fill_price)
+                self._update_after_sell_order_filled(order.filled, fill_price, order.liquidity)
 
     def _update_after_buy_order_filled(
         self,
         quantity: float,
         price: float,
+        liquidity: Liquidity,
     ) -> None:
         """
         Updates the balances after a buy order is completed, including handling reserved funds.
@@ -168,7 +169,7 @@ class BalanceTracker:
         """
         d_quantity = self._to_decimal(quantity)
         d_price = self._to_decimal(price)
-        fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price))
+        fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price, liquidity))
         total_cost = (d_quantity * d_price + fee).quantize(_QUANTIZE_EXP)
 
         self._reserved_fiat = (self._reserved_fiat - total_cost).quantize(_QUANTIZE_EXP)
@@ -186,6 +187,7 @@ class BalanceTracker:
         self,
         quantity: float,
         price: float,
+        liquidity: Liquidity,
     ) -> None:
         """
         Updates the balances after a sell order is completed, including handling reserved funds.
@@ -200,7 +202,7 @@ class BalanceTracker:
         """
         d_quantity = self._to_decimal(quantity)
         d_price = self._to_decimal(price)
-        fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price))
+        fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price, liquidity))
         sale_proceeds = (d_quantity * d_price - fee).quantize(_QUANTIZE_EXP)
         self._reserved_crypto = (self._reserved_crypto - d_quantity).quantize(_QUANTIZE_EXP)
 
@@ -229,7 +231,11 @@ class BalanceTracker:
             d_average = self._to_decimal(initial_order.average)
 
             total_cost = (d_filled * d_average).quantize(_QUANTIZE_EXP)
-            fee = self._to_decimal(self.fee_calculator.calculate_fee(initial_order.amount * initial_order.average))
+            fee = self._to_decimal(
+                self.fee_calculator.calculate_fee(
+                    initial_order.amount * initial_order.average, initial_order.liquidity
+                ),
+            )
 
             self._crypto_balance = (self._crypto_balance + d_filled).quantize(_QUANTIZE_EXP)
             self._balance = (self._balance - total_cost - fee).quantize(_QUANTIZE_EXP)
@@ -341,12 +347,12 @@ class BalanceTracker:
             fill_price = order.average if order.average is not None else order.price
             if order.side == OrderSide.BUY:
                 if filled > 0:
-                    self._update_after_buy_order_filled(filled, fill_price)
+                    self._update_after_buy_order_filled(filled, fill_price, order.liquidity)
                 if remaining > 0:
                     self._release_fiat_unlocked(remaining * order.price)
             elif order.side == OrderSide.SELL:
                 if filled > 0:
-                    self._update_after_sell_order_filled(filled, fill_price)
+                    self._update_after_sell_order_filled(filled, fill_price, order.liquidity)
                 if remaining > 0:
                     self._release_crypto_unlocked(remaining)
 
@@ -366,7 +372,7 @@ class BalanceTracker:
             fill_price = order.average if order.average is not None else order.price
             d_filled = self._to_decimal(order.filled)
             d_price = self._to_decimal(fill_price)
-            fee = self._to_decimal(self.fee_calculator.calculate_fee(order.filled * fill_price))
+            fee = self._to_decimal(self.fee_calculator.calculate_fee(order.filled * fill_price, order.liquidity))
             proceeds = (d_filled * d_price - fee).quantize(_QUANTIZE_EXP)
 
             self._crypto_balance = (self._crypto_balance - d_filled).quantize(_QUANTIZE_EXP)

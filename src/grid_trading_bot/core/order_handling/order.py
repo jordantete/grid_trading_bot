@@ -13,6 +13,13 @@ class OrderType(Enum):
     LIMIT = "limit"
 
 
+class Liquidity(Enum):
+    """Whether a fill added liquidity to the book (maker) or removed it (taker)."""
+
+    MAKER = "maker"
+    TAKER = "taker"
+
+
 class OrderStatus(Enum):
     OPEN = "open"
     CLOSED = "closed"
@@ -62,6 +69,18 @@ class Order:
         self.fee = fee  # fee info, if available
         self.cost = cost  # 'filled' * 'price' (filling price used where available)
         self.info = info  # Original unparsed structure for debugging or auditing
+
+    @property
+    def liquidity(self) -> Liquidity:
+        """
+        The liquidity role this order's fills are charged at.
+
+        Derived from the order type: a market order always crosses the spread, while a
+        limit order is assumed to rest on the book. That assumption only holds when the
+        order was posted maker-only — see `exchange.post_only` — since a plain limit
+        order that crosses is filled as a taker.
+        """
+        return Liquidity.TAKER if self.order_type == OrderType.MARKET else Liquidity.MAKER
 
     def is_filled(self) -> bool:
         return self.status == OrderStatus.CLOSED

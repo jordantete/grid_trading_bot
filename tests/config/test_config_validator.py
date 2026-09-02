@@ -221,3 +221,44 @@ class TestDynamicSpacingValidation:
         self._enable_dynamic(valid_config, regrid_threshold=-0.1)
         with pytest.raises(ConfigValidationError):
             config_validator.validate(valid_config)
+
+
+class TestConfigValidatorMakerTakerAndPostOnly:
+    """Optional `maker_fee` / `taker_fee` / `post_only` must be validated when present."""
+
+    @pytest.fixture
+    def config_validator(self):
+        return ConfigValidator()
+
+    def test_negative_maker_fee_is_rejected(self, config_validator, valid_config):
+        valid_config["exchange"]["maker_fee"] = -0.001
+        with pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+        assert "exchange.maker_fee" in excinfo.value.invalid_fields
+
+    def test_negative_taker_fee_is_rejected(self, config_validator, valid_config):
+        valid_config["exchange"]["taker_fee"] = -0.001
+        with pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+        assert "exchange.taker_fee" in excinfo.value.invalid_fields
+
+    def test_non_numeric_maker_fee_is_rejected(self, config_validator, valid_config):
+        valid_config["exchange"]["maker_fee"] = "0.001"
+        with pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+        assert "exchange.maker_fee" in excinfo.value.invalid_fields
+
+    def test_non_boolean_post_only_is_rejected(self, config_validator, valid_config):
+        valid_config["exchange"]["post_only"] = "yes"
+        with pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+        assert "exchange.post_only" in excinfo.value.invalid_fields
+
+    def test_zero_maker_fee_is_accepted(self, config_validator, valid_config):
+        valid_config["exchange"]["maker_fee"] = 0.0
+        valid_config["exchange"]["taker_fee"] = 0.0004
+        valid_config["exchange"]["post_only"] = True
+        config_validator.validate(valid_config)
+
+    def test_config_without_the_optional_fields_stays_valid(self, config_validator, valid_config):
+        config_validator.validate(valid_config)

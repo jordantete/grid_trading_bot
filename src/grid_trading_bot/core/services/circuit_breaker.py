@@ -20,11 +20,19 @@ class CircuitBreaker:
         failure_threshold: int = 5,
         recovery_timeout: float = 60.0,
         half_open_max_calls: int = 1,
+        benign_exceptions: tuple[type[BaseException], ...] = (),
     ) -> None:
+        """
+        Args:
+            benign_exceptions: Exception types that represent an expected rejection rather
+                than a fault. They propagate to the caller but count as neither a failure
+                nor a success, so a run of them can never trip the breaker.
+        """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.half_open_max_calls = half_open_max_calls
+        self.benign_exceptions = benign_exceptions
 
         self._state = CircuitState.CLOSED
         self._failure_count = 0
@@ -51,6 +59,10 @@ class CircuitBreaker:
 
         try:
             result = await func(*args, **kwargs)
+        except self.benign_exceptions:
+            # Expected rejection: propagate it, but leave the failure tally untouched so a
+            # run of them can neither trip the breaker nor clear a real fault count.
+            raise
         except Exception:
             await self._on_failure()
             raise

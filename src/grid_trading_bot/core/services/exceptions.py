@@ -34,6 +34,19 @@ class OrderCancellationError(Exception):
     pass
 
 
+class PostOnlyRejectedError(Exception):
+    """
+    Raised when the exchange refuses a maker-only order because it would have crossed
+    the spread.
+
+    This is an expected outcome, not a fault: the grid level is simply not placeable at
+    this moment. Deliberately not a `DataFetchError`, so it is neither wrapped into an
+    `OrderExecutionFailedError` by the execution strategy nor reported as a failed order.
+    """
+
+    pass
+
+
 class CircuitBreakerOpenError(Exception):
     """Raised when the circuit breaker is open and all API calls are blocked."""
 

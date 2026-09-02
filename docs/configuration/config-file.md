@@ -78,8 +78,45 @@ The bot is configured via a JSON file (typically `config/config.json`). This pag
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | Yes | Exchange name (e.g., `binance`, `kraken`). Must be supported by CCXT. |
-| `trading_fee` | float | Yes | Trading fee in decimal format (e.g., `0.001` for 0.1%). |
+| `trading_fee` | float | Yes | Flat trading fee in decimal format (e.g., `0.001` for 0.1%). Used for both sides unless `maker_fee` / `taker_fee` are set. |
+| `maker_fee` | float | No | Fee charged on liquidity-adding fills — resting grid limit orders. Defaults to `trading_fee`. |
+| `taker_fee` | float | No | Fee charged on liquidity-taking fills — the initial purchase, take-profit, stop-loss and liquidation market orders. Defaults to `trading_fee`. |
+| `post_only` | bool | No | Post grid limit orders maker-only. Defaults to `false`. |
 | `trading_mode` | string | Yes | One of `backtest`, `paper_trading`, or `live`. |
+
+#### Maker and taker fees
+
+Grid limit orders are meant to rest on the book and pay the maker fee, while the market
+orders the bot places on its own (initial purchase, take-profit, stop-loss, liquidation)
+cross the spread and pay the taker fee. On venues where the two rates differ — Kraken
+(0.16% / 0.26%) or Coinbase (0.60% / 1.20%) at low volume tiers, versus Binance spot which
+charges the same on both sides — declaring only `trading_fee` under-costs whichever side is
+cheaper in the config and distorts backtest results.
+
+Both keys default to `trading_fee`, so an existing single-rate config keeps behaving exactly
+as before.
+
+#### Post-only orders
+
+`post_only` sends grid limit orders as maker-only: the exchange **rejects** an order that
+would cross the spread instead of filling it as a taker. It is never applied to market
+orders, which cross by definition.
+
+A rejection is treated as an expected market condition, not a failure. The bot:
+
+- releases the funds it had reserved for the order;
+- leaves the grid level exactly as it was, so the next `initialize_grid_orders` — triggered
+  by a regrid or a trailing-stop move — retries it;
+- logs at `INFO` and sends no failure notification;
+- does not count the rejection toward the circuit breaker's failure threshold.
+
+The order is never re-priced away from its grid level: that would place it off-grid and
+silently distort the profit spacing the whole strategy is built on.
+
+!!! tip "Recommended for live trading"
+
+    `config.live.example.json` ships with `post_only: true`. The default is `false` so that
+    upgrading never changes how an existing deployment places orders.
 
 ### `pair`
 

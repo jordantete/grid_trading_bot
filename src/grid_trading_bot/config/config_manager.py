@@ -57,6 +57,21 @@ class ConfigManager:
         exchange = self.get_exchange()
         return exchange.get("trading_fee", 0)
 
+    def get_maker_fee(self) -> float:
+        """Fee charged on liquidity-adding fills, defaulting to the flat `trading_fee`."""
+        exchange = self.get_exchange()
+        return exchange.get("maker_fee", self.get_trading_fee())
+
+    def get_taker_fee(self) -> float:
+        """Fee charged on liquidity-taking fills, defaulting to the flat `trading_fee`."""
+        exchange = self.get_exchange()
+        return exchange.get("taker_fee", self.get_trading_fee())
+
+    def get_post_only(self) -> bool:
+        """Whether limit orders must be posted as maker-only (rejected instead of crossing)."""
+        exchange = self.get_exchange()
+        return exchange.get("post_only", False)
+
     def get_trading_mode(self) -> TradingMode | None:
         exchange = self.get_exchange()
         trading_mode = exchange.get("trading_mode", None)

@@ -2,6 +2,9 @@
   "exchange": {
     "name": "binance",
     "trading_fee": 0.001,
+    "maker_fee": 0.001,
+    "taker_fee": 0.001,
+    "post_only": true,
     "trading_mode": "paper_trading"
   },
   "pair": {

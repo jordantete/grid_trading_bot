@@ -1,6 +1,6 @@
 import pytest
 
-from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.order import Liquidity, Order, OrderSide, OrderStatus, OrderType
 
 
 class TestOrder:
@@ -102,3 +102,31 @@ class TestOrder:
             {"id": "trade2", "price": 1950.0, "amount": 2.0},
         ]
         assert order.cost == 5850.0
+
+
+class TestOrderLiquidity:
+    """A fill's liquidity role, which decides whether it is charged the maker or taker fee."""
+
+    def _order(self, order_type: OrderType) -> Order:
+        return Order(
+            identifier="1",
+            status=OrderStatus.CLOSED,
+            order_type=order_type,
+            side=OrderSide.BUY,
+            price=1000.0,
+            average=1000.0,
+            amount=1.0,
+            filled=1.0,
+            remaining=0.0,
+            timestamp=1695890800,
+            datetime="2024-01-01T00:00:00Z",
+            last_trade_timestamp=None,
+            symbol="BTC/USDT",
+            time_in_force="GTC",
+        )
+
+    def test_limit_order_adds_liquidity(self):
+        assert self._order(OrderType.LIMIT).liquidity == Liquidity.MAKER
+
+    def test_market_order_takes_liquidity(self):
+        assert self._order(OrderType.MARKET).liquidity == Liquidity.TAKER
