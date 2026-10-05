@@ -42,7 +42,7 @@ dev = [
     "pytest-cov==7.1.0",
     "pytest-timeout==2.4.0",
     "pre-commit==4.6.2",
-    "ruff==0.16.9",
+    "ruff==0.16.10",
 ]
 docs = [
     "zensical>=0.0.23",
