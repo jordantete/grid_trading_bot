@@ -282,8 +282,9 @@ class GridTradingStrategy(TradingStrategyInterface):
         ):
             if i >= start_index and self.stop_reason is None:
                 if not grid_orders_initialized:
+                    # The grid is placed at this candle's close, so its high and low are already in the past.
                     grid_orders_initialized = await self._initialize_grid_orders_once(current_price, False)
-                if grid_orders_initialized:
+                else:
                     await self._simulate_backtest_candle(i, current_price, high_price, low_price, timestamp)
 
             account_values[i] = self.balance_tracker.get_total_balance_value(current_price)

@@ -199,3 +199,27 @@ async def test_infeasible_grid_stops_the_backtest_once(tmp_path):
     assert bot.strategy.armed is False
     assert bot.strategy.data["account_value"].notna().all()
     assert _roi(result) == 0.0
+
+
+async def test_orders_placed_at_a_candle_close_first_meet_the_next_candle(tmp_path):
+    # Candle 0 closes at 100 inside the grid; its low (92) would cross three buy levels.
+    rows = [(100.0, 100.2, 92.0, 100.0), (100.0, 100.2, 98.0, 100.0), *_flat(100.0, 5)]
+
+    bot, _ = await _run(_config(tmp_path, rows))
+
+    filled_grid_buys = [
+        order for order, level in bot.order_book.get_buy_orders_with_grid() if level is not None and order.is_filled()
+    ]
+    assert [round(order.price, 2) for order in filled_grid_buys] == [98.57]
+
+
+async def test_stop_loss_on_the_candle_after_arming(tmp_path):
+    rows = _flat(100.0, 1) + _ramp(100.0, -5.0, 3) + _flat(85.0, 5)
+    config = _config(tmp_path, rows, risk_management={"stop_loss": {"enabled": True, "threshold": 96.0}})
+
+    bot, _ = await _run(config)
+
+    account_value = bot.strategy.data["account_value"]
+    assert bot.strategy.stop_reason == "stop_loss"
+    assert account_value.notna().all()
+    assert (account_value.iloc[1:] == account_value.iloc[1]).all()
