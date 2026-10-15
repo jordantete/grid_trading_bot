@@ -3,6 +3,7 @@ import logging
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
+from grid_trading_bot.strategies.performance_metrics import PerformanceMetrics
 
 
 class TradingStrategyInterface(ABC):
@@ -48,7 +49,7 @@ class TradingStrategyInterface(ABC):
         pass
 
     @abstractmethod
-    def generate_performance_report(self) -> tuple[dict, list]:
+    def generate_performance_report(self) -> tuple[PerformanceMetrics | None, dict, list]:
         """
         Generates a report summarizing the strategy's performance (ROI, max drawdown, etc.).
         Must be implemented by any subclass.

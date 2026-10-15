@@ -18,6 +18,7 @@ from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.risk_management.trailing_stop_loss import TrailingStopLoss
 from grid_trading_bot.core.services.exceptions import DataFetchError, HistoricalMarketDataFileNotFoundError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
+from grid_trading_bot.strategies.performance_metrics import PerformanceMetrics
 from grid_trading_bot.strategies.plotter import Plotter
 from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
 
@@ -360,7 +361,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.armed = True
         return True
 
-    def generate_performance_report(self) -> tuple[dict, list]:
+    def generate_performance_report(self) -> tuple[PerformanceMetrics | None, dict, list]:
         """
         Generates a performance report for the trading session.
 
@@ -368,7 +369,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         the account value, fees, and final price over the given timeframe.
 
         Returns:
-            tuple: A dictionary summarizing performance metrics and a list of formatted order details.
+            tuple: The typed metrics (None without data), their display summary and the formatted orders.
         """
         if self.trading_mode == TradingMode.BACKTEST:
             initial_price = self.close_prices[0]
@@ -380,11 +381,13 @@ class GridTradingStrategy(TradingStrategyInterface):
                 self.balance_tracker.get_adjusted_crypto_balance(),
                 final_price,
                 self.balance_tracker.total_fees,
+                armed=self.armed,
+                stop_reason=self.stop_reason,
             )
         else:
             if not self.live_trading_metrics:
                 self.logger.warning("No account value data available for live/paper trading mode.")
-                return {}, []
+                return None, {}, []
 
             live_data = pd.DataFrame(self.live_trading_metrics, columns=["timestamp", "account_value", "price"])
             live_data.set_index("timestamp", inplace=True)
@@ -398,6 +401,8 @@ class GridTradingStrategy(TradingStrategyInterface):
                 self.balance_tracker.get_adjusted_crypto_balance(),
                 final_price,
                 self.balance_tracker.total_fees,
+                armed=self.armed,
+                stop_reason=self.stop_reason,
             )
 
     def plot_results(self) -> None:

@@ -244,6 +244,19 @@ class TestGridTradingBot:
             "orders": [],
         }
 
+    def test_generate_and_log_performance_exposes_typed_metrics(self, bot):
+        metrics = Mock()
+        bot.strategy.generate_performance_report = Mock(return_value=(metrics, {"ROI": "1.00%"}, []))
+
+        result = bot._generate_and_log_performance()
+
+        assert result == {
+            "config": bot.config_path,
+            "performance_summary": {"ROI": "1.00%"},
+            "orders": [],
+            "metrics": metrics,
+        }
+
     @pytest.mark.asyncio
     async def test_get_exchange_status(self, bot):
         bot.exchange_service = MagicMock()

@@ -274,6 +274,8 @@ class TestGridTradingStrategy:
             balance_tracker.get_adjusted_crypto_balance(),
             final_price,
             balance_tracker.total_fees,
+            armed=False,
+            stop_reason=None,
         )
 
     def test_plot_results(self, setup_strategy):
@@ -538,8 +540,9 @@ class TestGridTradingStrategy:
         create_strategy, _, _, _, _, _, trading_performance_analyzer, _, _ = setup_strategy
         strategy = create_strategy(TradingMode.LIVE)
 
-        result, formatted_orders = strategy.generate_performance_report()
+        metrics, result, formatted_orders = strategy.generate_performance_report()
 
+        assert metrics is None
         assert result == {}
         assert formatted_orders == []
         trading_performance_analyzer.generate_performance_summary.assert_not_called()

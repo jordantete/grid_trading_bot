@@ -78,7 +78,7 @@ class TestPerformanceAnalyzer:
         # Total buy cost: (1 * 1000 + 2) + (0.5 * 1100 + 1) = 1002 + 551 = 1553
         # Total sell revenue: (1 * 1200 - 1.5) + (0.5 * 1300 - 0.5) = 1198.5 + 649.5 = 1848
         # Gains: 1848 - 1553 = 295.00
-        assert result == "295.00"
+        assert result == pytest.approx(295.0)
 
     def test_calculate_trading_gains_uses_average_fill_price(self, setup_performance_analyzer):
         """Gains must be computed at the actual (slipped) fill price when available."""
@@ -97,7 +97,20 @@ class TestPerformanceAnalyzer:
         result = analyzer._calculate_trading_gains()
 
         # Buy at 1010 (slipped), sell at 1190 (slipped): 1190 - 1010 = 180.00, not 200.00
-        assert result == "180.00"
+        assert result == pytest.approx(180.0)
+
+    def test_avg_crypto_exposure_is_the_mean_share_held_in_crypto(self, setup_performance_analyzer):
+        analyzer, _, _ = setup_performance_analyzer
+        data = pd.DataFrame(
+            {"account_value": [1000.0, 1000.0, 1000.0, 1000.0], "crypto_value": [0.0, 500.0, 1000.0, 500.0]}
+        )
+
+        assert analyzer._calculate_avg_crypto_exposure(data) == pytest.approx(0.5)
+
+    def test_avg_crypto_exposure_is_none_without_crypto_values(self, setup_performance_analyzer, mock_account_data):
+        analyzer, _, _ = setup_performance_analyzer
+
+        assert analyzer._calculate_avg_crypto_exposure(mock_account_data) is None
 
     def test_calculate_trading_gains_zero_trades(self, setup_performance_analyzer):
         analyzer, _, order_book = setup_performance_analyzer
@@ -105,7 +118,7 @@ class TestPerformanceAnalyzer:
         order_book.get_all_sell_orders.return_value = []
 
         trading_gains = analyzer._calculate_trading_gains()
-        assert trading_gains == "N/A"
+        assert trading_gains is None
 
     def test_calculate_sharpe_ratio(self, setup_performance_analyzer, mock_account_data):
         analyzer, _, _ = setup_performance_analyzer
@@ -282,13 +295,15 @@ class TestPerformanceAnalyzer:
 
         # Capture logs during the performance summary generation
         with caplog.at_level(logging.INFO):
-            performance_summary, formatted_orders = analyzer.generate_performance_summary(
+            metrics, performance_summary, formatted_orders = analyzer.generate_performance_summary(
                 mock_account_data,
                 initial_price,
                 final_fiat_balance,
                 final_crypto_balance,
                 final_crypto_price,
                 total_fees,
+                armed=True,
+                stop_reason=None,
             )
 
         # Assertions for performance summary
@@ -321,6 +336,20 @@ class TestPerformanceAnalyzer:
         assert performance_summary["Number of Sell Trades"] == 1
         assert "Sharpe Ratio" in performance_summary
         assert "Sortino Ratio" in performance_summary
+        assert performance_summary["ROI"] == f"{metrics.roi_pct:.2f}%"
+        assert performance_summary["Max Drawdown"] == f"{metrics.max_drawdown_pct:.2f}%"
+        assert performance_summary["Sharpe Ratio"] == f"{metrics.sharpe_ratio:.2f}"
+        assert performance_summary["Sortino Ratio"] == f"{metrics.sortino_ratio:.2f}"
+        assert performance_summary["Buy and Hold Return %"] == f"{metrics.buy_and_hold_return_pct:.2f}%"
+        assert performance_summary["Grid Trading Gains"] == f"{metrics.grid_trading_gains:.2f}"
+        assert performance_summary["Total Fees"] == f"{metrics.total_fees:.2f}"
+        assert performance_summary["Final Balance (Fiat)"] == f"{metrics.final_balance:.2f}"
+        assert performance_summary["Number of Buy Trades"] == metrics.num_buy_trades
+        assert performance_summary["Number of Sell Trades"] == metrics.num_sell_trades
+        assert metrics.equity_coverage == 1.0
+        assert metrics.avg_crypto_exposure is None  # no crypto_value column, as in live
+        assert metrics.armed is True
+        assert metrics.stop_reason is None
 
         # Assertions for formatted orders
         assert len(formatted_orders) == 2  # One buy and one sell order

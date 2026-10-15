@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import json
 from unittest.mock import mock_open, patch
 
 import pytest
@@ -74,3 +75,12 @@ def test_save_or_append_performance_results_unexpected_exception(new_results_fix
         mock_logger_error.assert_any_call(
             "An unexpected error occurred while saving performance metrics: Unexpected Error",
         )
+
+
+def test_saver_ignores_the_typed_metrics_key(tmp_path):
+    path = tmp_path / "results.json"
+    result = {"config": "c.json", "performance_summary": {"ROI": "1.00%"}, "orders": [], "metrics": object()}
+
+    save_or_append_performance_results(result, str(path))
+
+    assert json.loads(path.read_text()) == [{"config": "c.json", "performance_summary": {"ROI": "1.00%"}, "orders": []}]

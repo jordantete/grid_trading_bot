@@ -223,3 +223,27 @@ async def test_stop_loss_on_the_candle_after_arming(tmp_path):
     assert bot.strategy.stop_reason == "stop_loss"
     assert account_value.notna().all()
     assert (account_value.iloc[1:] == account_value.iloc[1]).all()
+
+
+async def test_metrics_of_a_window_where_the_grid_never_arms(tmp_path):
+    _, result = await _run(_config(tmp_path, _flat(200.0, 30)))
+
+    metrics = result["metrics"]
+    assert metrics.armed is False
+    assert metrics.avg_crypto_exposure == 0.0
+    assert metrics.roi_pct == 0.0
+    assert metrics.equity_coverage == 1.0
+    assert metrics.stop_reason is None
+
+
+async def test_metrics_after_a_stop_loss(tmp_path):
+    config = _config(tmp_path, DROP_THEN_RALLY, risk_management={"stop_loss": {"enabled": True, "threshold": 85.0}})
+
+    _, result = await _run(config)
+
+    metrics = result["metrics"]
+    assert metrics.stop_reason == "stop_loss"
+    assert metrics.armed is True
+    assert metrics.equity_coverage == 1.0
+    assert 0.0 < metrics.avg_crypto_exposure < 1.0
+    assert metrics.roi_pct == pytest.approx(_roi(result), abs=0.005)

@@ -9,6 +9,7 @@ from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.core.grid_management.grid_level import GridLevel
 from grid_trading_bot.core.order_handling.order import Order
 from grid_trading_bot.core.order_handling.order_book import OrderBook
+from grid_trading_bot.strategies.performance_metrics import PerformanceMetrics
 from grid_trading_bot.utils.constants import TIMEFRAME_MAPPINGS
 
 ANNUAL_RISK_FREE_RATE = 0.03  # annual risk free rate 3%
@@ -57,7 +58,7 @@ class TradingPerformanceAnalyzer:
         roi = (final_balance - initial_balance) / initial_balance * 100
         return round(roi, 2)
 
-    def _calculate_trading_gains(self) -> str:
+    def _calculate_trading_gains(self) -> float | None:
         """
         Calculates the total trading gains from completed buy and sell orders.
 
@@ -65,7 +66,7 @@ class TradingPerformanceAnalyzer:
         from executed trades.
 
         Returns:
-            str: The total grid trading gains as a formatted string, or "N/A" if there are no sell orders.
+            float | None: the total grid trading gains, or None if there are no sell orders.
         """
         total_buy_cost = 0.0
         total_sell_revenue = 0.0
@@ -84,7 +85,7 @@ class TradingPerformanceAnalyzer:
             sell_fee = sell_order.fee.get("cost", 0.0) if sell_order.fee else 0.0
             total_sell_revenue += trade_value - sell_fee
 
-        return "N/A" if total_sell_revenue == 0 else f"{total_sell_revenue - total_buy_cost:.2f}"
+        return None if total_sell_revenue == 0 else total_sell_revenue - total_buy_cost
 
     def _calculate_drawdown(self, data: pd.DataFrame) -> float:
         peak = data["account_value"].expanding(min_periods=1).max()
@@ -227,6 +228,12 @@ class TradingPerformanceAnalyzer:
         """
         return ((final_price - initial_price) / initial_price) * 100
 
+    def _calculate_avg_crypto_exposure(self, data: pd.DataFrame) -> float | None:
+        """Mean share of the account held in crypto over the candles; None without a crypto_value column (live)."""
+        if "crypto_value" not in data.columns:
+            return None
+        return float((data["crypto_value"] / data["account_value"]).mean())
+
     def generate_performance_summary(
         self,
         data: pd.DataFrame,
@@ -235,7 +242,10 @@ class TradingPerformanceAnalyzer:
         final_crypto_balance: float,
         final_crypto_price: float,
         total_fees: float,
-    ) -> tuple[dict[str, Any], list[list[str | float]]]:
+        *,
+        armed: bool,
+        stop_reason: str | None,
+    ) -> tuple[PerformanceMetrics, dict[str, Any], list[list[str | float]]]:
         """
         Generate a detailed performance summary for the trading session.
 
@@ -245,10 +255,11 @@ class TradingPerformanceAnalyzer:
             final_crypto_balance (float): Final cryptocurrency balance.
             final_crypto_price (float): Final cryptocurrency price.
             total_fees (float): Total trading fees incurred.
+            armed (bool): Whether the grid was armed during the session.
+            stop_reason (str | None): Why trading stopped, or None if it ran to the end.
 
         Returns:
-            Tuple[Dict[str, Any], List[List[Union[str, float]]]]: A dictionary of
-            performance metrics and a list of formatted orders.
+            tuple: The typed metrics, a dictionary of display metrics and a list of formatted orders.
         """
         pair = f"{self.base_currency}/{self.quote_currency}"
         start_date = data.index[0]
@@ -257,37 +268,47 @@ class TradingPerformanceAnalyzer:
         duration = end_date - start_date
         final_crypto_value = final_crypto_balance * final_crypto_price
         final_balance = final_fiat_balance + final_crypto_value
-        roi = self._calculate_roi(initial_balance, final_balance)
-        grid_trading_gains = self._calculate_trading_gains()
-        max_drawdown = self._calculate_drawdown(data)
         max_runup = self._calculate_runup(data)
         time_in_profit, time_in_loss = self._calculate_time_in_profit_loss(initial_balance, data)
-        sharpe_ratio = self._calculate_sharpe_ratio(data)
-        sortino_ratio = self._calculate_sortino_ratio(data)
-        buy_and_hold_return = self._calculate_buy_and_hold_return(data, initial_price, final_crypto_price)
         num_buy_trades, num_sell_trades = self._calculate_trade_counts()
+        metrics = PerformanceMetrics(
+            roi_pct=self._calculate_roi(initial_balance, final_balance),
+            max_drawdown_pct=float(self._calculate_drawdown(data)),
+            sharpe_ratio=float(self._calculate_sharpe_ratio(data)),
+            sortino_ratio=float(self._calculate_sortino_ratio(data)),
+            buy_and_hold_return_pct=float(self._calculate_buy_and_hold_return(data, initial_price, final_crypto_price)),
+            grid_trading_gains=self._calculate_trading_gains(),
+            total_fees=float(total_fees),
+            final_balance=float(final_balance),
+            num_buy_trades=num_buy_trades,
+            num_sell_trades=num_sell_trades,
+            avg_crypto_exposure=self._calculate_avg_crypto_exposure(data),
+            equity_coverage=float(data["account_value"].notna().mean()),
+            armed=armed,
+            stop_reason=stop_reason,
+        )
 
         performance_summary = {
             "Pair": pair,
             "Start Date": start_date,
             "End Date": end_date,
             "Duration": duration,
-            "ROI": f"{roi:.2f}%",
-            "Max Drawdown": f"{max_drawdown:.2f}%",
+            "ROI": f"{metrics.roi_pct:.2f}%",
+            "Max Drawdown": f"{metrics.max_drawdown_pct:.2f}%",
             "Max Runup": f"{max_runup:.2f}%",
             "Time in Profit %": f"{time_in_profit:.2f}%",
             "Time in Loss %": f"{time_in_loss:.2f}%",
-            "Buy and Hold Return %": f"{buy_and_hold_return:.2f}%",
-            "Grid Trading Gains": f"{grid_trading_gains}",
-            "Total Fees": f"{total_fees:.2f}",
-            "Final Balance (Fiat)": f"{final_balance:.2f}",
+            "Buy and Hold Return %": f"{metrics.buy_and_hold_return_pct:.2f}%",
+            "Grid Trading Gains": "N/A" if metrics.grid_trading_gains is None else f"{metrics.grid_trading_gains:.2f}",
+            "Total Fees": f"{metrics.total_fees:.2f}",
+            "Final Balance (Fiat)": f"{metrics.final_balance:.2f}",
             "Final Crypto Balance": f"{final_crypto_balance:.4f} {self.base_currency}",
             "Final Crypto Value (Fiat)": f"{final_crypto_value:.2f} {self.quote_currency}",
             "Remaining Fiat Balance": f"{final_fiat_balance:.2f} {self.quote_currency}",
-            "Number of Buy Trades": num_buy_trades,
-            "Number of Sell Trades": num_sell_trades,
-            "Sharpe Ratio": f"{sharpe_ratio:.2f}",
-            "Sortino Ratio": f"{sortino_ratio:.2f}",
+            "Number of Buy Trades": metrics.num_buy_trades,
+            "Number of Sell Trades": metrics.num_sell_trades,
+            "Sharpe Ratio": f"{metrics.sharpe_ratio:.2f}",
+            "Sortino Ratio": f"{metrics.sortino_ratio:.2f}",
         }
 
         formatted_orders = self.get_formatted_orders()
@@ -302,4 +323,4 @@ class TradingPerformanceAnalyzer:
         summary_table = tabulate(performance_summary.items(), headers=["Metric", "Value"], tablefmt="grid")
         self.logger.info("\nPerformance Summary:\n" + summary_table)
 
-        return performance_summary, formatted_orders
+        return metrics, performance_summary, formatted_orders

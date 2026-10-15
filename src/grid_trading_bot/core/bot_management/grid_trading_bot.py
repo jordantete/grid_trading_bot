@@ -357,11 +357,12 @@ class GridTradingBot:
         self.logger.info("Grid Trading Bot has been restarted.")
 
     def _generate_and_log_performance(self) -> dict[str, Any] | None:
-        performance_summary, formatted_orders = self.strategy.generate_performance_report()
+        metrics, performance_summary, formatted_orders = self.strategy.generate_performance_report()
         return {
             "config": self.config_path,
             "performance_summary": performance_summary,
             "orders": formatted_orders,
+            "metrics": metrics,
         }
 
     async def get_bot_health_status(self) -> dict:
