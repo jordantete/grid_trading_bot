@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 from decimal import Decimal
 import logging
 
@@ -12,8 +13,19 @@ from ..validation.exceptions import (
 )
 from .fee_calculator import FeeCalculator
 from .order import Liquidity, Order, OrderSide, OrderStatus
+from .pnl_ledger import PnlLedger
 
 _QUANTIZE_EXP = Decimal("1e-8")
+
+
+@dataclass(frozen=True)
+class AccountSnapshot:
+    price: float
+    value: float
+    peak: float
+    drawdown_pct: float
+    realized_pnl: float
+    unrealized_pnl: float
 
 
 class BalanceTracker:
@@ -47,6 +59,8 @@ class BalanceTracker:
         self._total_fees: Decimal = Decimal("0")
         self._reserved_fiat: Decimal = Decimal("0")
         self._reserved_crypto: Decimal = Decimal("0")
+        self._ledger = PnlLedger()
+        self._peak_value: Decimal | None = None
         self._lock = asyncio.Lock()
 
         self.event_bus.subscribe(Events.ORDER_FILLED, self._update_balance_on_order_completion)
@@ -98,6 +112,8 @@ class BalanceTracker:
         """
         self._reserved_fiat = Decimal("0")
         self._reserved_crypto = Decimal("0")
+        self._ledger = PnlLedger()
+        self._peak_value = None
 
         if self.trading_mode == TradingMode.BACKTEST or self.trading_mode == TradingMode.PAPER_TRADING:
             self._balance = self._to_decimal(initial_balance)
@@ -171,6 +187,7 @@ class BalanceTracker:
         d_price = self._to_decimal(price)
         fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price, liquidity))
         total_cost = (d_quantity * d_price + fee).quantize(_QUANTIZE_EXP)
+        self._ledger.record_buy(self._position(), d_quantity, d_price, fee)
 
         self._reserved_fiat = (self._reserved_fiat - total_cost).quantize(_QUANTIZE_EXP)
         if self._reserved_fiat < 0:
@@ -204,6 +221,7 @@ class BalanceTracker:
         d_price = self._to_decimal(price)
         fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price, liquidity))
         sale_proceeds = (d_quantity * d_price - fee).quantize(_QUANTIZE_EXP)
+        self._ledger.record_sell(self._position(), d_quantity, d_price, fee)
         self._reserved_crypto = (self._reserved_crypto - d_quantity).quantize(_QUANTIZE_EXP)
 
         if self._reserved_crypto < 0:
@@ -236,6 +254,7 @@ class BalanceTracker:
                     initial_order.amount * initial_order.average, initial_order.liquidity
                 ),
             )
+            self._ledger.record_buy(self._position(), d_filled, d_average, fee)
 
             self._crypto_balance = (self._crypto_balance + d_filled).quantize(_QUANTIZE_EXP)
             self._balance = (self._balance - total_cost - fee).quantize(_QUANTIZE_EXP)
@@ -374,6 +393,7 @@ class BalanceTracker:
             d_price = self._to_decimal(fill_price)
             fee = self._to_decimal(self.fee_calculator.calculate_fee(order.filled * fill_price, order.liquidity))
             proceeds = (d_filled * d_price - fee).quantize(_QUANTIZE_EXP)
+            self._ledger.record_sell(self._position(), d_filled, d_price, fee)
 
             self._crypto_balance = (self._crypto_balance - d_filled).quantize(_QUANTIZE_EXP)
             if self._crypto_balance < 0:
@@ -421,3 +441,24 @@ class BalanceTracker:
             float: The total account value in fiat terms.
         """
         return self.get_adjusted_fiat_balance() + self.get_adjusted_crypto_balance() * price
+
+    def _position(self) -> Decimal:
+        return self._crypto_balance + self._reserved_crypto
+
+    def snapshot(self, price: float) -> AccountSnapshot:
+        """Values the account at `price` and raises the recorded peak when the value exceeds it."""
+        d_price = self._to_decimal(price)
+        position = self._position()
+        self._ledger.price_seen(position, d_price)
+        value = self._balance + self._reserved_fiat + position * d_price
+        if self._peak_value is None or value > self._peak_value:
+            self._peak_value = value
+        drawdown_pct = (self._peak_value - value) / self._peak_value * 100 if self._peak_value > 0 else Decimal("0")
+        return AccountSnapshot(
+            price=price,
+            value=float(value),
+            peak=float(self._peak_value),
+            drawdown_pct=float(drawdown_pct),
+            realized_pnl=float(self._ledger.realized_pnl),
+            unrealized_pnl=float(self._ledger.unrealized_pnl(position, d_price)),
+        )

@@ -1,4 +1,5 @@
 from decimal import Decimal
+import random
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -522,3 +523,107 @@ class TestBalanceTrackerLiquidityAwareFees:
         await tracker.update_after_liquidation(order)
 
         assert float(tracker.total_fees) == pytest.approx(2.0 * 99.0 * self.TAKER_RATE)
+
+
+class TestAccountSnapshot:
+    def test_peak_rises_and_drawdown_measures_the_fall_from_it(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto  # 2 crypto, 0 fiat
+
+        first = bt.snapshot(100.0)
+        bt.snapshot(150.0)
+        low = bt.snapshot(120.0)
+
+        assert (first.value, first.peak, first.drawdown_pct) == (200.0, 200.0, 0.0)
+        assert low.value == pytest.approx(240.0)
+        assert low.peak == pytest.approx(300.0)
+        assert low.drawdown_pct == pytest.approx(20.0)
+
+    def test_crypto_of_unknown_cost_starts_with_zero_unrealized_pnl(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto
+
+        assert bt.snapshot(100.0).unrealized_pnl == 0.0
+        assert bt.snapshot(110.0).unrealized_pnl == pytest.approx(20.0)
+
+    def test_empty_account_has_zero_drawdown(self, balance_tracker):
+        balance_tracker._balance = Decimal("0")
+
+        snapshot = balance_tracker.snapshot(100.0)
+
+        assert (snapshot.value, snapshot.peak, snapshot.drawdown_pct) == (0.0, 0.0, 0.0)
+
+    async def test_setup_balances_resets_cost_realized_pnl_and_peak(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto
+        bt.snapshot(100.0)
+        bt._ledger.realized_pnl = Decimal("5")
+        bt.trading_mode = TradingMode.PAPER_TRADING
+
+        await bt.setup_balances(initial_balance=1000.0, initial_crypto_balance=0.0)
+
+        snapshot = bt.snapshot(100.0)
+        assert (snapshot.realized_pnl, snapshot.unrealized_pnl, snapshot.peak) == (0.0, 0.0, 1000.0)
+
+
+class TestAccountingIdentity:
+    async def test_value_change_equals_realized_plus_unrealized_pnl(self, balance_tracker):
+        bt = balance_tracker  # 1000 fiat, 0 crypto, fee 0.1 % of the trade value
+        rng = random.Random(7)  # noqa: S311
+        price = 100.0
+        value0 = bt.snapshot(price).value
+
+        initial = _make_order(
+            OrderSide.BUY, order_type=OrderType.MARKET, status=OrderStatus.CLOSED, price=price, average=price
+        )
+        await bt.update_after_initial_purchase(initial)
+
+        for _ in range(300):
+            price = max(1.0, price * (1 + rng.uniform(-0.03, 0.03)))
+            action = rng.choice(["buy", "sell", "partial_buy", "partial_sell"])
+            quantity = round(rng.uniform(0.01, 0.5), 6)
+            if action in ("buy", "partial_buy") and bt.balance > quantity * price * 1.01:
+                await bt.reserve_funds_for_buy(quantity * price)
+                filled = quantity if action == "buy" else round(quantity * 0.4, 6)
+                order = _make_order(
+                    OrderSide.BUY,
+                    price=price,
+                    average=price,
+                    amount=quantity,
+                    filled=filled,
+                    remaining=quantity - filled,
+                )
+                if action == "buy":
+                    await bt._update_balance_on_order_completion(order)
+                else:
+                    await bt.settle_cancelled_order(order)
+            elif action in ("sell", "partial_sell") and bt.crypto_balance >= quantity:
+                await bt.reserve_funds_for_sell(quantity)
+                filled = quantity if action == "sell" else round(quantity * 0.4, 6)
+                order = _make_order(
+                    OrderSide.SELL,
+                    price=price,
+                    average=price,
+                    amount=quantity,
+                    filled=filled,
+                    remaining=quantity - filled,
+                )
+                if action == "sell":
+                    await bt._update_balance_on_order_completion(order)
+                else:
+                    await bt.settle_cancelled_order(order)
+            snapshot = bt.snapshot(price)
+            # Each balance move is quantized to 1e-8 while the ledger is not, so the gap can grow by that per fill.
+            assert snapshot.value - value0 == pytest.approx(snapshot.realized_pnl + snapshot.unrealized_pnl, abs=1e-5)
+
+        position = bt.crypto_balance
+        liquidation = _make_order(
+            OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.CLOSED,
+            price=price,
+            average=price,
+            amount=position,
+            filled=position,
+        )
+        await bt.update_after_liquidation(liquidation)
+        final = bt.snapshot(price)
+        assert final.unrealized_pnl == 0.0
+        assert final.value - value0 == pytest.approx(final.realized_pnl, abs=1e-5)
