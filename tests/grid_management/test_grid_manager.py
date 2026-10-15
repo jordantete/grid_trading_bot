@@ -161,13 +161,36 @@ class TestGridManager:
 
         assert result == pytest.approx(expected_quantity)
 
-    def test_get_initial_order_quantity_hedged_grid_covers_sell_orders_above_price(self, config_manager):
+    @pytest.mark.parametrize(
+        ("price", "expected_quantity"),
+        [
+            # 1555.6 is nearest and stays free: 1666.7 to 2000 sell
+            (1520, 4000 / 1520),
+            # 1444.4 is nearest and stays free: 1555.6 to 2000 sell
+            (1460, 5000 / 1460),
+            # 2000 is nearest and stays free: nothing sells
+            (1950, 0.0),
+            # armed exactly on the top level: nothing sells
+            (2000, 0.0),
+        ],
+    )
+    def test_get_initial_order_quantity_hedged_grid_funds_the_planned_sells(
+        self, config_manager, price, expected_quantity
+    ):
         grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
         grid_manager.initialize_grids_and_levels()
 
-        result = grid_manager.get_initial_order_quantity(10000, 0.0, 1950)
+        result = grid_manager.get_initial_order_quantity(10000, 0.0, price)
 
-        assert result == pytest.approx(1000 / 1950)
+        assert result == pytest.approx(expected_quantity)
+
+    def test_hedged_grid_armed_on_top_level_plans_no_sell(self, config_manager):
+        grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
+        grid_manager.initialize_grids_and_levels()
+
+        plan = grid_manager.get_initial_order_plan(2000)
+
+        assert all(side == OrderSide.BUY for _, side in plan)
 
     def test_pair_grid_levels(self, grid_manager):
         source_grid_level = Mock(spec=GridLevel, price=1000)

@@ -92,11 +92,11 @@ class OrderManager:
         current_price: float,
     ):
         """
-        Places initial buy and sell orders for grid levels around the current price.
+        Places the initial grid orders the strategy plans for the current price.
         """
         async with self._lock:
-            await self._initialize_orders(OrderSide.BUY, current_price)
-            await self._initialize_orders(OrderSide.SELL, current_price)
+            for grid_level, side in self.grid_manager.get_initial_order_plan(current_price):
+                await self._initialize_order(grid_level, side, current_price)
 
     async def cancel_open_grid_orders(self) -> bool:
         """
@@ -143,67 +143,55 @@ class OrderManager:
 
             return True
 
-    async def _initialize_orders(self, side: OrderSide, current_price: float) -> None:
-        grids = self.grid_manager.sorted_buy_grids if side == OrderSide.BUY else self.grid_manager.sorted_sell_grids
+    async def _initialize_order(self, grid_level: GridLevel, side: OrderSide, current_price: float) -> None:
+        price = grid_level.price
+        total_balance_value = self.balance_tracker.get_total_balance_value(current_price)
+        order_quantity = self.grid_manager.get_order_size_for_grid_level(total_balance_value, current_price, side)
 
-        for price in grids:
-            if side == OrderSide.BUY and price >= current_price:
-                self.logger.info(f"Skipping grid level at price: {price} for BUY order: Above current price.")
-                continue
-            if side == OrderSide.SELL and price <= current_price:
-                self.logger.info(
-                    f"Skipping grid level at price: {price} for SELL order: Below or equal to current price.",
+        if not self.grid_manager.can_place_order(grid_level, side):
+            return
+
+        try:
+            adjusted_quantity = self._validate_order_quantity(side, order_quantity, price)
+
+            if self.market_constraints is not None:
+                violation = self.market_constraints.violation(adjusted_quantity, price)
+                if violation:
+                    self.logger.warning(f"Skipping initial {side.value} order at {price}: {violation}")
+                    return
+
+            await self._reserve_funds(side, adjusted_quantity, price)
+
+            self.logger.info(
+                f"Placing initial {side.value} limit order at grid level {price} for "
+                f"{adjusted_quantity} {self.trading_pair}.",
+            )
+
+            try:
+                order = await self.order_execution_strategy.execute_limit_order(
+                    side,
+                    self.trading_pair,
+                    adjusted_quantity,
+                    price,
                 )
-                continue
 
-            grid_level = self.grid_manager.grid_levels[price]
-            total_balance_value = self.balance_tracker.get_total_balance_value(current_price)
-            order_quantity = self.grid_manager.get_order_size_for_grid_level(total_balance_value, current_price, side)
-
-            if self.grid_manager.can_place_order(grid_level, side):
-                try:
-                    adjusted_quantity = self._validate_order_quantity(side, order_quantity, price)
-
-                    if self.market_constraints is not None:
-                        violation = self.market_constraints.violation(adjusted_quantity, price)
-                        if violation:
-                            self.logger.warning(f"Skipping initial {side.value} order at {price}: {violation}")
-                            continue
-
-                    await self._reserve_funds(side, adjusted_quantity, price)
-
-                    self.logger.info(
-                        f"Placing initial {side.value} limit order at grid level {price} for "
-                        f"{adjusted_quantity} {self.trading_pair}.",
+                if order is None:
+                    await self._release_funds(side, adjusted_quantity, price)
+                    raise OrderExecutionFailedError(
+                        f"{side.value.capitalize()} order at {price} returned None",
                     )
+            except PostOnlyRejectedError as e:
+                await self._skip_post_only_rejection(side, adjusted_quantity, price, e, "Initial grid placement")
+                return
+            except OrderExecutionFailedError:
+                await self._release_funds(side, adjusted_quantity, price)
+                raise
 
-                    try:
-                        order = await self.order_execution_strategy.execute_limit_order(
-                            side,
-                            self.trading_pair,
-                            adjusted_quantity,
-                            price,
-                        )
+            self.grid_manager.mark_order_pending(grid_level, order)
+            self.order_book.add_order(order, grid_level)
 
-                        if order is None:
-                            await self._release_funds(side, adjusted_quantity, price)
-                            raise OrderExecutionFailedError(
-                                f"{side.value.capitalize()} order at {price} returned None",
-                            )
-                    except PostOnlyRejectedError as e:
-                        await self._skip_post_only_rejection(
-                            side, adjusted_quantity, price, e, "Initial grid placement"
-                        )
-                        continue
-                    except OrderExecutionFailedError:
-                        await self._release_funds(side, adjusted_quantity, price)
-                        raise
-
-                    self.grid_manager.mark_order_pending(grid_level, order)
-                    self.order_book.add_order(order, grid_level)
-
-                except (OrderExecutionFailedError, Exception) as e:
-                    await self._handle_order_error(e, f"Error while placing initial {side.value} order")
+        except (OrderExecutionFailedError, Exception) as e:
+            await self._handle_order_error(e, f"Error while placing initial {side.value} order")
 
     def _validate_order_quantity(self, side: OrderSide, order_quantity: float, price: float) -> float:
         if side == OrderSide.BUY:

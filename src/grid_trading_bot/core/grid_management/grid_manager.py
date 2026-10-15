@@ -180,7 +180,7 @@ class GridManager:
     ) -> float:
         """
         Calculates the initial quantity of crypto to purchase for grid initialization: enough to fund
-        every sell order that will be placed above the current price, net of the crypto already held.
+        every sell order the strategy plans at the current price, net of the crypto already held.
 
         Args:
             current_fiat_balance (float): The current fiat balance.
@@ -192,9 +192,9 @@ class GridManager:
         """
         current_crypto_value_in_fiat = current_crypto_balance * current_price
         total_portfolio_value = current_fiat_balance + current_crypto_value_in_fiat
-        sell_levels_above = sum(1 for price in self.sorted_sell_grids if price > current_price)
+        sell_orders_planned = sum(1 for _, side in self.get_initial_order_plan(current_price) if side == OrderSide.SELL)
         target_crypto_allocation_in_fiat = (
-            total_portfolio_value * sell_levels_above / len(self.grid_levels) * self.sell_ratio
+            total_portfolio_value * sell_orders_planned / len(self.grid_levels) * self.sell_ratio
         )
         fiat_to_allocate_for_purchase = target_crypto_allocation_in_fiat - current_crypto_value_in_fiat
         fiat_to_allocate_for_purchase = max(0, min(fiat_to_allocate_for_purchase, current_fiat_balance))
