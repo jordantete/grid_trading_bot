@@ -101,3 +101,25 @@ class TestGridLevel:
         assert len(grid_level.orders) == 2
         assert grid_level.orders[0] == order1
         assert grid_level.orders[1] == order2
+
+    def test_home_state_defaults_to_initial_state(self):
+        grid_level = GridLevel(price=1000, state=GridCycleState.READY_TO_SELL)
+
+        assert grid_level.home_state == GridCycleState.READY_TO_SELL
+
+    def test_home_state_survives_state_changes(self):
+        grid_level = GridLevel(price=1000, state=GridCycleState.READY_TO_BUY)
+
+        grid_level.state = GridCycleState.WAITING_FOR_BUY_FILL
+
+        assert grid_level.home_state == GridCycleState.READY_TO_BUY
+
+    def test_home_state_can_be_given_explicitly(self):
+        grid_level = GridLevel(
+            price=1000,
+            state=GridCycleState.WAITING_FOR_SELL_FILL,
+            home_state=GridCycleState.READY_TO_SELL,
+        )
+
+        assert grid_level.state == GridCycleState.WAITING_FOR_SELL_FILL
+        assert grid_level.home_state == GridCycleState.READY_TO_SELL

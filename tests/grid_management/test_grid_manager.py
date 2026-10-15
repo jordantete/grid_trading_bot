@@ -51,6 +51,27 @@ class TestGridManager:
             else:
                 assert grid_level.state == GridCycleState.READY_TO_BUY_OR_SELL
 
+    def test_simple_grid_home_states(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+
+        for price, grid_level in grid_manager.grid_levels.items():
+            expected = (
+                GridCycleState.READY_TO_BUY if price <= grid_manager.central_price else GridCycleState.READY_TO_SELL
+            )
+            assert grid_level.home_state == expected
+
+    def test_hedged_grid_home_states(self, config_manager):
+        grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
+        grid_manager.initialize_grids_and_levels()
+
+        for price, grid_level in grid_manager.grid_levels.items():
+            expected = (
+                GridCycleState.READY_TO_SELL
+                if price == grid_manager.price_grids[-1]
+                else GridCycleState.READY_TO_BUY_OR_SELL
+            )
+            assert grid_level.home_state == expected
+
     def test_get_trigger_price(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
         assert grid_manager.get_trigger_price() == grid_manager.central_price

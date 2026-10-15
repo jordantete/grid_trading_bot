@@ -12,10 +12,11 @@ class GridCycleState(Enum):
 
 
 class GridLevel:
-    def __init__(self, price: float, state: GridCycleState):
+    def __init__(self, price: float, state: GridCycleState, home_state: GridCycleState | None = None):
         self.price: float = price
         self.orders: list[Order] = []  # Track all orders at this level
         self.state: GridCycleState = state
+        self.home_state: GridCycleState = home_state if home_state is not None else state
         self.paired_buy_level: GridLevel | None = None
         self.paired_sell_level: GridLevel | None = None
 
