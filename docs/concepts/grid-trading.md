@@ -60,17 +60,17 @@ Splits the grid at its central price. Levels at or below the centre only buy, le
 
 A round trip runs from a lower level to an upper level, so it earns at least the gap between the two halves and happens less often than in the hedged grid.
 
+![Grid Trading Cycle](../assets/grid_trading_cycle.svg)
+
 ### Hedged Grid
 
 A classic grid: every level but the top one can buy, every level but the bottom one can sell, and a level never holds more than one order.
 
 - At start, the level closest to the current price stays free. The other levels get a buy below the price or a sell above it.
 - When a buy fills, the sell goes on the level just above. When a sell fills, the rebuy goes on the level just below.
-- Each fill frees its own level and takes the free one next to it, so a free level always sits next to the price.
+- Each fill frees its own level and takes the free one next to it, so a free level stays next to the price. If that level is still busy because several fills were handled at once, the paired order is skipped and logged as an error.
 
 A round trip earns one grid spacing.
-
-![Grid Trading Cycle](../assets/grid_trading_cycle.svg)
 
 ## Grid Level Lifecycle
 
