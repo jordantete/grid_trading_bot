@@ -22,7 +22,6 @@ from .execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
 from .order import Order, OrderSide
-from .order_simulator import OrderSimulator
 
 
 class OrderManager:
@@ -35,7 +34,6 @@ class OrderManager:
         event_bus: EventBus,
         order_execution_strategy: OrderExecutionStrategyInterface,
         notification_handler: NotificationHandler,
-        order_simulator: OrderSimulator,
         trading_mode: TradingMode,
         trading_pair: str,
     ):
@@ -47,7 +45,6 @@ class OrderManager:
         self.event_bus = event_bus
         self.order_execution_strategy = order_execution_strategy
         self.notification_handler = notification_handler
-        self.order_simulator = order_simulator
         self.trading_mode: TradingMode = trading_mode
         self.trading_pair = trading_pair
         self.market_constraints: MarketConstraints | None = None
@@ -498,7 +495,6 @@ class OrderManager:
         Args:
             current_price: The current price of the trading pair.
         """
-        buy_order = None
         async with self._lock:
             initial_quantity = self.grid_manager.get_initial_order_quantity(
                 current_fiat_balance=self.balance_tracker.balance,
@@ -536,9 +532,7 @@ class OrderManager:
                     order_details=f"Initial purchase done: {buy_order!s}",
                 )
 
-                if self.trading_mode != TradingMode.BACKTEST:
-                    # Update fiat and crypto balance in LIVE & PAPER_TRADING modes without simulating it
-                    await self.balance_tracker.update_after_initial_purchase(initial_order=buy_order)
+                await self.balance_tracker.update_after_initial_purchase(initial_order=buy_order)
 
             except OrderExecutionFailedError as e:
                 self.logger.error(f"Failed while executing initial purchase - {e!s}", exc_info=True)
@@ -556,11 +550,6 @@ class OrderManager:
                     NotificationType.ORDER_FAILED,
                     error_details=f"Error while performing initial purchase. {e}",
                 )
-
-        # simulate_fill publishes ORDER_FILLED which re-enters _on_order_filled,
-        # so it must run outside the lock to avoid deadlock.
-        if buy_order and self.trading_mode == TradingMode.BACKTEST:
-            await self.order_simulator.simulate_fill(buy_order, buy_order.timestamp)
 
     def reset_shutdown_state(self) -> None:
         """Re-arms close_positions after a bot restart."""

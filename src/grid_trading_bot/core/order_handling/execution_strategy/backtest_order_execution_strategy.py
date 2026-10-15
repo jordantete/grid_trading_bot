@@ -25,7 +25,7 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
             average = price
         return Order(
             identifier=order_id,
-            status=OrderStatus.OPEN,
+            status=OrderStatus.CLOSED,
             order_type=OrderType.MARKET,
             side=order_side,
             price=price,

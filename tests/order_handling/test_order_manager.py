@@ -521,8 +521,8 @@ class TestOrderManager:
         order_execution_strategy.execute_market_order.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_perform_initial_purchase_backtest_calls_simulate_fill(self, setup_order_manager):
-        manager, grid_manager, _, _, _, _, order_execution_strategy, _ = setup_order_manager
+    async def test_perform_initial_purchase_backtest_updates_balances_once(self, setup_order_manager):
+        manager, grid_manager, _, balance_tracker, _, _, order_execution_strategy, _ = setup_order_manager
         manager.trading_mode = TradingMode.BACKTEST
         mock_order = Mock(timestamp=1234567890)
         grid_manager.get_initial_order_quantity.return_value = 0.01
@@ -530,7 +530,7 @@ class TestOrderManager:
 
         await manager.perform_initial_purchase(50000)
 
-        manager.order_simulator.simulate_fill.assert_awaited_once_with(mock_order, mock_order.timestamp)
+        balance_tracker.update_after_initial_purchase.assert_awaited_once_with(initial_order=mock_order)
 
     @pytest.mark.asyncio
     async def test_perform_initial_purchase_live_calls_update_balance(self, setup_order_manager):
@@ -543,7 +543,6 @@ class TestOrderManager:
         await manager.perform_initial_purchase(50000)
 
         balance_tracker.update_after_initial_purchase.assert_awaited_once_with(initial_order=mock_order)
-        manager.order_simulator.simulate_fill.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_perform_initial_purchase_execution_failed(self, setup_order_manager):

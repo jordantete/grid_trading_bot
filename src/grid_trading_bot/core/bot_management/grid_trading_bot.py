@@ -159,7 +159,6 @@ class GridTradingBot:
                 self.event_bus,
                 order_execution_strategy,
                 self.notification_handler,
-                order_simulator,
                 self.trading_mode,
                 trading_pair,
             )

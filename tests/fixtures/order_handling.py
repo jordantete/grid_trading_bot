@@ -31,8 +31,6 @@ def setup_order_manager():
     order_execution_strategy = Mock()
     notification_handler = Mock()
     notification_handler.async_send_notification = AsyncMock()
-    order_simulator = Mock()
-    order_simulator.simulate_fill = AsyncMock()
 
     manager = OrderManager(
         grid_manager=grid_manager,
@@ -42,7 +40,6 @@ def setup_order_manager():
         event_bus=event_bus,
         order_execution_strategy=order_execution_strategy,
         notification_handler=notification_handler,
-        order_simulator=order_simulator,
         trading_mode=TradingMode.LIVE,
         trading_pair="BTC/USDT",
     )

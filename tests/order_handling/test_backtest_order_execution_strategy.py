@@ -26,7 +26,7 @@ class TestBacktestOrderExecutionStrategy:
 
         assert order is not None
         assert order.identifier == "backtest-0"
-        assert order.status == OrderStatus.OPEN
+        assert order.status == OrderStatus.CLOSED
         assert order.order_type == OrderType.MARKET
         assert order.side == order_side
         assert order.price == price
