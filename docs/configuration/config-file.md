@@ -166,6 +166,8 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 | `retry_delay` | float | `1.0` | 0.1–60.0 | Delay in seconds between retries. |
 | `max_slippage` | float | `0.01` | 0.0001–0.1 | Maximum acceptable slippage for live/paper execution (e.g., `0.01` = 1%). |
 | `backtest_slippage` | float | `0.0` | 0.0–0.1 | Fixed slippage applied to simulated fills (e.g., `0.001` = 0.1%). Buys fill higher, sells fill lower. |
+| `backtest_min_amount` | float | none | 0 or more | Minimum order quantity in the base currency (backtest only). When set, the backtest applies it like the exchange's minimum in live: it checks that the grid is feasible at arming, skips the initial purchase and grid orders that fall below it, and skips the final liquidation if the position is too small. Absent means no minimum. |
+| `backtest_min_cost` | float | none | 0 or more | Minimum order value in the quote currency (backtest only). Applied the same way as `backtest_min_amount`. Absent means no minimum. |
 | `order_polling_interval` | float | `15.0` | 1.0–300.0 | Seconds between open order status polls (live/paper). |
 | `websocket_max_retries` | int | `5` | 1–50 | Maximum WebSocket reconnection attempts. |
 | `websocket_retry_base_delay` | int | `5` | 1–120 | Base delay (seconds) for WebSocket reconnection backoff. |
