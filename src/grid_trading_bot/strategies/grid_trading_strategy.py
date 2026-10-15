@@ -3,6 +3,7 @@ from collections import deque
 import logging
 import math
 
+import numpy as np
 import pandas as pd
 
 from grid_trading_bot.config.config_manager import ConfigManager
@@ -264,49 +265,41 @@ class GridTradingStrategy(TradingStrategyInterface):
             return
 
         self.logger.info("Starting backtest simulation")
-        self.data["account_value"] = math.nan
         self.close_prices = self.data["close"].values
         high_prices = self.data["high"].values
         low_prices = self.data["low"].values
         timestamps = self.data.index
-        self.data.loc[timestamps[0], "account_value"] = self.balance_tracker.get_total_balance_value(
-            price=self.close_prices[0],
-        )
+        account_values = np.full(len(self.data), np.nan)
+        crypto_values = np.full(len(self.data), np.nan)
         grid_orders_initialized = False
 
         for i, (current_price, high_price, low_price, timestamp) in enumerate(
             zip(self.close_prices, high_prices, low_prices, timestamps, strict=False),
         ):
-            if i < start_index:
-                self.data.loc[timestamps[i], "account_value"] = self.balance_tracker.get_total_balance_value(
-                    price=current_price,
+            if i >= start_index:
+                grid_orders_initialized = await self._initialize_grid_orders_once(
+                    current_price,
+                    grid_orders_initialized,
                 )
-                continue
 
-            grid_orders_initialized = await self._initialize_grid_orders_once(
-                current_price,
-                grid_orders_initialized,
-            )
+                if grid_orders_initialized:
+                    await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
 
-            if not grid_orders_initialized:
-                self.data.loc[timestamps[i], "account_value"] = self.balance_tracker.get_total_balance_value(
-                    price=current_price,
-                )
-                continue
+                    trailing_atr = self._backtest_atr_at(self._trailing_atr_series, i)
+                    if await self._handle_trailing_stop(current_price, trailing_atr):
+                        break
 
-            await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
+                    if await self._handle_take_profit_stop_loss(current_price):
+                        break
 
-            trailing_atr = self._backtest_atr_at(self._trailing_atr_series, i)
-            if await self._handle_trailing_stop(current_price, trailing_atr):
-                break
+                    dynamic_atr = self._backtest_atr_at(self._dynamic_atr_series, i)
+                    await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
 
-            if await self._handle_take_profit_stop_loss(current_price):
-                break
+            account_values[i] = self.balance_tracker.get_total_balance_value(current_price)
+            crypto_values[i] = self.balance_tracker.get_adjusted_crypto_balance() * current_price
 
-            dynamic_atr = self._backtest_atr_at(self._dynamic_atr_series, i)
-            await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
-
-            self.data.loc[timestamp, "account_value"] = self.balance_tracker.get_total_balance_value(current_price)
+        self.data["account_value"] = account_values
+        self.data["crypto_value"] = crypto_values
 
     async def _initialize_grid_orders_once(
         self,

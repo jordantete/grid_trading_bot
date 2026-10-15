@@ -1,7 +1,6 @@
 import logging
 from unittest.mock import ANY, AsyncMock, Mock
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -223,13 +222,13 @@ class TestGridTradingStrategy:
                 "close": [10000, 10500, 11000],
                 "high": [10100, 10600, 11100],
                 "low": [9900, 10400, 10900],
-                "account_value": [np.nan, np.nan, np.nan],
             },
             index=pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
         )
         strategy._initialize_historical_data = AsyncMock(return_value=mock_data)
 
-        balance_tracker.get_total_balance_value.side_effect = [9000, 9500, 10000, 10000]
+        balance_tracker.get_total_balance_value.side_effect = [9500, 10000, 10000]
+        balance_tracker.get_adjusted_crypto_balance.return_value = 0.5
         balance_tracker.crypto_balance = 1
         grid_manager.get_trigger_price.return_value = 8900
         order_manager.initialize_grid_orders = AsyncMock()
@@ -240,6 +239,8 @@ class TestGridTradingStrategy:
 
         expected_account_values = pd.Series([9500, 10000, 10000], index=strategy.data.index, name="account_value")
         pd.testing.assert_series_equal(strategy.data["account_value"], expected_account_values.astype("float64"))
+        expected_crypto_values = pd.Series([5000, 5250, 5500], index=strategy.data.index, name="crypto_value")
+        pd.testing.assert_series_equal(strategy.data["crypto_value"], expected_crypto_values.astype("float64"))
         strategy._handle_take_profit_stop_loss.assert_awaited()
 
     @pytest.mark.asyncio
