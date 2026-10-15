@@ -281,6 +281,26 @@ class TestGridTradingBot:
             "reserved_crypto": 0.0,
         }
 
+    def test_get_account_snapshot_values_the_account_at_the_last_accepted_price(self, bot):
+        bot.exchange_service = Mock(last_price=61250.0)
+        bot.balance_tracker = Mock()
+
+        assert bot.get_account_snapshot() is bot.balance_tracker.snapshot.return_value
+        bot.balance_tracker.snapshot.assert_called_once_with(61250.0)
+
+    def test_get_account_snapshot_is_none_before_the_first_price(self, bot):
+        bot.exchange_service = Mock(last_price=None)
+        bot.balance_tracker = Mock()
+
+        assert bot.get_account_snapshot() is None
+        bot.balance_tracker.snapshot.assert_not_called()
+
+    def test_get_account_snapshot_is_none_without_a_price_feed(self, bot):
+        bot.exchange_service = Mock(spec=[])
+        bot.balance_tracker = Mock()
+
+        assert bot.get_account_snapshot() is None
+
     @patch("grid_trading_bot.core.bot_management.grid_trading_bot.GridTradingStrategy")
     @pytest.mark.asyncio
     async def test_run_strategy_with_exception(self, mock_strategy, bot):

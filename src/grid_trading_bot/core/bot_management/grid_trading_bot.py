@@ -8,7 +8,7 @@ from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
-from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
+from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_factory import (
     OrderExecutionStrategyFactory,
 )
@@ -400,3 +400,9 @@ class GridTradingBot:
             "crypto": self.balance_tracker.crypto_balance,
             "reserved_crypto": self.balance_tracker.reserved_crypto,
         }
+
+    def get_account_snapshot(self) -> AccountSnapshot | None:
+        price = getattr(self.exchange_service, "last_price", None)
+        if price is None:
+            return None
+        return self.balance_tracker.snapshot(price)

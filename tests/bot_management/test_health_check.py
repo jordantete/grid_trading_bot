@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
-from grid_trading_bot.core.bot_management.health_check import HealthCheck, ResourceMetrics
+from grid_trading_bot.core.bot_management.health_check import HealthCheck, ResourceMetrics, format_account_metrics
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot
 
 
 class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
@@ -377,3 +378,45 @@ class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+    async def test_perform_checks_logs_account_metrics(self):
+        self.bot.get_bot_health_status = AsyncMock(return_value={"strategy": True, "exchange_status": "ok"})
+        self.bot.get_account_snapshot = Mock(
+            return_value=AccountSnapshot(
+                price=61250.0, value=1234.56, peak=1300.0, drawdown_pct=5.0338, realized_pnl=12.34, unrealized_pnl=-78.9
+            )
+        )
+        self.health_check._check_resource_usage = Mock(return_value={"cpu": 10, "memory": 10, "disk": 10})
+
+        with self.assertLogs("HealthCheck", level="INFO") as logs:
+            await self.health_check._perform_checks()
+
+        assert (
+            "Account metrics. Value: 1234.56000000, Peak: 1300.00000000, Drawdown: 5.03%, "
+            "Realized PnL: 12.34000000, Unrealized PnL: -78.90000000, Price: 61250.00000000"
+        ) in "\n".join(logs.output)
+
+    def test_account_metrics_keep_tiny_prices_in_fixed_notation(self):
+        line = format_account_metrics(
+            AccountSnapshot(
+                price=0.00001234, value=100.0, peak=100.0, drawdown_pct=0.0, realized_pnl=0.0, unrealized_pnl=-0.000012
+            )
+        )
+
+        assert "Price: 0.00001234" in line
+        assert "Unrealized PnL: -0.00001200" in line
+        assert "e-" not in line
+
+    def test_no_account_metrics_before_the_first_price(self):
+        self.bot.get_account_snapshot = Mock(return_value=None)
+
+        with self.assertNoLogs("HealthCheck", level="INFO"):
+            self.health_check._report_account_metrics()
+
+    def test_account_metrics_failure_is_logged_not_raised(self):
+        self.bot.get_account_snapshot = Mock(side_effect=RuntimeError("boom"))
+
+        with self.assertLogs("HealthCheck", level="WARNING") as logs:
+            self.health_check._report_account_metrics()
+
+        assert "Failed to report account metrics: boom" in logs.output[0]

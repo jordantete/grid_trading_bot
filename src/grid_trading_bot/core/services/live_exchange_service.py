@@ -119,6 +119,11 @@ class LiveExchangeService(ExchangeInterface):
         else:
             self.logger.warning(f"No sandbox mode available for {self.exchange_name}. Running in live mode.")
 
+    @property
+    def last_price(self) -> float | None:
+        """Last price accepted by the ticker feed's deviation filter, None before the first one."""
+        return self._last_known_price
+
     def _validate_price(self, price_value: Any, pair: str) -> float | None:
         """
         Validates a price value from exchange data.

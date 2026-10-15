@@ -9,6 +9,7 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot
 from grid_trading_bot.utils.constants import RESOURCE_THRESHOLDS
 
 
@@ -22,6 +23,14 @@ class ResourceMetrics:
     bot_memory_mb: float
     open_files: int
     thread_count: int
+
+
+def format_account_metrics(snapshot: AccountSnapshot) -> str:
+    return (
+        f"Account metrics. Value: {snapshot.value:.8f}, Peak: {snapshot.peak:.8f}, "
+        f"Drawdown: {snapshot.drawdown_pct:.2f}%, Realized PnL: {snapshot.realized_pnl:.8f}, "
+        f"Unrealized PnL: {snapshot.unrealized_pnl:.8f}, Price: {snapshot.price:.8f}"
+    )
 
 
 class HealthCheck:
@@ -124,10 +133,20 @@ class HealthCheck:
         bot_health = await self.bot.get_bot_health_status()
         self.logger.info(f"Fetched bot health status: {bot_health}")
         await self._check_and_alert_bot_health(bot_health)
+        self._report_account_metrics()
 
         resource_usage = self._check_resource_usage()
         self.logger.info(f"System resource usage: {resource_usage}")
         await self._check_and_alert_resource_usage(resource_usage)
+
+    def _report_account_metrics(self) -> None:
+        # The start() loop exits on the first uncaught exception, so a failed snapshot must not escape.
+        try:
+            snapshot = self.bot.get_account_snapshot()
+            if snapshot is not None:
+                self.logger.info(format_account_metrics(snapshot))
+        except Exception as e:
+            self.logger.warning(f"Failed to report account metrics: {e}")
 
     async def _check_and_alert_bot_health(self, health_status: dict):
         """

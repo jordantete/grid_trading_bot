@@ -615,6 +615,19 @@ class TestLiveExchangeService:
         result = service._validate_price(70000.0, "BTC/USD")
         assert result == 70000.0
 
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_last_price_follows_accepted_prices_only(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
+        mock_ccxtpro.binance.return_value = Mock()
+        mock_getattr.return_value = mock_ccxtpro.binance
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        assert service.last_price is None
+        service._validate_price(50000.0, "BTC/USD")
+        service._validate_price(100000.0, "BTC/USD")  # rejected: 100 % deviation
+
+        assert service.last_price == 50000.0
+
     @pytest.mark.asyncio
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
