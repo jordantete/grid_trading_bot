@@ -22,6 +22,7 @@ frontend:
 
 limits_config:
   max_global_streams_per_user: 1000
+  max_query_length: 8784h
   ingestion_rate_mb: 500
   ingestion_burst_size_mb: 500
   volume_enabled: true
@@ -34,14 +35,6 @@ query_range:
       embedded_cache:
         enabled: true
         max_size_mb: 100
-
-ruler:
-  rule_path: /etc/loki/rules
-  storage:
-    type: local
-    local:
-      directory: /etc/loki/rules
-  enable_api: true
 
 schema_config:
   configs:

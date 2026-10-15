@@ -34,7 +34,6 @@ services:
     command: -config.file=/etc/loki/loki.yaml
     volumes:
       - ./monitoring/configs/loki/loki.yaml:/etc/loki/loki.yaml
-      - ./monitoring/configs/loki/rules.yaml:/etc/loki/rules/fake/loki-rules.yml
       - loki-data:/tmp/loki/chunks
     cpus: 0.5
     mem_limit: 512m

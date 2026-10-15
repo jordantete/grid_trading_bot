@@ -40,8 +40,8 @@ The dashboard includes three filter dropdowns:
 A time-series chart showing:
 
 - **Price line** — Current price extracted from bot logs
-- **Buy orders** — Green points marking buy limit order executions at grid level prices
-- **Sell orders** — Red points marking sell limit order executions at grid level prices
+- **Buy orders** — Green points at the grid level of every buy order placed (initial, paired after a fill, re-placed after a cancel), logged by `GridManager`
+- **Sell orders** — Red points at the grid level of every sell order placed (initial, paired after a fill, re-placed after a cancel), logged by `GridManager`
 
 ### 2. Balance History
 
@@ -80,7 +80,23 @@ A stat panel showing cumulative trade counts:
 - **Buy Fills** (green) — Total buy orders completed at grid levels
 - **Sell Fills** (red) — Total sell orders completed at grid levels
 
-Both counters use `count_over_time` over the selected time range, filtering `OrderManager` logs for completed orders.
+Both counters use count_over_time over the selected time range on OrderManager's "order completed at grid level" lines.
+
+### 6. Account Value
+
+The account value in quote currency (fiat plus all crypto held, reserved included, at the last accepted price) and its peak, from the `Account metrics` line the health check logs every `execution.health_check_interval` seconds (default 60), with or without fills.
+
+### 7. Drawdown
+
+The fall from the peak, in percent. In live mode the peak is persisted with the bot state and survives restarts; in paper trading it restarts from the current value.
+
+### 8. Realized vs Unrealized PnL
+
+Realized PnL is booked on every sell at the weighted average cost of the crypto held, fees included. Unrealized PnL is the crypto held times the gap between the current price and that cost. Their sum is the change in account value since the bot started (since the first price seen for crypto already on the account at start).
+
+### 9. Realized PnL per Day, Week and Month
+
+Growth of realized PnL over each day, 7 days and 30 days. A paper-trading restart resets realized PnL, which shows as a negative bar for that period.
 
 ## Customization
 
@@ -93,6 +109,8 @@ Click the refresh icon in the top-right corner and select your preferred interva
 1. Click **Add panel** in the dashboard
 2. Select **Loki** as the datasource
 3. Write a LogQL query filtering on the available labels (`trading_pair`, `trading_mode`, `strategy_type`, etc.)
+
+Every `|=` filter, `|~` alternative and `regexp` prefix in the dashboard must exist in the bot's source: `tests/monitoring/test_dashboard_log_patterns.py` fails otherwise, so a reworded log message cannot silently empty a panel.
 
 ### Useful LogQL Queries
 

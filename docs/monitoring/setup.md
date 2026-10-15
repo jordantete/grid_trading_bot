@@ -111,16 +111,9 @@ Alloy parses each log line to extract:
 - **Level** — Log severity (DEBUG, INFO, WARNING, ERROR)
 - **Message** — The log content
 
-## Alert Rules
+## Alerts
 
-Two alert rules are pre-configured in Loki:
-
-| Alert | Condition | Severity | Description |
-|-------|-----------|----------|-------------|
-| **HighCPUUsage** | CPU > 80% for 2+ minutes | Warning | Fires when the bot's CPU usage exceeds 80% |
-| **OrderExecutionFailure** | > 3 failures in 5 minutes | Critical | Fires on repeated order execution failures |
-
-Alert rules are defined in `monitoring/configs/loki/rules.yaml`.
+Grafana and Loki only display data: they send no alert. Alerts go through Apprise (`APPRISE_NOTIFICATION_URLS`): order failures, errors, health check issues (CPU, memory, disk, stale ticker feed) and TP/SL triggers. See [Notifications](../usage/notifications.md).
 
 ## Configuration Files
 
@@ -128,7 +121,6 @@ Alert rules are defined in `monitoring/configs/loki/rules.yaml`.
 |------|---------|
 | `docker-compose.yml` | Service definitions and volumes |
 | `monitoring/configs/loki/loki.yaml` | Loki storage, limits, and cache settings |
-| `monitoring/configs/loki/rules.yaml` | Alert rule definitions |
 | `monitoring/configs/alloy/config.alloy` | Log tailing and label extraction |
 | `monitoring/configs/grafana/provisioning/datasources.yml` | Loki datasource auto-provisioning |
 | `monitoring/configs/grafana/provisioning/dashboards.yml` | Dashboard auto-provisioning |

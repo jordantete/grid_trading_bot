@@ -307,6 +307,142 @@
         "textMode": "value_and_name",
         "orientation": "horizontal"
       }
+    },
+    {
+      "id": 6,
+      "title": "Account Value",
+      "type": "timeseries",
+      "datasource": "Loki",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 30 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Value: (?P<value>-?[\\\\d.]+)\" | unwrap value [$__auto])",
+          "legendFormat": "Value (quote)"
+        },
+        {
+          "refId": "B",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Peak: (?P<peak>-?[\\\\d.]+)\" | unwrap peak [$__auto])",
+          "legendFormat": "Peak"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Peak" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "title": "Drawdown",
+      "type": "timeseries",
+      "datasource": "Loki",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Drawdown: (?P<drawdown>-?[\\\\d.]+)%\" | unwrap drawdown [$__auto])",
+          "legendFormat": "Drawdown"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "showPoints": "never", "transform": "negative-Y" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "Realized vs Unrealized PnL",
+      "type": "timeseries",
+      "datasource": "Loki",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Realized PnL: (?P<realized>-?[\\\\d.]+)\" | unwrap realized [$__auto])",
+          "legendFormat": "Realized"
+        },
+        {
+          "refId": "B",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Unrealized PnL: (?P<unrealized>-?[\\\\d.]+)\" | unwrap unrealized [$__auto])",
+          "legendFormat": "Unrealized"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "showPoints": "never" } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 9,
+      "title": "Realized PnL per Day",
+      "type": "timeseries",
+      "datasource": "Loki",
+      "interval": "1d",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 48 },
+      "targets": [
+        {
+          "refId": "A",
+          "step": "1d",
+          "expr": "sum by (trading_pair) (last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Realized PnL: (?P<realized>-?[\\\\d.]+)\" | unwrap realized [1d])) - sum by (trading_pair) (first_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Realized PnL: (?P<realized>-?[\\\\d.]+)\" | unwrap realized [1d]))",
+          "legendFormat": "Realized PnL"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 80, "showPoints": "never" } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "title": "Realized PnL per Week",
+      "type": "timeseries",
+      "datasource": "Loki",
+      "interval": "7d",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 48 },
+      "targets": [
+        {
+          "refId": "A",
+          "step": "7d",
+          "expr": "sum by (trading_pair) (last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Realized PnL: (?P<realized>-?[\\\\d.]+)\" | unwrap realized [7d])) - sum by (trading_pair) (first_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Realized PnL: (?P<realized>-?[\\\\d.]+)\" | unwrap realized [7d]))",
+          "legendFormat": "Realized PnL"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 80, "showPoints": "never" } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "title": "Realized PnL per Month",
+      "type": "timeseries",
+      "datasource": "Loki",
+      "interval": "30d",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 48 },
+      "targets": [
+        {
+          "refId": "A",
+          "step": "30d",
+          "expr": "sum by (trading_pair) (last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Realized PnL: (?P<realized>-?[\\\\d.]+)\" | unwrap realized [30d])) - sum by (trading_pair) (first_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"HealthCheck\" |= \"Account metrics\" | regexp \"Realized PnL: (?P<realized>-?[\\\\d.]+)\" | unwrap realized [30d]))",
+          "legendFormat": "Realized PnL"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 80, "showPoints": "never" } },
+        "overrides": []
+      }
     }
   ]
 }

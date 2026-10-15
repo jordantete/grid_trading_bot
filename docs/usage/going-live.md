@@ -102,6 +102,8 @@ For log-based dashboards, start the monitoring stack:
 docker-compose up -d
 ```
 
+The dashboard charts the account value, its peak, the drawdown and realized/unrealized PnL from a line the health check logs every interval, so the curve keeps moving when no order fills. Realized PnL uses the weighted average cost of the crypto held. A manual deposit or withdrawal on the exchange account changes the position without changing that cost, so after one the realized plus unrealized PnL no longer adds up to the change in account value.
+
 See [Monitoring Setup](../monitoring/setup.md) and [Grafana Dashboard](../monitoring/grafana-dashboard.md) for details.
 
 ## 7. Known limits

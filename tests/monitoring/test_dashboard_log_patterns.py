@@ -7,6 +7,9 @@ import re
 
 import pytest
 
+from grid_trading_bot.core.bot_management.health_check import format_account_metrics
+from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD = REPO_ROOT / "monitoring" / "dashboards" / "grid_trading_bot_dashboard.json"
 SOURCE_DIR = REPO_ROOT / "src" / "grid_trading_bot"
@@ -68,3 +71,27 @@ def test_dashboard_service_labels_are_class_names():
         if service not in CLASS_NAMES
     ]
     assert not unknown, f"service labels without a matching logger class: {unknown}"
+
+
+def test_account_metric_regexes_capture_the_logged_values_with_their_sign():
+    line = format_account_metrics(
+        AccountSnapshot(
+            price=0.00001234, value=1234.5, peak=1300.0, drawdown_pct=5.04, realized_pnl=-3.25, unrealized_pnl=-78.9
+        )
+    )
+    captured: dict[str, str] = {}
+    for _, expr in QUERIES:
+        if '"Account metrics"' not in expr:
+            continue
+        for pattern in REGEXP_STAGE.findall(expr):
+            match = re.search(pattern.replace("\\\\", "\\"), line)
+            assert match, f"{pattern!r} does not match {line!r}"
+            captured.update(match.groupdict())
+
+    assert {name: float(value) for name, value in captured.items()} == {
+        "value": 1234.5,
+        "peak": 1300.0,
+        "drawdown": 5.04,
+        "realized": -3.25,
+        "unrealized": -78.9,
+    }
