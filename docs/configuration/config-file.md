@@ -139,7 +139,7 @@ silently distort the profit spacing the whole strategy is built on.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `type` | string | Yes | `simple_grid` (independent levels) or `hedged_grid` (paired levels). |
+| `type` | string | Yes | `simple_grid` (lower half buys, upper half sells) or `hedged_grid` (classic grid with one free level next to the price). |
 | `spacing` | string | Yes | `arithmetic` (equal intervals) or `geometric` (proportional intervals). |
 | `num_grids` | int | Yes | Total number of grid levels. |
 | `range.top` | float | Yes | Upper price limit of the grid. |

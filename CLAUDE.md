@@ -63,7 +63,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 ### Core Modules
 
 - **`core/bot_management/`** — Bot lifecycle: `GridTradingBot` (orchestrator), `EventBus` (pub/sub), `BotController` (CLI), `HealthCheck`, `NotificationHandler` (Apprise alerts)
-- **`core/grid_management/`** — `GridManager` computes grid levels (arithmetic/geometric spacing), `GridLevel` is a state machine tracking each level's cycle (`READY_TO_BUY` → `WAITING_FOR_BUY_FILL` → `READY_TO_SELL` → etc.)
+- **`core/grid_management/`** — `GridManager` computes grid levels (arithmetic/geometric spacing), `GridLevel` waits in its home (free) state, moves to `WAITING_FOR_*_FILL` while it holds orders, and returns home when the last one fills or is cancelled; each `GridStrategy` plans the initial orders and picks the level of every paired order
 - **`core/order_handling/`** — `OrderManager` orchestrates order placement and pairing (buy fill → place sell above, sell fill → place buy below). `BalanceTracker` tracks fiat/crypto with reserved amounts. `OrderBook` maps orders to grid levels
 - **`core/persistence/`** — SQLite state persistence (live mode only): `StatePersistenceService` (event-driven checkpoints on every order fill/cancel), `StateRecoveryService` (merge recovery on restart — loads DB state, reconciles with exchange, restores balances), `SQLiteStateRepository` (WAL-mode SQLite backend), `Serializers` (Order/GridLevel/Balance ↔ dict). DB path: `data/{BASE}_{QUOTE}/state_{config_hash[:8]}.db`
 - **`core/services/`** — Exchange abstraction via `ExchangeInterface` ABC. `BacktestExchangeService` reads CSV/CCXT OHLCV data. `LiveExchangeService` uses CCXT Pro WebSockets
