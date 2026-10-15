@@ -49,12 +49,12 @@
         },
         {
           "refId": "B",
-          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"buy limit order\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price [$__auto])",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"GridManager\" |= \"Buy order placed and marked as pending\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price [$__auto])",
           "legendFormat": "Buy Order"
         },
         {
           "refId": "C",
-          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"sell limit order\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price [$__auto])",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"GridManager\" |= \"Sell order placed and marked as pending\" | regexp \"at grid level (?P<price>[\\\\d.]+)\" | unwrap price [$__auto])",
           "legendFormat": "Sell Order"
         }
       ],
@@ -263,12 +263,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(count_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"Buy order completed at grid level\" [$__auto]))",
+          "expr": "sum(count_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"order completed at grid level\" |= \"Buy\" [$__auto]))",
           "legendFormat": "Buy Fills"
         },
         {
           "refId": "B",
-          "expr": "sum(count_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"Sell order completed at grid level\" [$__auto]))",
+          "expr": "sum(count_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"OrderManager\" |= \"order completed at grid level\" |= \"Sell\" [$__auto]))",
           "legendFormat": "Sell Fills"
         }
       ],
