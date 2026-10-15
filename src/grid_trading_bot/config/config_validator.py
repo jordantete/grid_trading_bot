@@ -1,4 +1,5 @@
 import logging
+import math
 from typing import Any
 
 from grid_trading_bot.core.domain.spacing_type import SpacingType
@@ -299,7 +300,9 @@ class ConfigValidator:
 
         for field in ("backtest_min_amount", "backtest_min_cost"):
             value = execution.get(field)
-            if value is not None and (not isinstance(value, int | float) or isinstance(value, bool) or value < 0):
+            if value is not None and (
+                not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value) or value < 0
+            ):
                 self.logger.error(f"execution.{field} must be a non-negative number.")
                 invalid_fields.append(f"execution.{field}")
 

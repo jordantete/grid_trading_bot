@@ -275,7 +275,7 @@ class TestBacktestMarketMinimums:
         config_validator.validate(valid_config)
 
     @pytest.mark.parametrize("field", ["backtest_min_amount", "backtest_min_cost"])
-    @pytest.mark.parametrize("value", [-1.0, "5", True])
+    @pytest.mark.parametrize("value", [-1.0, "5", True, float("nan"), float("inf")])
     def test_invalid_value_is_rejected(self, config_validator, valid_config, field, value):
         valid_config["execution"] = {field: value}
         with pytest.raises(ConfigValidationError) as excinfo:
