@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from grid_trading_bot.core.grid_management.grid_level import GridCycleState
+from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.grid_management.grid_strategy import GridLayout, HedgedGridStrategy, SimpleGridStrategy
 from grid_trading_bot.core.order_handling.order import OrderSide
 
@@ -38,6 +38,13 @@ class TestGridLayout:
 
         assert layout.neighbour(layout.grid_levels[140.0], 1) is None
         assert layout.neighbour(layout.grid_levels[100.0], -1) is None
+
+    def test_neighbour_of_a_level_outside_the_grid_is_none(self):
+        layout = _layout(HedgedGridStrategy())
+        stale = GridLevel(125.0, GridCycleState.READY_TO_BUY_OR_SELL)
+
+        assert layout.neighbour(stale, 1) is None
+        assert layout.neighbour(stale, -1) is None
 
 
 class TestHedgedInitialPlan:
@@ -92,6 +99,17 @@ class TestHedgedTargets:
 
         assert target is None
         assert "is busy" in caplog.text
+
+    def test_sell_target_of_a_level_outside_the_grid_is_refused_and_logged(self, caplog):
+        strategy = HedgedGridStrategy()
+        layout = _layout(strategy)
+        stale = GridLevel(125.0, GridCycleState.READY_TO_BUY_OR_SELL)
+
+        with caplog.at_level(logging.ERROR):
+            target = strategy.sell_target(stale, layout, LOGGER)
+
+        assert target is None
+        assert "No grid level next to" in caplog.text
 
     def test_buy_target_is_the_free_level_below(self):
         strategy = HedgedGridStrategy()

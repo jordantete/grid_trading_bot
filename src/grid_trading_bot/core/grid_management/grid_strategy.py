@@ -16,7 +16,10 @@ class GridLayout:
     sorted_sell_grids: list[float]
 
     def neighbour(self, grid_level: GridLevel, offset: int) -> GridLevel | None:
-        index = self.price_index_map[grid_level.price] + offset
+        position = self.price_index_map.get(grid_level.price)
+        if position is None:
+            return None
+        index = position + offset
         if 0 <= index < len(self.sorted_prices):
             return self.grid_levels[self.sorted_prices[index]]
         return None
