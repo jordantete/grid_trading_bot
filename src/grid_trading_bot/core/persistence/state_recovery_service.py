@@ -34,6 +34,10 @@ class RecoveryResult:
     strategy_state: dict | None = None
 
 
+def _optional_decimal(value: str | None) -> Decimal | None:
+    return None if value is None else Decimal(value)
+
+
 class StateRecoveryService:
     def __init__(
         self,
@@ -104,6 +108,9 @@ class StateRecoveryService:
 
         # Step 5: Restore balance (recalculates reserved from confirmed-still-open orders)
         balance_source = await self._restore_balance()
+
+        # Step 6: Restore cost basis, realized PnL and peak, then book the fills made while down
+        self._restore_accounting(filled_while_down)
 
         result = RecoveryResult(
             recovered=True,
@@ -231,6 +238,7 @@ class StateRecoveryService:
                 order.remaining = exchange_order.remaining
                 order.average = exchange_order.average
                 order.cost = exchange_order.cost
+                order.last_trade_timestamp = exchange_order.last_trade_timestamp
                 self.order_book.remove_open_order(order)
 
                 # Complete grid level state transition for the filled order
@@ -333,6 +341,22 @@ class StateRecoveryService:
 
             self.logger.error("No saved balance and exchange unavailable. Starting with zero balances.")
             return "none"
+
+    def _restore_accounting(self, filled_while_down: list[tuple[Order, GridLevel]]) -> None:
+        saved_balance = self.repository.load_balance_state()
+        if not saved_balance:
+            return
+
+        self.balance_tracker.restore_accounting(
+            avg_cost=_optional_decimal(saved_balance.get("avg_cost")),
+            realized_pnl=Decimal(saved_balance.get("realized_pnl") or "0"),
+            peak_value=_optional_decimal(saved_balance.get("peak_value")),
+        )
+        if filled_while_down:
+            starting_position = Decimal(saved_balance["crypto_balance"]) + Decimal(saved_balance["reserved_crypto"])
+            self.balance_tracker.replay_fills_on_cost_basis(
+                starting_position, [order for order, _ in filled_while_down]
+            )
 
     # ── Notification ─────────────────────────────────────────────────────
 

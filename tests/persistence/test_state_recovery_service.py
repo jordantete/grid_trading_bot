@@ -936,6 +936,67 @@ class TestStateRecoveryService:
         assert set(real_gm.grid_levels.keys()) == original_keys  # geometry untouched
         assert result.strategy_state == strategy_state
 
+    async def test_accounting_restored_from_db(
+        self, service, mock_repository, mock_config_manager, mock_balance_tracker
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        saved = _make_saved_balance()
+        saved.update(avg_cost="2900.5", realized_pnl="12.34", peak_value="15000")
+        mock_repository.load_balance_state.return_value = saved
+
+        await service.attempt_recovery()
+
+        mock_balance_tracker.restore_accounting.assert_called_once_with(
+            avg_cost=Decimal("2900.5"), realized_pnl=Decimal("12.34"), peak_value=Decimal("15000")
+        )
+        mock_balance_tracker.replay_fills_on_cost_basis.assert_not_called()
+
+    async def test_v2_balance_row_restores_neutral_accounting(
+        self, service, mock_repository, mock_config_manager, mock_balance_tracker
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        mock_repository.load_balance_state.return_value = _make_saved_balance()
+
+        await service.attempt_recovery()
+
+        mock_balance_tracker.restore_accounting.assert_called_once_with(
+            avg_cost=None, realized_pnl=Decimal("0"), peak_value=None
+        )
+
+    async def test_fills_while_down_replayed_from_the_db_position(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+        mock_order_book,
+        mock_grid_manager,
+        mock_balance_tracker,
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        mock_repository.load_balance_state.return_value = _make_saved_balance(crypto="2.0", reserved_crypto="0.5")
+        gl = GridLevel(2900.0, GridCycleState.WAITING_FOR_BUY_FILL)
+        mock_grid_manager.grid_levels = {2900.0: gl}
+        local_order = _make_exchange_order(identifier="fill-1", side=OrderSide.BUY, price=2900.0)
+        mock_order_book.get_open_orders.return_value = [local_order]
+        mock_order_book.get_grid_level_for_order.return_value = gl
+        exchange_order = _make_exchange_order(
+            identifier="fill-1",
+            status=OrderStatus.CLOSED,
+            side=OrderSide.BUY,
+            price=2900.0,
+            filled=1.0,
+            remaining=0.0,
+            average=2899.0,
+            cost=2899.0,
+        )
+        exchange_order.last_trade_timestamp = 1700000500
+        service.order_execution_strategy.get_order = AsyncMock(return_value=exchange_order)
+
+        await service.attempt_recovery()
+
+        assert local_order.last_trade_timestamp == 1700000500
+        mock_balance_tracker.replay_fills_on_cost_basis.assert_called_once_with(Decimal("2.5"), [local_order])
+
 
 def _make_real_grid_manager() -> GridManager:
     """Builds a real arithmetic SIMPLE_GRID GridManager for geometry-restore tests."""

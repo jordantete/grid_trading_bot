@@ -224,6 +224,9 @@ class TestBalanceSerialization:
         tracker._total_fees = Decimal("0")
         tracker._reserved_fiat = Decimal("0")
         tracker._reserved_crypto = Decimal("0")
+        tracker._ledger.avg_cost = Decimal("1")
+        tracker._ledger.realized_pnl = Decimal("0")
+        tracker._peak_value = Decimal("1000")
 
         result = balance_to_dict(tracker)
 
@@ -258,5 +261,47 @@ class TestBalanceSerialization:
 
         result = balance_to_dict(tracker)
 
-        expected_keys = {"fiat_balance", "crypto_balance", "total_fees", "reserved_fiat", "reserved_crypto"}
+        expected_keys = {
+            "fiat_balance",
+            "crypto_balance",
+            "total_fees",
+            "reserved_fiat",
+            "reserved_crypto",
+            "avg_cost",
+            "realized_pnl",
+            "peak_value",
+        }
         assert set(result.keys()) == expected_keys
+
+    def test_balance_serialization_carries_the_accounting(self):
+        tracker = MagicMock()
+        tracker._balance = Decimal("100")
+        tracker._crypto_balance = Decimal("1")
+        tracker._total_fees = Decimal("0.5")
+        tracker._reserved_fiat = Decimal("10")
+        tracker._reserved_crypto = Decimal("0.1")
+        tracker._ledger.avg_cost = Decimal("95.123456789012")
+        tracker._ledger.realized_pnl = Decimal("-2.5")
+        tracker._peak_value = Decimal("210.5")
+
+        result = balance_to_dict(tracker)
+
+        assert result["avg_cost"] == "95.123456789012"
+        assert result["realized_pnl"] == "-2.5"
+        assert result["peak_value"] == "210.5"
+
+    def test_balance_serialization_keeps_unknown_cost_and_missing_peak_as_none(self):
+        tracker = MagicMock()
+        tracker._balance = Decimal("100")
+        tracker._crypto_balance = Decimal("1")
+        tracker._total_fees = Decimal("0")
+        tracker._reserved_fiat = Decimal("0")
+        tracker._reserved_crypto = Decimal("0")
+        tracker._ledger.avg_cost = None
+        tracker._ledger.realized_pnl = Decimal("0")
+        tracker._peak_value = None
+
+        result = balance_to_dict(tracker)
+
+        assert result["avg_cost"] is None
+        assert result["peak_value"] is None

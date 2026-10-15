@@ -104,7 +104,7 @@ class TestInitialize:
         cursor = repo._conn.execute("SELECT version FROM schema_version")
         row = cursor.fetchone()
         assert row is not None
-        assert row["version"] == 2
+        assert row["version"] == 3
 
 
 class TestBotState:
@@ -161,6 +161,17 @@ class TestBalanceState:
     def test_balance_state_returns_none_when_empty(self, repo):
         result = repo.load_balance_state()
         assert result is None
+
+    def test_accounting_fields_round_trip(self, repo, sample_balance_state):
+        repo.save_balance_state(
+            {**sample_balance_state, "avg_cost": "2950.123456789012", "realized_pnl": "-3.25", "peak_value": None}
+        )
+
+        loaded = repo.load_balance_state()
+
+        assert loaded["avg_cost"] == "2950.123456789012"
+        assert loaded["realized_pnl"] == "-3.25"
+        assert loaded["peak_value"] is None
 
 
 class TestOrders:
@@ -317,9 +328,9 @@ class TestStrategyStatePersistence:
 
 
 class TestSchemaMigrationV1ToV2:
-    def test_v1_database_migrates_to_v2(self, tmp_path):
+    def test_v1_database_migrates_to_v3(self, tmp_path):
         """A hand-crafted v1 database (no strategy_state column) should gain the
-        column and be bumped to schema version 2 when opened with the current code."""
+        column and be bumped to the current schema version when opened with the current code."""
         db_path = str(tmp_path / "v1.db")
         conn = sqlite3.connect(db_path)
         conn.executescript("""
@@ -353,12 +364,61 @@ class TestSchemaMigrationV1ToV2:
             version_row = repository._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             ).fetchone()
-            assert version_row["version"] == 2
+            assert version_row["version"] == 3
 
             # Pre-existing row should have survived the migration untouched.
             loaded = repository.load_bot_state()
             assert loaded["config_hash"] == "abc123"
             assert loaded["strategy_state"] is None
+        finally:
+            repository.close()
+            for suffix in ("", "-wal", "-shm"):
+                path = db_path + suffix
+                if os.path.exists(path):
+                    os.unlink(path)
+
+
+class TestSchemaMigrationV2ToV3:
+    def test_v2_database_gains_neutral_accounting_columns(self, tmp_path):
+        db_path = str(tmp_path / "v2.db")
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE schema_version (
+                version INTEGER NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE balance_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                fiat_balance TEXT NOT NULL,
+                crypto_balance TEXT NOT NULL,
+                total_fees TEXT NOT NULL,
+                reserved_fiat TEXT NOT NULL,
+                reserved_crypto TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO schema_version (version) VALUES (2);
+            INSERT INTO balance_state (id, fiat_balance, crypto_balance, total_fees, reserved_fiat, reserved_crypto)
+            VALUES (1, '4500', '2.0', '15', '500', '0.5');
+        """)
+        conn.commit()
+        conn.close()
+
+        repository = SQLiteStateRepository(db_path=db_path)
+        try:
+            repository.initialize()
+
+            version_row = repository._conn.execute(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            assert version_row["version"] == 3
+
+            loaded = repository.load_balance_state()
+            assert loaded["fiat_balance"] == "4500"
+            assert (loaded["avg_cost"], loaded["realized_pnl"], loaded["peak_value"]) == (None, None, None)
+
+            repository.save_balance_state({**loaded, "avg_cost": "2900", "realized_pnl": "1.5", "peak_value": "6000"})
+            reloaded = repository.load_balance_state()
+            assert (reloaded["avg_cost"], reloaded["realized_pnl"], reloaded["peak_value"]) == ("2900", "1.5", "6000")
         finally:
             repository.close()
             for suffix in ("", "-wal", "-shm"):

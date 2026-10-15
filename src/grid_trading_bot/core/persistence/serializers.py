@@ -65,13 +65,18 @@ def grid_level_to_dict(grid_level: GridLevel) -> dict[str, Any]:
     }
 
 
-def balance_to_dict(tracker: BalanceTracker) -> dict[str, str]:
+def balance_to_dict(tracker: BalanceTracker) -> dict[str, str | None]:
+    avg_cost = tracker._ledger.avg_cost
+    peak_value = tracker._peak_value
     return {
         "fiat_balance": str(tracker._balance),
         "crypto_balance": str(tracker._crypto_balance),
         "total_fees": str(tracker._total_fees),
         "reserved_fiat": str(tracker._reserved_fiat),
         "reserved_crypto": str(tracker._reserved_crypto),
+        "avg_cost": None if avg_cost is None else str(avg_cost),
+        "realized_pnl": str(tracker._ledger.realized_pnl),
+        "peak_value": None if peak_value is None else str(peak_value),
     }
 
 

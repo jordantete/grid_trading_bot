@@ -5,7 +5,7 @@ from typing import Any
 
 from .state_repository_interface import StateRepositoryInterface
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS balance_state (
     total_fees TEXT NOT NULL,
     reserved_fiat TEXT NOT NULL,
     reserved_crypto TEXT NOT NULL,
+    avg_cost TEXT,
+    realized_pnl TEXT,
+    peak_value TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -98,9 +101,12 @@ class SQLiteStateRepository(StateRepositoryInterface):
             return
 
         stored_version = row["version"]
-        if stored_version == 1 and SCHEMA_VERSION == 2:
+        if stored_version == 1:
             self._migrate_v1_to_v2()
             stored_version = 2
+        if stored_version == 2:
+            self._migrate_v2_to_v3()
+            stored_version = 3
 
         if stored_version != SCHEMA_VERSION:
             self.logger.warning(
@@ -114,6 +120,15 @@ class SQLiteStateRepository(StateRepositoryInterface):
         self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (2,))
         self._conn.commit()
         self.logger.info("Migrated schema v1 -> v2 (added bot_state.strategy_state).")
+
+    def _migrate_v2_to_v3(self) -> None:
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(balance_state)")}
+        for column in ("avg_cost", "realized_pnl", "peak_value"):
+            if column not in columns:
+                self._conn.execute(f"ALTER TABLE balance_state ADD COLUMN {column} TEXT")
+        self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (3,))
+        self._conn.commit()
+        self.logger.info("Migrated schema v2 -> v3 (added balance_state.avg_cost, realized_pnl, peak_value).")
 
     # ── Bot State ────────────────────────────────────────────────────────
 
@@ -152,24 +167,27 @@ class SQLiteStateRepository(StateRepositoryInterface):
 
     # ── Balance State ────────────────────────────────────────────────────
 
-    def save_balance_state(self, state: dict[str, str]) -> None:
+    def save_balance_state(self, state: dict[str, str | None]) -> None:
         with self._write_lock:
             self._conn.execute(
                 """INSERT OR REPLACE INTO balance_state
                    (id, fiat_balance, crypto_balance, total_fees,
-                    reserved_fiat, reserved_crypto, updated_at)
-                   VALUES (1, ?, ?, ?, ?, ?, datetime('now'))""",
+                    reserved_fiat, reserved_crypto, avg_cost, realized_pnl, peak_value, updated_at)
+                   VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
                 (
                     state["fiat_balance"],
                     state["crypto_balance"],
                     state["total_fees"],
                     state["reserved_fiat"],
                     state["reserved_crypto"],
+                    state.get("avg_cost"),
+                    state.get("realized_pnl"),
+                    state.get("peak_value"),
                 ),
             )
             self._conn.commit()
 
-    def load_balance_state(self) -> dict[str, str] | None:
+    def load_balance_state(self) -> dict[str, str | None] | None:
         cursor = self._conn.execute("SELECT * FROM balance_state WHERE id = 1")
         row = cursor.fetchone()
         if row is None:
@@ -180,6 +198,9 @@ class SQLiteStateRepository(StateRepositoryInterface):
             "total_fees": row["total_fees"],
             "reserved_fiat": row["reserved_fiat"],
             "reserved_crypto": row["reserved_crypto"],
+            "avg_cost": row["avg_cost"],
+            "realized_pnl": row["realized_pnl"],
+            "peak_value": row["peak_value"],
             "updated_at": row["updated_at"],
         }
 

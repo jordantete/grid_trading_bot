@@ -627,3 +627,54 @@ class TestAccountingIdentity:
         final = bt.snapshot(price)
         assert final.unrealized_pnl == 0.0
         assert final.value - value0 == pytest.approx(final.realized_pnl, abs=1e-5)
+
+
+class TestRecoveryAccounting:
+    def test_restore_accounting_sets_cost_realized_pnl_and_peak(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto  # 2 crypto, 0 fiat
+
+        bt.restore_accounting(avg_cost=Decimal("90"), realized_pnl=Decimal("5"), peak_value=Decimal("250"))
+        snapshot = bt.snapshot(100.0)
+
+        assert snapshot.realized_pnl == 5.0
+        assert snapshot.unrealized_pnl == pytest.approx(20.0)
+        assert snapshot.peak == 250.0
+        assert snapshot.drawdown_pct == pytest.approx(20.0)
+
+    def test_replay_books_fills_in_execution_order_without_touching_balances(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto
+        bt.restore_accounting(avg_cost=Decimal("100"), realized_pnl=Decimal("0"), peak_value=None)
+        sell = _make_order(OrderSide.SELL, price=110.0, average=None, amount=1.0, filled=1.0, remaining=0.0)
+        sell.last_trade_timestamp = 2
+        buy = _make_order(OrderSide.BUY, price=90.0, average=90.0, amount=1.0, filled=1.0, remaining=0.0)
+        buy.last_trade_timestamp = 1
+
+        bt.replay_fills_on_cost_basis(Decimal("2"), [sell, buy])
+
+        # buy first: (2 x 100 + 90 + 0.09) / 3; then sell 1 at 110 with a 0.11 fee
+        assert float(bt._ledger.avg_cost) == pytest.approx(96.6966667, abs=1e-6)
+        assert float(bt._ledger.realized_pnl) == pytest.approx(13.1933333, abs=1e-6)
+        assert bt._crypto_balance == Decimal("2.0")
+        assert bt._balance == Decimal("0")
+
+    def test_replay_falls_back_to_limit_price_and_creation_time(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto
+        bt.restore_accounting(avg_cost=Decimal("100"), realized_pnl=Decimal("0"), peak_value=None)
+        sell = _make_order(OrderSide.SELL, price=110.0, average=None, amount=1.0, filled=1.0, remaining=0.0)
+        sell.timestamp = 2
+        buy = _make_order(OrderSide.BUY, price=90.0, average=None, amount=1.0, filled=1.0, remaining=0.0)
+        buy.timestamp = 1
+
+        bt.replay_fills_on_cost_basis(Decimal("2"), [sell, buy])
+
+        assert float(bt._ledger.realized_pnl) == pytest.approx(13.1933333, abs=1e-6)
+
+    def test_replay_skips_orders_without_a_fill(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto
+        bt.restore_accounting(avg_cost=Decimal("100"), realized_pnl=Decimal("0"), peak_value=None)
+        unfilled = _make_order(OrderSide.SELL, price=110.0, amount=1.0, filled=0.0, remaining=1.0)
+
+        bt.replay_fills_on_cost_basis(Decimal("2"), [unfilled])
+
+        assert bt._ledger.realized_pnl == Decimal("0")
+        assert bt._ledger.avg_cost == Decimal("100")

@@ -462,3 +462,27 @@ class BalanceTracker:
             realized_pnl=float(self._ledger.realized_pnl),
             unrealized_pnl=float(self._ledger.unrealized_pnl(position, d_price)),
         )
+
+    def restore_accounting(self, avg_cost: Decimal | None, realized_pnl: Decimal, peak_value: Decimal | None) -> None:
+        self._ledger = PnlLedger(avg_cost=avg_cost, realized_pnl=realized_pnl)
+        self._peak_value = peak_value
+
+    def replay_fills_on_cost_basis(self, starting_position: Decimal, orders: list[Order]) -> None:
+        """
+        Books fills the exchange executed while the bot was down into the cost basis and realized PnL.
+        Balances stay untouched: they were restored from the exchange, which already includes these fills.
+        """
+        position = starting_position
+        for order in sorted(orders, key=lambda o: o.last_trade_timestamp or o.timestamp):
+            if not order.filled:
+                continue
+            fill_price = order.average if order.average is not None else order.price
+            quantity = self._to_decimal(order.filled)
+            price = self._to_decimal(fill_price)
+            fee = self._to_decimal(self.fee_calculator.calculate_fee(order.filled * fill_price, order.liquidity))
+            if order.side == OrderSide.BUY:
+                self._ledger.record_buy(position, quantity, price, fee)
+                position += quantity
+            else:
+                self._ledger.record_sell(position, quantity, price, fee)
+                position -= quantity

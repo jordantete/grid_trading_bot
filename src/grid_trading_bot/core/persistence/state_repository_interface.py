@@ -16,11 +16,11 @@ class StateRepositoryInterface(ABC):
         pass
 
     @abstractmethod
-    def save_balance_state(self, state: dict[str, str]) -> None:
+    def save_balance_state(self, state: dict[str, str | None]) -> None:
         pass
 
     @abstractmethod
-    def load_balance_state(self) -> dict[str, str] | None:
+    def load_balance_state(self) -> dict[str, str | None] | None:
         pass
 
     @abstractmethod
