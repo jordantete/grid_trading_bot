@@ -371,3 +371,45 @@ async def test_atr_scenario_deterministic_results(run_backtest_bot, snapshot_dir
 
     diffs = compare_snapshots(actual, expected)
     assert not diffs, f"Snapshot mismatch for {ATR_SNAPSHOT_NAME}:\n" + "\n".join(diffs)
+
+
+# ---------------------------------------------------------------------------
+# Stop-loss exit: position liquidated, account valued to the end
+# ---------------------------------------------------------------------------
+
+STOP_LOSS = {"stop_loss": {"enabled": True, "threshold": 155}}
+STOP_LOSS_SNAPSHOT_NAME = "simple_grid_arithmetic_stop_loss"
+
+
+@pytest.mark.integration
+async def test_stop_loss_scenario_liquidates_and_values_to_the_end(run_backtest_bot):
+    """The SOL fixture falls through 155 on Aug 2: the stop liquidates everything and the curve stays complete."""
+    bot, result = await run_backtest_bot("simple_grid", "arithmetic", risk_management_overrides=STOP_LOSS)
+    bt = bot.balance_tracker
+
+    metrics = result["metrics"]
+    assert metrics.stop_reason == "stop_loss"
+    assert metrics.equity_coverage == 1.0
+    assert bot.order_book.get_open_orders() == []
+    assert bt.reserved_fiat == 0
+    assert bt.reserved_crypto == 0
+    assert bt.get_adjusted_crypto_balance() == pytest.approx(0.0, abs=1e-9)
+
+
+@pytest.mark.integration
+async def test_stop_loss_scenario_deterministic_results(run_backtest_bot, snapshot_dir, update_snapshots):
+    """With identical config and CSV data, the stop-loss scenario produces identical results."""
+    _bot, result = await run_backtest_bot("simple_grid", "arithmetic", risk_management_overrides=STOP_LOSS)
+    actual = extract_snapshot_data(result["performance_summary"], result["orders"])
+
+    if update_snapshots:
+        save_snapshot(STOP_LOSS_SNAPSHOT_NAME, actual, snapshot_dir)
+        pytest.skip(f"Snapshot updated for {STOP_LOSS_SNAPSHOT_NAME}")
+
+    expected = load_snapshot(STOP_LOSS_SNAPSHOT_NAME, snapshot_dir)
+    if expected is None:
+        save_snapshot(STOP_LOSS_SNAPSHOT_NAME, actual, snapshot_dir)
+        pytest.skip(f"Snapshot created for {STOP_LOSS_SNAPSHOT_NAME} (first run). Re-run to validate.")
+
+    diffs = compare_snapshots(actual, expected)
+    assert not diffs, f"Snapshot mismatch for {STOP_LOSS_SNAPSHOT_NAME}:\n" + "\n".join(diffs)
