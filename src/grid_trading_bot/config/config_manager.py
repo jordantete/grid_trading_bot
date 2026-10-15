@@ -259,6 +259,12 @@ class ConfigManager:
     def get_backtest_slippage(self) -> float:
         return self.get_execution_settings().get("backtest_slippage", 0.0)
 
+    def get_backtest_min_amount(self) -> float | None:
+        return self.get_execution_settings().get("backtest_min_amount")
+
+    def get_backtest_min_cost(self) -> float | None:
+        return self.get_execution_settings().get("backtest_min_cost")
+
     def get_reconciliation_interval(self) -> float:
         return self.get_execution_settings().get("reconciliation_interval", 300.0)
 

@@ -9,6 +9,7 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 pytestmark = pytest.mark.integration
 
@@ -127,3 +128,25 @@ async def test_trailing_stop_liquidates_the_whole_position(tmp_path):
     bot, _ = await _run(config)
 
     _assert_flat_after_liquidation(bot)
+
+
+async def test_backtest_never_places_a_grid_order_below_the_configured_minimum(tmp_path):
+    # Ratios below 1 shrink paired orders under the minimum, which the exchange would refuse.
+    config = _config(tmp_path, DROP_THEN_RALLY, execution={"backtest_min_cost": 85.0}, buy_ratio=0.8, sell_ratio=0.8)
+
+    bot, _ = await _run(config)
+
+    assert bot.order_manager.market_constraints == MarketConstraints(min_amount=None, min_cost=85.0)
+    grid_orders = [
+        order
+        for order, level in bot.order_book.get_buy_orders_with_grid() + bot.order_book.get_sell_orders_with_grid()
+        if level is not None
+    ]
+    assert grid_orders
+    assert all(order.amount * order.price >= 85.0 for order in grid_orders)
+
+
+async def test_backtest_without_minimum_keys_has_no_constraints(tmp_path):
+    bot, _ = await _run(_config(tmp_path, DROP_THEN_RALLY))
+
+    assert bot.order_manager.market_constraints is None

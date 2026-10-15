@@ -284,3 +284,14 @@ class TestConfigManagerFeeAndPostOnly:
     def test_get_post_only_uses_explicit_value(self, config_manager):
         config_manager.config["exchange"]["post_only"] = True
         assert config_manager.get_post_only() is True
+
+
+class TestConfigManagerBacktestMinimums:
+    def test_minimums_default_to_none(self, config_manager):
+        assert config_manager.get_backtest_min_amount() is None
+        assert config_manager.get_backtest_min_cost() is None
+
+    def test_minimums_use_explicit_values(self, config_manager):
+        config_manager.config["execution"] = {"backtest_min_amount": 0.001, "backtest_min_cost": 5.0}
+        assert config_manager.get_backtest_min_amount() == 0.001
+        assert config_manager.get_backtest_min_cost() == 5.0

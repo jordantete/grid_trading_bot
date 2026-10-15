@@ -27,6 +27,7 @@ from grid_trading_bot.core.services.exceptions import (
     UnsupportedTimeframeError,
 )
 from grid_trading_bot.core.services.exchange_service_factory import ExchangeServiceFactory
+from grid_trading_bot.core.services.market_constraints import MarketConstraints
 from grid_trading_bot.core.validation.order_validator import OrderValidator
 from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
 from grid_trading_bot.strategies.plotter import Plotter
@@ -203,6 +204,11 @@ class GridTradingBot:
                 self.order_manager.set_market_constraints(
                     self.exchange_service.get_market_constraints(self.trading_pair)
                 )
+            else:
+                min_amount = self.config_manager.get_backtest_min_amount()
+                min_cost = self.config_manager.get_backtest_min_cost()
+                if min_amount is not None or min_cost is not None:
+                    self.order_manager.set_market_constraints(MarketConstraints(min_amount, min_cost))
 
             # Attempt state recovery for live trading
             if self.state_recovery_service:

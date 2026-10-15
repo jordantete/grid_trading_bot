@@ -297,6 +297,12 @@ class ConfigValidator:
                 self.logger.error(f"execution.{field} must be a number between {min_val} and {max_val}.")
                 invalid_fields.append(f"execution.{field}")
 
+        for field in ("backtest_min_amount", "backtest_min_cost"):
+            value = execution.get(field)
+            if value is not None and (not isinstance(value, int | float) or isinstance(value, bool) or value < 0):
+                self.logger.error(f"execution.{field} must be a non-negative number.")
+                invalid_fields.append(f"execution.{field}")
+
         return invalid_fields
 
     def _validate_logging(self, config: dict[str, Any]) -> tuple[list[str], list[str]]:

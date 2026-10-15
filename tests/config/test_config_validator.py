@@ -262,3 +262,22 @@ class TestConfigValidatorMakerTakerAndPostOnly:
 
     def test_config_without_the_optional_fields_stays_valid(self, config_validator, valid_config):
         config_validator.validate(valid_config)
+
+
+class TestBacktestMarketMinimums:
+    @pytest.fixture
+    def config_validator(self):
+        return ConfigValidator()
+
+    @pytest.mark.parametrize("field", ["backtest_min_amount", "backtest_min_cost"])
+    def test_non_negative_number_is_accepted(self, config_validator, valid_config, field):
+        valid_config["execution"] = {field: 5.0}
+        config_validator.validate(valid_config)
+
+    @pytest.mark.parametrize("field", ["backtest_min_amount", "backtest_min_cost"])
+    @pytest.mark.parametrize("value", [-1.0, "5", True])
+    def test_invalid_value_is_rejected(self, config_validator, valid_config, field, value):
+        valid_config["execution"] = {field: value}
+        with pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+        assert f"execution.{field}" in excinfo.value.invalid_fields
