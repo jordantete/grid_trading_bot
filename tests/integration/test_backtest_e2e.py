@@ -271,11 +271,12 @@ async def test_asymmetric_ratio_reduces_sell_volume(strategy_type, spacing, run_
         f"Asymmetric sell volume should be lower: asym={asym_sell_vol:.6f} vs sym={sym_sell_vol:.6f}"
     )
 
-    # Crypto held should be at least as much as symmetric (we sell less)
-    asym_crypto = bot_asym.balance_tracker.get_adjusted_crypto_balance()
-    sym_crypto = bot_sym.balance_tracker.get_adjusted_crypto_balance()
-    assert asym_crypto >= sym_crypto, (
-        f"Asymmetric crypto should be >= symmetric: asym={asym_crypto:.6f} vs sym={sym_crypto:.6f}"
+    # The initial purchase only funds the sell orders, which are half-size
+    asym_initial = sum(o.filled for o, level in ob_asym.get_buy_orders_with_grid() if level is None)
+    sym_initial = sum(o.filled for o, level in ob_sym.get_buy_orders_with_grid() if level is None)
+    assert asym_initial == pytest.approx(sym_initial * 0.5), (
+        f"Asymmetric initial purchase should be half the symmetric one: asym={asym_initial:.6f} vs "
+        f"sym={sym_initial:.6f}"
     )
 
 

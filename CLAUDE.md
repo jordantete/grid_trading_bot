@@ -72,7 +72,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 
 ### Strategy Layer
 
-- **`strategies/grid_trading_strategy.py`** — Implements `TradingStrategyInterface`. Handles both backtest (iterate OHLCV rows) and live (WebSocket price stream) execution loops. Manages initial purchase (50% allocation), grid order initialization, take-profit/stop-loss
+- **`strategies/grid_trading_strategy.py`** — Implements `TradingStrategyInterface`. Handles both backtest (iterate OHLCV rows) and live (WebSocket price stream) execution loops. Manages the initial purchase (sized to fund the sell orders above the price), grid order initialization, take-profit/stop-loss
 - **`strategies/trading_performance_analyzer.py`** — Computes ROI, max drawdown, Sharpe ratio, etc.
 - **`strategies/plotter.py`** — Plotly visualization for backtest results
 

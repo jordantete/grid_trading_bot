@@ -108,16 +108,45 @@ class TestGridManager:
         sell_size = grid_manager.get_order_size_for_grid_level(total_balance, current_price, OrderSide.SELL)
         assert buy_size == sell_size
 
-    def test_get_initial_order_quantity(self, grid_manager):
-        current_fiat_balance = 5000  # Half of the total balance
-        current_crypto_balance = 0.5
-        current_price = 2000
-        expected_quantity = (
-            (current_fiat_balance + (current_crypto_balance * current_price)) / 2
-            - (current_crypto_balance * current_price)
-        ) / current_price
-        result = grid_manager.get_initial_order_quantity(current_fiat_balance, current_crypto_balance, current_price)
-        assert result == expected_quantity
+    @pytest.mark.parametrize(
+        ("price", "fiat", "crypto", "sell_ratio", "expected_quantity"),
+        [
+            # the 5 sell levels (1555.6 to 2000) all sit above 1500: half the portfolio goes to crypto
+            (1500, 10000, 0.0, 1.0, 5000 / 1500),
+            # 1777.8, 1888.9 and 2000 sell above 1700
+            (1700, 10000, 0.0, 1.0, 3000 / 1700),
+            # only the 2000 level sells above 1950
+            (1950, 10000, 0.0, 1.0, 1000 / 1950),
+            # below the center every sell level is above the price
+            (1050, 10000, 0.0, 1.0, 5000 / 1050),
+            # half-size sell orders need half the inventory
+            (1500, 10000, 0.0, 0.5, 2500 / 1500),
+            # held crypto counts toward the target: 4875 - 750
+            (1500, 9000, 0.5, 1.0, 4125 / 1500),
+            # held crypto (3900) already exceeds the 890 target
+            (1950, 5000, 2.0, 1.0, 0.0),
+            # nothing sells above the top level
+            (2000, 10000, 0.0, 1.0, 0.0),
+        ],
+    )
+    def test_get_initial_order_quantity_covers_sell_orders_above_price(
+        self, config_manager, price, fiat, crypto, sell_ratio, expected_quantity
+    ):
+        config_manager.get_sell_ratio.return_value = sell_ratio
+        grid_manager = GridManager(config_manager, StrategyType.SIMPLE_GRID)
+        grid_manager.initialize_grids_and_levels()
+
+        result = grid_manager.get_initial_order_quantity(fiat, crypto, price)
+
+        assert result == pytest.approx(expected_quantity)
+
+    def test_get_initial_order_quantity_hedged_grid_covers_sell_orders_above_price(self, config_manager):
+        grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
+        grid_manager.initialize_grids_and_levels()
+
+        result = grid_manager.get_initial_order_quantity(10000, 0.0, 1950)
+
+        assert result == pytest.approx(1000 / 1950)
 
     def test_pair_grid_levels(self, grid_manager):
         source_grid_level = Mock(spec=GridLevel, price=1000)
@@ -310,6 +339,16 @@ class TestGridManager:
 
         assert result is not None
         assert result.price < sell_grid_level.price
+
+    def test_get_or_create_paired_buy_level_skips_fallback_level_with_open_buy(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        highest_buy_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[-1]]
+        grid_manager.mark_order_pending(highest_buy_level, Mock(spec=Order, side=OrderSide.BUY))
+        lowest_sell_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
+
+        result = grid_manager.get_or_create_paired_buy_level(lowest_sell_level)
+
+        assert result is None
 
     def test_get_or_create_paired_buy_level_no_fallback(self, grid_manager):
         grid_manager.initialize_grids_and_levels()

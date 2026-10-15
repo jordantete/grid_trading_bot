@@ -115,7 +115,7 @@ stateDiagram-v2
 
 The strategy handles:
 
-1. Initial purchase (50% allocation of initial balance)
+1. Initial purchase (enough crypto to fund the sell orders placed above the current price)
 2. Grid order initialization across computed levels
 3. Order fill handling (buy fill → place sell above, sell fill → place buy below)
 4. Take-profit and stop-loss monitoring
