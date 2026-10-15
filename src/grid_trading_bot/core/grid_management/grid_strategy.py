@@ -1,7 +1,25 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from ..order_handling.order import OrderSide
 from .grid_level import GridCycleState, GridLevel
+
+
+@dataclass(frozen=True)
+class GridLayout:
+    """Read-only view of the grid geometry handed to strategies."""
+
+    sorted_prices: list[float]
+    price_index_map: dict[float, int]
+    grid_levels: dict[float, GridLevel]
+    sorted_buy_grids: list[float]
+    sorted_sell_grids: list[float]
+
+    def neighbour(self, grid_level: GridLevel, offset: int) -> GridLevel | None:
+        index = self.price_index_map[grid_level.price] + offset
+        if 0 <= index < len(self.sorted_prices):
+            return self.grid_levels[self.sorted_prices[index]]
+        return None
 
 
 class GridStrategy(ABC):
@@ -33,6 +51,18 @@ class GridStrategy(ABC):
     ) -> GridLevel | None:
         """Determines the paired sell level for a given buy grid level."""
         pass
+
+    @abstractmethod
+    def initial_order_plan(self, layout: GridLayout, current_price: float) -> list[tuple[GridLevel, OrderSide]]:
+        """Levels that receive an order when the grid is armed at current_price: buys then sells, ascending."""
+
+    @abstractmethod
+    def sell_target(self, buy_level: GridLevel, layout: GridLayout, logger) -> GridLevel | None:
+        """Level that takes the sell for crypto bought at buy_level, or None when no sell can be placed."""
+
+    @abstractmethod
+    def buy_target(self, sell_level: GridLevel, layout: GridLayout, logger) -> GridLevel | None:
+        """Level that takes the rebuy for the proceeds of sell_level, or None when they stay in fiat."""
 
     @abstractmethod
     def complete_order(
@@ -96,6 +126,33 @@ class SimpleGridStrategy(GridStrategy):
                 continue
             if sell_price > buy_grid_level.price:
                 return sell_level
+        return None
+
+    def initial_order_plan(self, layout: GridLayout, current_price: float) -> list[tuple[GridLevel, OrderSide]]:
+        buys = [(layout.grid_levels[p], OrderSide.BUY) for p in layout.sorted_buy_grids if p < current_price]
+        sells = [(layout.grid_levels[p], OrderSide.SELL) for p in layout.sorted_sell_grids if p > current_price]
+        return buys + sells
+
+    def sell_target(self, buy_level: GridLevel, layout: GridLayout, logger) -> GridLevel | None:
+        if not layout.sorted_sell_grids:
+            logger.error(f"No sell level in the grid; sell for buy level {buy_level.price} not placed.")
+            return None
+        sell_levels = [layout.grid_levels[p] for p in layout.sorted_sell_grids]
+        for level in sell_levels:
+            if self.can_place_order(level, OrderSide.SELL):
+                return level
+        logger.info(
+            f"Every sell level holds an order; stacking the sell for buy level {buy_level.price} "
+            f"on {sell_levels[0].price}."
+        )
+        return sell_levels[0]
+
+    def buy_target(self, sell_level: GridLevel, layout: GridLayout, logger) -> GridLevel | None:
+        for price in reversed(layout.sorted_buy_grids):
+            level = layout.grid_levels[price]
+            if self.can_place_order(level, OrderSide.BUY):
+                return level
+        logger.info(f"No free buy level for the proceeds of sell level {sell_level.price}; they stay in fiat.")
         return None
 
     def complete_order(
@@ -167,6 +224,47 @@ class HedgedGridStrategy(GridStrategy):
             paired_sell_price = sorted_prices[current_index + 1]
             return grid_levels[paired_sell_price]
         return None
+
+    def initial_order_plan(self, layout: GridLayout, current_price: float) -> list[tuple[GridLevel, OrderSide]]:
+        # The level nearest the price stays free so every fill finds its neighbour empty.
+        free_price = min(layout.sorted_prices, key=lambda price: (abs(price - current_price), price))
+        buys = [
+            (layout.grid_levels[p], OrderSide.BUY)
+            for p in layout.sorted_buy_grids
+            if p < current_price and p != free_price
+        ]
+        sells = [
+            (layout.grid_levels[p], OrderSide.SELL)
+            for p in layout.sorted_sell_grids
+            if p > current_price and p != free_price
+        ]
+        return buys + sells
+
+    def sell_target(self, buy_level: GridLevel, layout: GridLayout, logger) -> GridLevel | None:
+        return self._free_neighbour(buy_level, layout, 1, OrderSide.SELL, logger)
+
+    def buy_target(self, sell_level: GridLevel, layout: GridLayout, logger) -> GridLevel | None:
+        return self._free_neighbour(sell_level, layout, -1, OrderSide.BUY, logger)
+
+    def _free_neighbour(
+        self,
+        filled_level: GridLevel,
+        layout: GridLayout,
+        offset: int,
+        side: OrderSide,
+        logger,
+    ) -> GridLevel | None:
+        target = layout.neighbour(filled_level, offset)
+        if target is None:
+            logger.error(f"No grid level next to {filled_level.price} for the {side.value}; order not placed.")
+            return None
+        if not self.can_place_order(target, side):
+            logger.error(
+                f"{side.value.capitalize()} target {target.price} for grid level {filled_level.price} is busy "
+                f"({target.state.name}); order not placed."
+            )
+            return None
+        return target
 
     def complete_order(
         self,

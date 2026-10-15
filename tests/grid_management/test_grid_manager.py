@@ -183,29 +183,32 @@ class TestGridManager:
         with pytest.raises(ValueError, match="Invalid pairing type"):
             grid_manager.pair_grid_levels(source_grid_level, target_grid_level, pairing_type="invalid")
 
-    def test_get_paired_sell_level_simple_grid(self, grid_manager):
+    def test_get_sell_target_simple_grid_picks_lowest_free_sell_level(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
         buy_grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
-        paired_sell_level = grid_manager.get_paired_sell_level(buy_grid_level)
-        assert paired_sell_level.price > buy_grid_level.price
-        assert paired_sell_level.state == GridCycleState.READY_TO_SELL
 
-    def test_get_paired_sell_level_hedged_grid(self, config_manager):
+        target = grid_manager.get_sell_target(buy_grid_level)
+
+        assert target is grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
+        assert target.state == GridCycleState.READY_TO_SELL
+
+    def test_get_sell_target_hedged_grid_is_the_level_above(self, config_manager):
         grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
         grid_manager.initialize_grids_and_levels()
+        buy_grid_level = grid_manager.grid_levels[grid_manager._sorted_prices[2]]
 
-        buy_grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
-        paired_sell_level = grid_manager.get_paired_sell_level(buy_grid_level)
+        target = grid_manager.get_sell_target(buy_grid_level)
 
-        assert paired_sell_level is not None
-        assert paired_sell_level.price > buy_grid_level.price
-        assert paired_sell_level.state in {GridCycleState.READY_TO_SELL, GridCycleState.READY_TO_BUY_OR_SELL}
+        assert target is grid_manager.grid_levels[grid_manager._sorted_prices[3]]
 
-    def test_get_grid_level_below(self, grid_manager):
+    def test_get_buy_target_hedged_grid_is_the_level_below(self, config_manager):
+        grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
         grid_manager.initialize_grids_and_levels()
-        grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[1]]
-        lower_level = grid_manager.get_grid_level_below(grid_level)
-        assert lower_level.price < grid_level.price
+        sell_grid_level = grid_manager.grid_levels[grid_manager._sorted_prices[3]]
+
+        target = grid_manager.get_buy_target(sell_grid_level)
+
+        assert target is grid_manager.grid_levels[grid_manager._sorted_prices[2]]
 
     def test_mark_order_pending_after_buy(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
@@ -338,49 +341,51 @@ class TestGridManager:
         grid_manager.rollback_order_placement(grid_level, OrderSide.SELL)
         assert grid_level.state == GridCycleState.READY_TO_BUY_OR_SELL
 
-    def test_get_or_create_paired_buy_level_with_valid_paired_level(self, grid_manager):
+    def test_get_buy_target_simple_grid_picks_highest_free_buy_level(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
         sell_grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
-        buy_grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[-1]]
 
-        # Pair them manually
-        sell_grid_level.paired_buy_level = buy_grid_level
+        target = grid_manager.get_buy_target(sell_grid_level)
 
-        result = grid_manager.get_or_create_paired_buy_level(sell_grid_level)
+        assert target is grid_manager.grid_levels[grid_manager.sorted_buy_grids[-1]]
 
-        assert result == buy_grid_level
-
-    def test_get_or_create_paired_buy_level_fallback(self, grid_manager):
+    def test_get_buy_target_simple_grid_ignores_pairing(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
-        # Use second sell grid so there is a grid level below
         sell_grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[1]]
-        sell_grid_level.paired_buy_level = None
+        sell_grid_level.paired_buy_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
 
-        result = grid_manager.get_or_create_paired_buy_level(sell_grid_level)
+        target = grid_manager.get_buy_target(sell_grid_level)
 
-        assert result is not None
-        assert result.price < sell_grid_level.price
+        assert target is grid_manager.grid_levels[grid_manager.sorted_buy_grids[-1]]
 
-    def test_get_or_create_paired_buy_level_skips_fallback_level_with_open_buy(self, grid_manager):
+    def test_get_buy_target_simple_grid_skips_level_with_open_buy(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
         highest_buy_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[-1]]
         grid_manager.mark_order_pending(highest_buy_level, Mock(spec=Order, side=OrderSide.BUY))
         lowest_sell_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
 
-        result = grid_manager.get_or_create_paired_buy_level(lowest_sell_level)
+        target = grid_manager.get_buy_target(lowest_sell_level)
 
-        assert result is None
+        assert target is grid_manager.grid_levels[grid_manager.sorted_buy_grids[-2]]
 
-    def test_get_or_create_paired_buy_level_no_fallback(self, grid_manager):
+    def test_get_buy_target_hedged_grid_from_bottom_level_is_none(self, config_manager):
+        grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
         grid_manager.initialize_grids_and_levels()
-        # Use the lowest grid level — nothing below it
-        lowest_price = grid_manager._sorted_prices[0]
-        lowest_level = grid_manager.grid_levels[lowest_price]
-        lowest_level.paired_buy_level = None
+        bottom_level = grid_manager.grid_levels[grid_manager._sorted_prices[0]]
 
-        result = grid_manager.get_or_create_paired_buy_level(lowest_level)
+        assert grid_manager.get_buy_target(bottom_level) is None
 
-        assert result is None
+    def test_get_initial_order_plan_uses_the_current_layout(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+
+        plan = grid_manager.get_initial_order_plan(1500)
+
+        assert [level.price for level, side in plan if side == OrderSide.BUY] == [
+            p for p in grid_manager.sorted_buy_grids if p < 1500
+        ]
+        assert [level.price for level, side in plan if side == OrderSide.SELL] == [
+            p for p in grid_manager.sorted_sell_grids if p > 1500
+        ]
 
     def test_calculate_price_grids_and_central_price_arithmetic(self, grid_manager):
         expected_grids = np.linspace(1000, 2000, 10)
@@ -461,6 +466,26 @@ class TestRegrid:
 
     def test_not_initialized_before_any_init(self, grid_manager_simple):
         assert grid_manager_simple.is_initialized is False
+
+    def test_hedged_plan_after_regrid_leaves_the_level_nearest_the_new_centre_free(self, config_manager_simple):
+        gm = GridManager(config_manager_simple, StrategyType.HEDGED_GRID)
+        gm.regrid(center_price=100.0, atr=2.0)  # levels 96, 98, 100, 102, 104
+
+        plan = gm.get_initial_order_plan(100.0)
+        shifted_plan = gm.get_initial_order_plan(101.5)
+
+        assert [(level.price, side) for level, side in plan] == [
+            (pytest.approx(96.0), OrderSide.BUY),
+            (pytest.approx(98.0), OrderSide.BUY),
+            (pytest.approx(102.0), OrderSide.SELL),
+            (pytest.approx(104.0), OrderSide.SELL),
+        ]
+        assert [(level.price, side) for level, side in shifted_plan] == [
+            (pytest.approx(96.0), OrderSide.BUY),
+            (pytest.approx(98.0), OrderSide.BUY),
+            (pytest.approx(100.0), OrderSide.BUY),
+            (pytest.approx(104.0), OrderSide.SELL),
+        ]
 
 
 class TestApplyGeometry:

@@ -7,7 +7,7 @@ from grid_trading_bot.core.domain.strategy_type import StrategyType
 
 from ..order_handling.order import Order, OrderSide
 from .grid_level import GridCycleState, GridLevel
-from .grid_strategy import GridStrategy, HedgedGridStrategy, SimpleGridStrategy
+from .grid_strategy import GridLayout, GridStrategy, HedgedGridStrategy, SimpleGridStrategy
 
 
 class GridManager:
@@ -230,6 +230,27 @@ class GridManager:
 
         else:
             raise ValueError(f"Invalid pairing type: {pairing_type}. Must be 'buy' or 'sell'.")
+
+    def _layout(self) -> GridLayout:
+        return GridLayout(
+            sorted_prices=self._sorted_prices,
+            price_index_map=self._price_index_map,
+            grid_levels=self.grid_levels,
+            sorted_buy_grids=self.sorted_buy_grids,
+            sorted_sell_grids=self.sorted_sell_grids,
+        )
+
+    def get_initial_order_plan(self, current_price: float) -> list[tuple[GridLevel, OrderSide]]:
+        """Returns the (level, side) pairs that receive an order when the grid is armed at current_price."""
+        return self.grid_strategy.initial_order_plan(self._layout(), current_price)
+
+    def get_sell_target(self, buy_level: GridLevel) -> GridLevel | None:
+        """Returns the level that takes the sell for crypto bought at buy_level, or None."""
+        return self.grid_strategy.sell_target(buy_level, self._layout(), self.logger)
+
+    def get_buy_target(self, sell_level: GridLevel) -> GridLevel | None:
+        """Returns the level that takes the rebuy for the proceeds of sell_level, or None."""
+        return self.grid_strategy.buy_target(sell_level, self._layout(), self.logger)
 
     def get_paired_sell_level(
         self,
