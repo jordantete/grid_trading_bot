@@ -390,6 +390,7 @@
       "type": "timeseries",
       "datasource": "Loki",
       "interval": "1d",
+      "timeFrom": "30d",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 48 },
       "targets": [
         {
@@ -410,6 +411,7 @@
       "type": "timeseries",
       "datasource": "Loki",
       "interval": "7d",
+      "timeFrom": "84d",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 48 },
       "targets": [
         {
@@ -430,6 +432,7 @@
       "type": "timeseries",
       "datasource": "Loki",
       "interval": "30d",
+      "timeFrom": "330d",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 48 },
       "targets": [
         {

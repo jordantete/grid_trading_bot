@@ -15,6 +15,7 @@ from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot
 class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.bot = Mock(spec=GridTradingBot)
+        self.bot.get_account_snapshot = Mock(return_value=None)
         self.notification_handler = Mock(spec=NotificationHandler)
         self.event_bus = Mock(spec=EventBus)
 

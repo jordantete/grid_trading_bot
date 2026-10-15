@@ -322,6 +322,18 @@ class TestStateRecoveryService:
         call_args = mock_notification_handler.async_send_notification.call_args
         assert call_args[0][0] == NotificationType.STATE_RECOVERY_COMPLETE
 
+    async def test_accounting_restore_failure_does_not_abort_recovery(
+        self, service, mock_repository, mock_config_manager, mock_balance_tracker
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        mock_repository.load_balance_state.return_value = _make_saved_balance()
+        mock_balance_tracker.restore_accounting.side_effect = ValueError("corrupt avg_cost")
+
+        result = await service.attempt_recovery()
+
+        assert result.recovered is True
+        mock_repository.clear_all.assert_not_called()
+
     # 4. Order filled while bot was down → grid state transition + collected for paired orders
     async def test_order_filled_while_bot_down(
         self,

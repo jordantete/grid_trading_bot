@@ -42,6 +42,8 @@ This will:
 3. Display an interactive Plotly chart with price action and order execution
 4. Print performance metrics (ROI, max drawdown, Sharpe ratio, etc.)
 
+In the performance summary, **Grid Trading Gains** is the realized PnL: every sell is booked against the weighted average cost of the crypto held, fees included. **Unrealized PnL** is the crypto still held at the end, valued at the final price against that cost; the two add up to the change in account value. **Max Drawdown Duration** is the longest time the account value stayed below a previous peak.
+
 !!! tip "Disable plots"
     Add `--no-plot` to skip the chart display, useful for CI or batch runs:
     ```bash

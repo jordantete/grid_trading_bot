@@ -96,7 +96,9 @@ Realized PnL is booked on every sell at the weighted average cost of the crypto 
 
 ### 9. Realized PnL per Day, Week and Month
 
-Growth of realized PnL over each day, 7 days and 30 days. A paper-trading restart resets realized PnL, which shows as a negative bar for that period.
+Growth of realized PnL over rolling windows of 24 hours, 7 days and 30 days, each bar ending at its own timestamp. These are not calendar days, weeks or months. The three panels keep their own time range (last 30 days, 12 weeks and 11 months) whatever range the dashboard shows.
+
+Each run of the bot writes its own log file, so the bars are computed run by run: realized PnL booked between two runs (fills replayed after a restart, or the last minute before a crash) does not appear in any bar, and a paper-trading restart, which resets realized PnL, does not show as a negative bar.
 
 ## Customization
 

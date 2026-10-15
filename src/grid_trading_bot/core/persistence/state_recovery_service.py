@@ -110,7 +110,11 @@ class StateRecoveryService:
         balance_source = await self._restore_balance()
 
         # Step 6: Restore cost basis, realized PnL and peak, then book the fills made while down
-        self._restore_accounting(filled_while_down)
+        try:
+            self._restore_accounting(filled_while_down)
+        except Exception as e:
+            # Reporting-only state: losing it must not turn a good recovery into a fresh start.
+            self.logger.error(f"Failed to restore cost basis and PnL, starting them over: {e}", exc_info=True)
 
         result = RecoveryResult(
             recovered=True,
