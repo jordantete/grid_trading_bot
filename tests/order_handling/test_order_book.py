@@ -95,6 +95,17 @@ class TestOrderBook:
         assert len(result) == 1
         assert open_order in result
 
+    def test_get_open_orders_keeps_placement_order(self, setup_order_book):
+        order_book = setup_order_book
+        orders = [
+            Mock(spec=Order, side=OrderSide.BUY, identifier=None, is_open=Mock(return_value=True)) for _ in range(64)
+        ]
+        for order in orders:
+            order_book.add_order(order)
+        order_book.remove_open_order(orders[10])
+
+        assert order_book.get_open_orders() == orders[:10] + orders[11:]
+
     def test_get_completed_orders(self, setup_order_book):
         order_book = setup_order_book
         completed_order = Mock(spec=Order, side=OrderSide.BUY, is_filled=Mock(return_value=True))

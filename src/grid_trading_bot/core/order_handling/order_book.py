@@ -10,7 +10,7 @@ class OrderBook:
         self.sell_orders: list[Order] = []
         self.non_grid_orders: list[Order] = []  # Orders that are not linked to any grid level
         self.order_to_grid_map: dict[Order, GridLevel] = {}  # Mapping of Order -> GridLevel
-        self._open_orders: set[Order] = set()
+        self._open_orders: dict[Order, None] = {}  # insertion-ordered so backtest fills replay identically
         self._orders_by_id: dict[str, Order] = {}  # Index by exchange order ID for O(1) lookups
 
     def add_order(
@@ -28,7 +28,7 @@ class OrderBook:
             self._orders_by_id[order_id] = order
 
         if order.is_open():
-            self._open_orders.add(order)
+            self._open_orders[order] = None
 
         if grid_level:
             self.order_to_grid_map[order] = grid_level  # Store the grid level associated with this order
@@ -52,11 +52,11 @@ class OrderBook:
 
     def remove_open_order(self, order: Order) -> None:
         if order in self._open_orders:
-            self._open_orders.discard(order)
+            self._open_orders.pop(order, None)
             return
         local = self._orders_by_id.get(order.identifier) if order.identifier else None
         if local is not None:
-            self._open_orders.discard(local)
+            self._open_orders.pop(local, None)
 
     def get_completed_orders(self) -> list[Order]:
         return [order for order in chain(self.buy_orders, self.sell_orders) if order.is_filled()]
@@ -78,7 +78,7 @@ class OrderBook:
         if order:
             order.status = new_status
             if not order.is_open():
-                self._open_orders.discard(order)
+                self._open_orders.pop(order, None)
 
     def clear(self) -> None:
         """Empties all order tracking (fresh-start after a failed recovery)."""
