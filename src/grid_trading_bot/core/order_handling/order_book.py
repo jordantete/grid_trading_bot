@@ -69,6 +69,9 @@ class OrderBook:
                 grid_level = self.order_to_grid_map.get(local)
         return grid_level
 
+    def has_open_orders_at(self, grid_level: GridLevel) -> bool:
+        return any(self.order_to_grid_map.get(order) is grid_level for order in self._open_orders)
+
     def update_order_status(
         self,
         order_id: str,

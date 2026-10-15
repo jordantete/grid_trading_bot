@@ -207,3 +207,51 @@ class TestRemoteOrderLookup:
         remote = _make_order(identifier="abc")
         book.remove_open_order(remote)
         assert local not in book.get_open_orders()
+
+
+class TestHasOpenOrdersAt:
+    def test_false_when_level_has_no_order(self):
+        book = OrderBook()
+        level = GridLevel(price=100.0, state=GridCycleState.READY_TO_BUY)
+
+        assert book.has_open_orders_at(level) is False
+
+    def test_true_while_an_open_order_maps_to_the_level(self):
+        book = OrderBook()
+        level = GridLevel(price=100.0, state=GridCycleState.WAITING_FOR_BUY_FILL)
+        book.add_order(_make_order("a"), level)
+
+        assert book.has_open_orders_at(level) is True
+
+    def test_false_once_the_order_left_the_open_set(self):
+        book = OrderBook()
+        level = GridLevel(price=100.0, state=GridCycleState.WAITING_FOR_BUY_FILL)
+        order = _make_order("a")
+        book.add_order(order, level)
+
+        book.remove_open_order(order)
+
+        assert book.has_open_orders_at(level) is False
+
+    def test_only_counts_orders_of_that_level(self):
+        book = OrderBook()
+        level = GridLevel(price=100.0, state=GridCycleState.WAITING_FOR_SELL_FILL)
+        other = GridLevel(price=110.0, state=GridCycleState.WAITING_FOR_SELL_FILL)
+        first = _make_order("a", side=OrderSide.SELL)
+        book.add_order(first, level)
+        book.add_order(_make_order("b", side=OrderSide.SELL), other)
+
+        book.remove_open_order(first)
+
+        assert book.has_open_orders_at(level) is False
+        assert book.has_open_orders_at(other) is True
+
+    def test_true_while_a_stacked_order_remains(self):
+        book = OrderBook()
+        level = GridLevel(price=100.0, state=GridCycleState.WAITING_FOR_SELL_FILL)
+        book.add_order(_make_order("a", side=OrderSide.SELL), level)
+        book.add_order(_make_order("b", side=OrderSide.SELL), level)
+
+        book.update_order_status("a", OrderStatus.CLOSED)
+
+        assert book.has_open_orders_at(level) is True
