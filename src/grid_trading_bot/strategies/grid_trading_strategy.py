@@ -60,6 +60,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         self._running = True
         self.armed = False
         self.stop_reason: str | None = None
+        self._starting_account_value: float | None = None
         self.trailing_stop: TrailingStopLoss | None = (
             TrailingStopLoss(config_manager.get_trailing_atr_multiplier())
             if config_manager.is_trailing_stop_loss_enabled()
@@ -277,6 +278,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         account_values = np.full(len(self.data), np.nan)
         crypto_values = np.full(len(self.data), np.nan)
         grid_orders_initialized = False
+        self._starting_account_value = self.balance_tracker.get_total_balance_value(self.close_prices[0])
 
         for i, (current_price, high_price, low_price, timestamp) in enumerate(
             zip(self.close_prices, high_prices, low_prices, timestamps, strict=False),
@@ -381,6 +383,7 @@ class GridTradingStrategy(TradingStrategyInterface):
                 self.balance_tracker.get_adjusted_crypto_balance(),
                 final_price,
                 self.balance_tracker.total_fees,
+                initial_balance=self._starting_account_value,
                 armed=self.armed,
                 stop_reason=self.stop_reason,
             )
@@ -401,6 +404,7 @@ class GridTradingStrategy(TradingStrategyInterface):
                 self.balance_tracker.get_adjusted_crypto_balance(),
                 final_price,
                 self.balance_tracker.total_fees,
+                initial_balance=live_data.iloc[0]["account_value"],
                 armed=self.armed,
                 stop_reason=self.stop_reason,
             )

@@ -243,6 +243,7 @@ class TradingPerformanceAnalyzer:
         final_crypto_price: float,
         total_fees: float,
         *,
+        initial_balance: float,
         armed: bool,
         stop_reason: str | None,
     ) -> tuple[PerformanceMetrics, dict[str, Any], list[list[str | float]]]:
@@ -255,6 +256,7 @@ class TradingPerformanceAnalyzer:
             final_crypto_balance (float): Final cryptocurrency balance.
             final_crypto_price (float): Final cryptocurrency price.
             total_fees (float): Total trading fees incurred.
+            initial_balance (float): Account value before any trade, the baseline of the ROI.
             armed (bool): Whether the grid was armed during the session.
             stop_reason (str | None): Why trading stopped, or None if it ran to the end.
 
@@ -264,7 +266,6 @@ class TradingPerformanceAnalyzer:
         pair = f"{self.base_currency}/{self.quote_currency}"
         start_date = data.index[0]
         end_date = data.index[-1]
-        initial_balance = data["account_value"].iloc[0]
         duration = end_date - start_date
         final_crypto_value = final_crypto_balance * final_crypto_price
         final_balance = final_fiat_balance + final_crypto_value
@@ -272,7 +273,7 @@ class TradingPerformanceAnalyzer:
         time_in_profit, time_in_loss = self._calculate_time_in_profit_loss(initial_balance, data)
         num_buy_trades, num_sell_trades = self._calculate_trade_counts()
         metrics = PerformanceMetrics(
-            roi_pct=self._calculate_roi(initial_balance, final_balance),
+            roi_pct=float(self._calculate_roi(initial_balance, final_balance)),
             max_drawdown_pct=float(self._calculate_drawdown(data)),
             sharpe_ratio=float(self._calculate_sharpe_ratio(data)),
             sortino_ratio=float(self._calculate_sortino_ratio(data)),

@@ -247,3 +247,15 @@ async def test_metrics_after_a_stop_loss(tmp_path):
     assert metrics.equity_coverage == 1.0
     assert 0.0 < metrics.avg_crypto_exposure < 1.0
     assert metrics.roi_pct == pytest.approx(_roi(result), abs=0.005)
+
+
+async def test_roi_is_measured_from_the_cash_before_the_initial_purchase(tmp_path):
+    config = _config(tmp_path, _flat(100.0, 30), execution={"backtest_slippage": 0.0005})
+    config["exchange"]["trading_fee"] = 0.001
+
+    _, result = await _run(config)
+
+    metrics = result["metrics"]
+    assert metrics.armed is True
+    assert metrics.roi_pct < 0
+    assert metrics.roi_pct == round((metrics.final_balance - 1000) / 1000 * 100, 2)

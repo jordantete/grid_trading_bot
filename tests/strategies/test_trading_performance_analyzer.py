@@ -302,6 +302,7 @@ class TestPerformanceAnalyzer:
                 final_crypto_balance,
                 final_crypto_price,
                 total_fees,
+                initial_balance=initial_balance,
                 armed=True,
                 stop_reason=None,
             )

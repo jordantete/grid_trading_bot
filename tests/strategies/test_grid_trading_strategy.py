@@ -227,7 +227,7 @@ class TestGridTradingStrategy:
         )
         strategy._initialize_historical_data = AsyncMock(return_value=mock_data)
 
-        balance_tracker.get_total_balance_value.side_effect = [9500, 10000, 10000]
+        balance_tracker.get_total_balance_value.side_effect = [10000, 9500, 10000, 10000]
         balance_tracker.get_adjusted_crypto_balance.return_value = 0.5
         balance_tracker.crypto_balance = 1
         grid_manager.get_trigger_price.return_value = 8900
@@ -241,6 +241,7 @@ class TestGridTradingStrategy:
         pd.testing.assert_series_equal(strategy.data["account_value"], expected_account_values.astype("float64"))
         expected_crypto_values = pd.Series([5000, 5250, 5500], index=strategy.data.index, name="crypto_value")
         pd.testing.assert_series_equal(strategy.data["crypto_value"], expected_crypto_values.astype("float64"))
+        assert strategy._starting_account_value == 10000
         strategy._handle_take_profit_stop_loss.assert_awaited()
 
     @pytest.mark.asyncio
@@ -263,6 +264,7 @@ class TestGridTradingStrategy:
         balance_tracker.get_adjusted_fiat_balance.return_value = 5000
         balance_tracker.get_adjusted_crypto_balance.return_value = 1
         balance_tracker.total_fees = 10
+        strategy._starting_account_value = 15000
         trading_performance_analyzer.generate_performance_summary = Mock()
 
         strategy.generate_performance_report()
@@ -274,6 +276,7 @@ class TestGridTradingStrategy:
             balance_tracker.get_adjusted_crypto_balance(),
             final_price,
             balance_tracker.total_fees,
+            initial_balance=15000,
             armed=False,
             stop_reason=None,
         )
