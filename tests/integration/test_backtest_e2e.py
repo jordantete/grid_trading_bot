@@ -129,11 +129,7 @@ async def test_backtest_balance_coherence(strategy_type, spacing, run_backtest_b
     assert bot.strategy.data["account_value"].notna().all(), "Some candles have no account value"
 
 
-@pytest.mark.integration
-@pytest.mark.parametrize(("strategy_type", "spacing"), SCENARIOS)
-async def test_backtest_value_change_splits_into_realized_and_unrealized(strategy_type, spacing, run_backtest_bot):
-    """Realized plus unrealized PnL accounts for the whole change in account value."""
-    bot, result = await run_backtest_bot(strategy_type, spacing)
+def _assert_value_change_splits_into_realized_and_unrealized(bot, result):
     final_price = bot.strategy.close_prices[-1]
     snapshot = bot.balance_tracker.snapshot(final_price)
 
@@ -144,6 +140,15 @@ async def test_backtest_value_change_splits_into_realized_and_unrealized(strateg
     summary = result["performance_summary"]
     assert summary["Grid Trading Gains"] == f"{snapshot.realized_pnl:.2f}"
     assert summary["Unrealized PnL"] == f"{snapshot.unrealized_pnl:.2f}"
+    return snapshot
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("strategy_type", "spacing"), SCENARIOS)
+async def test_backtest_value_change_splits_into_realized_and_unrealized(strategy_type, spacing, run_backtest_bot):
+    """Realized plus unrealized PnL accounts for the whole change in account value."""
+    bot, result = await run_backtest_bot(strategy_type, spacing)
+    _assert_value_change_splits_into_realized_and_unrealized(bot, result)
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +377,13 @@ async def test_atr_scenario_balance_coherence(run_backtest_bot):
 
 
 @pytest.mark.integration
+async def test_atr_scenario_value_change_splits_into_realized_and_unrealized(run_backtest_bot):
+    """Trailing-stop regrids sell inventory: their losses must land in realized PnL."""
+    bot, result = await _run_atr_scenario(run_backtest_bot)
+    _assert_value_change_splits_into_realized_and_unrealized(bot, result)
+
+
+@pytest.mark.integration
 async def test_atr_scenario_deterministic_results(run_backtest_bot, snapshot_dir, update_snapshots):
     """With identical config and CSV data, the ATR scenario backtest produces identical results."""
     _bot, result = await _run_atr_scenario(run_backtest_bot)
@@ -411,6 +423,15 @@ async def test_stop_loss_scenario_liquidates_and_values_to_the_end(run_backtest_
     assert bt.reserved_fiat == 0
     assert bt.reserved_crypto == 0
     assert bt.get_adjusted_crypto_balance() == pytest.approx(0.0, abs=1e-9)
+
+
+@pytest.mark.integration
+async def test_stop_loss_scenario_leaves_the_whole_result_realized(run_backtest_bot):
+    """After the stop liquidates the position, the account value change is realized PnL only."""
+    bot, result = await run_backtest_bot("simple_grid", "arithmetic", risk_management_overrides=STOP_LOSS)
+    snapshot = _assert_value_change_splits_into_realized_and_unrealized(bot, result)
+
+    assert snapshot.unrealized_pnl == pytest.approx(0.0, abs=1e-6)
 
 
 @pytest.mark.integration
