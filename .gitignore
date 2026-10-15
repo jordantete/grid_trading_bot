@@ -9,6 +9,7 @@ build/
 dist/
 *.egg-info/
 *.lock
+!uv.lock
 
 # Installer logs
 pip-log.txt
