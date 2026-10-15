@@ -417,7 +417,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         """
         Updates and evaluates the ATR-based trailing stop. Returns True when trading must stop.
         """
-        if self.trailing_stop is None or self.balance_tracker.crypto_balance == 0:
+        if self.trailing_stop is None or self.balance_tracker.get_adjusted_crypto_balance() == 0:
             return False
 
         self.trailing_stop.update(current_price, atr)
@@ -625,8 +625,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         Evaluates whether take-profit or stop-loss conditions are met.
         Returns True if any condition is triggered.
         """
-        if self.balance_tracker.crypto_balance == 0:
-            self.logger.debug("No crypto balance available; skipping TP/SL checks.")
+        if self.balance_tracker.get_adjusted_crypto_balance() == 0:
+            self.logger.debug("No crypto held; skipping TP/SL checks.")
             return False
 
         return await self._handle_take_profit(current_price) or await self._handle_stop_loss(current_price)

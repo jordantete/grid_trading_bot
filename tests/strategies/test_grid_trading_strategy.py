@@ -347,9 +347,26 @@ class TestGridTradingStrategy:
         strategy = create_strategy()
 
         balance_tracker.crypto_balance = 0
+        balance_tracker.get_adjusted_crypto_balance.return_value = 0
 
         result = await strategy._evaluate_tp_or_sl(current_price=15000)
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_evaluate_tp_or_sl_checks_crypto_reserved_in_sell_orders(self, setup_strategy):
+        create_strategy, _, _, _, order_manager, balance_tracker, _, _, _ = setup_strategy
+        strategy = create_strategy()
+        balance_tracker.crypto_balance = 0
+        balance_tracker.get_adjusted_crypto_balance.return_value = 1.5
+        order_manager.execute_take_profit_or_stop_loss_order = AsyncMock()
+
+        result = await strategy._evaluate_tp_or_sl(current_price=9000)
+
+        assert result is True
+        order_manager.execute_take_profit_or_stop_loss_order.assert_awaited_once_with(
+            current_price=9000,
+            stop_loss_order=True,
+        )
 
     @pytest.mark.asyncio
     async def test_handle_take_profit_triggered(self, setup_strategy):
@@ -696,12 +713,26 @@ class TestTrailingStopOrchestration:
         s = strategy_fixture
         s.config_manager.is_trailing_stop_loss_enabled.return_value = True
         s.balance_tracker.crypto_balance = 0
+        s.balance_tracker.get_adjusted_crypto_balance.return_value = 0
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
 
         stopped = await s._handle_trailing_stop(current_price=1.0, atr=5.0)
 
         assert stopped is False
         assert s.trailing_stop.stop_price is None  # not even updated
+
+    async def test_trailing_stop_fires_when_all_crypto_is_reserved(self, strategy_fixture):
+        s = strategy_fixture
+        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        s.config_manager.get_trailing_on_trigger.return_value = "stop"
+        s.balance_tracker.crypto_balance = 0
+        s.balance_tracker.get_adjusted_crypto_balance.return_value = 1.0
+        s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
+        s.trailing_stop.update(close=100.0, atr=5.0)  # stop = 95
+
+        stopped = await s._handle_trailing_stop(current_price=94.0, atr=5.0)
+
+        assert stopped is True
 
     async def test_nan_atr_does_not_trigger_restored_stop(self, strategy_fixture):
         """After a restart, a restored stop must not fire while ATR is still NaN (pre-first-candle)."""
