@@ -633,11 +633,8 @@ class OrderManager:
         stop_loss_order: bool = False,
     ) -> None:
         """
-        Executes a sell order triggered by either a take-profit or stop-loss event.
-
-        In BACKTEST mode this places a direct market sell of the tracked crypto balance.
-        In LIVE/PAPER_TRADING mode it delegates to `close_positions`, which also cancels
-        any open grid orders before liquidating so the shutdown accounting stays coherent.
+        Closes the position after a take-profit or stop-loss event: `close_positions` cancels
+        every open grid order, then liquidates the full crypto balance, in every trading mode.
 
         Args:
             current_price (float): The current market price triggering the event.
@@ -649,47 +646,6 @@ class OrderManager:
             return
 
         event = "Take profit" if take_profit_order else "Stop loss"
-
-        if self.trading_mode == TradingMode.BACKTEST:
-            async with self._lock:
-                try:
-                    quantity = self.balance_tracker.crypto_balance
-                    order = await self.order_execution_strategy.execute_market_order(
-                        OrderSide.SELL,
-                        self.trading_pair,
-                        quantity,
-                        current_price,
-                    )
-
-                    if not order:
-                        raise OrderExecutionFailedError(
-                            f"{event} order execution returned None at price {current_price}",
-                        )
-
-                    self.order_book.add_order(order)
-                    await self.notification_handler.async_send_notification(
-                        NotificationType.TAKE_PROFIT_TRIGGERED
-                        if take_profit_order
-                        else NotificationType.STOP_LOSS_TRIGGERED,
-                        order_details=str(order),
-                    )
-                    self.logger.info(f"{event} triggered at {current_price} and sell order executed.")
-
-                except OrderExecutionFailedError as e:
-                    self.logger.error(f"Order execution failed: {e!s}")
-                    await self.notification_handler.async_send_notification(
-                        NotificationType.ORDER_FAILED,
-                        error_details=f"Failed to place {event} order: {e}",
-                    )
-
-                except (DataFetchError, ValueError) as e:
-                    self.logger.error(f"Failed to execute {event} sell order at {current_price}: {e}")
-                    await self.notification_handler.async_send_notification(
-                        NotificationType.ERROR_OCCURRED,
-                        error_details=f"Failed to place {event} order: {e}",
-                    )
-            return
-
         await self.close_positions(liquidate=True, current_price=current_price)
         await self.notification_handler.async_send_notification(
             NotificationType.TAKE_PROFIT_TRIGGERED if take_profit_order else NotificationType.STOP_LOSS_TRIGGERED,

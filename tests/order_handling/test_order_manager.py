@@ -586,94 +586,12 @@ class TestOrderManager:
     # ── execute_take_profit_or_stop_loss_order ──────────────────────────
 
     @pytest.mark.asyncio
-    async def test_execute_take_profit_or_stop_loss_order(self, setup_order_manager):
-        manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
-        manager.trading_mode = TradingMode.BACKTEST
-        balance_tracker.crypto_balance = 0.5
-        order_execution_strategy.execute_market_order = AsyncMock(return_value=Mock())
-        notification_handler.async_send_notification = AsyncMock()
-
-        await manager.execute_take_profit_or_stop_loss_order(55000, take_profit_order=True)
-
-        order_execution_strategy.execute_market_order.assert_awaited_once_with(
-            OrderSide.SELL,
-            manager.trading_pair,
-            0.5,
-            55000,
-        )
-        notification_handler.async_send_notification.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_execute_stop_loss_order(self, setup_order_manager):
-        manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
-        manager.trading_mode = TradingMode.BACKTEST
-        balance_tracker.crypto_balance = 0.3
-        order_execution_strategy.execute_market_order = AsyncMock(return_value=Mock())
-        notification_handler.async_send_notification = AsyncMock()
-
-        await manager.execute_take_profit_or_stop_loss_order(40000, stop_loss_order=True)
-
-        order_execution_strategy.execute_market_order.assert_awaited_once_with(
-            OrderSide.SELL,
-            manager.trading_pair,
-            0.3,
-            40000,
-        )
-        notification_handler.async_send_notification.assert_awaited_with(
-            NotificationType.STOP_LOSS_TRIGGERED,
-            order_details=str(order_execution_strategy.execute_market_order.return_value),
-        )
-
-    @pytest.mark.asyncio
     async def test_execute_take_profit_or_stop_loss_order_no_action(self, setup_order_manager):
         manager, _, _, _, _, _, order_execution_strategy, _ = setup_order_manager
 
         await manager.execute_take_profit_or_stop_loss_order(50000)
 
         order_execution_strategy.execute_market_order.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_execute_take_profit_or_stop_loss_order_failure(self, setup_order_manager):
-        manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
-        manager.trading_mode = TradingMode.BACKTEST
-        balance_tracker.crypto_balance = 0.5
-
-        order_execution_strategy.execute_market_order = AsyncMock(
-            side_effect=OrderExecutionFailedError(
-                "Order execution failed",
-                OrderSide.SELL,
-                OrderType.MARKET,
-                "BTC/USDT",
-                0.5,
-                55000,
-            ),
-        )
-        notification_handler.async_send_notification = AsyncMock()
-
-        await manager.execute_take_profit_or_stop_loss_order(55000, take_profit_order=True)
-
-        notification_handler.async_send_notification.assert_awaited_with(
-            NotificationType.ORDER_FAILED,
-            error_details="Failed to place Take profit order: Order execution failed",
-        )
-
-    @pytest.mark.asyncio
-    async def test_execute_take_profit_or_stop_loss_order_generic_exception(self, setup_order_manager):
-        manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
-        manager.trading_mode = TradingMode.BACKTEST
-        balance_tracker.crypto_balance = 0.5
-
-        order_execution_strategy.execute_market_order = AsyncMock(
-            side_effect=DataFetchError("Connection lost"),
-        )
-        notification_handler.async_send_notification = AsyncMock()
-
-        await manager.execute_take_profit_or_stop_loss_order(55000, take_profit_order=True)
-
-        notification_handler.async_send_notification.assert_awaited_with(
-            NotificationType.ERROR_OCCURRED,
-            error_details="Failed to place Take profit order: Connection lost",
-        )
 
     # ── Buy/Sell Ratio ──────────────────────────────────────────────────
 
@@ -1209,12 +1127,14 @@ class TestClosePositions:
         await asyncio.wait_for(manager.close_positions(liquidate=True, current_price=100.0), timeout=2)
 
 
-class TestTakeProfitStopLossLive:
-    # ── execute_take_profit_or_stop_loss_order (LIVE/PAPER_TRADING) ─────
+class TestTakeProfitStopLoss:
+    # ── execute_take_profit_or_stop_loss_order (every mode) ─────────────
 
     @pytest.mark.asyncio
-    async def test_tp_delegates_to_close_positions(self, setup_order_manager):
+    @pytest.mark.parametrize("trading_mode", [TradingMode.BACKTEST, TradingMode.PAPER_TRADING, TradingMode.LIVE])
+    async def test_tp_delegates_to_close_positions(self, setup_order_manager, trading_mode):
         manager, *_ = setup_order_manager
+        manager.trading_mode = trading_mode
         manager.close_positions = AsyncMock()
 
         await manager.execute_take_profit_or_stop_loss_order(current_price=100.0, take_profit_order=True)
@@ -1222,8 +1142,10 @@ class TestTakeProfitStopLossLive:
         manager.close_positions.assert_awaited_once_with(liquidate=True, current_price=100.0)
 
     @pytest.mark.asyncio
-    async def test_sl_delegates_to_close_positions_and_notifies(self, setup_order_manager):
+    @pytest.mark.parametrize("trading_mode", [TradingMode.BACKTEST, TradingMode.PAPER_TRADING, TradingMode.LIVE])
+    async def test_sl_delegates_to_close_positions_and_notifies(self, setup_order_manager, trading_mode):
         manager, _, _, _, _, _, _, notification_handler = setup_order_manager
+        manager.trading_mode = trading_mode
         manager.close_positions = AsyncMock()
 
         await manager.execute_take_profit_or_stop_loss_order(current_price=90.0, stop_loss_order=True)
