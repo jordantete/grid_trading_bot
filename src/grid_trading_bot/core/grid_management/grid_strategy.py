@@ -65,16 +65,6 @@ class GridStrategy(ABC):
         """Level that takes the rebuy for the proceeds of sell_level, or None when they stay in fiat."""
 
     @abstractmethod
-    def complete_order(
-        self,
-        grid_level: GridLevel,
-        order_side: OrderSide,
-        logger,
-    ) -> None:
-        """Marks the completion of an order and transitions the grid level."""
-        pass
-
-    @abstractmethod
     def can_place_order(
         self,
         grid_level: GridLevel,
@@ -83,15 +73,35 @@ class GridStrategy(ABC):
         """Determines if an order can be placed on the given grid level."""
         pass
 
-    @abstractmethod
+    def complete_order(
+        self,
+        grid_level: GridLevel,
+        order_side: OrderSide,
+        has_open_orders: bool,
+        logger,
+    ) -> None:
+        """Returns the filled level to its home state unless it still holds open orders."""
+        self._release(grid_level, has_open_orders, logger, f"{order_side.value.capitalize()} order completed")
+
     def rollback_order_placement(
         self,
         grid_level: GridLevel,
         order_side: OrderSide,
+        has_open_orders: bool,
         logger,
     ) -> None:
-        """Reverts a WAITING_FOR_*_FILL level to a placeable state after its order was cancelled."""
-        pass
+        """Reverts a level after its pending order was cancelled, unless it still holds open orders."""
+        self._release(grid_level, has_open_orders, logger, f"{order_side.value.capitalize()} order cancelled")
+
+    @staticmethod
+    def _release(grid_level: GridLevel, has_open_orders: bool, logger, event: str) -> None:
+        if has_open_orders:
+            logger.info(
+                f"{event} at grid level {grid_level.price}; other orders remain, it stays {grid_level.state.name}."
+            )
+            return
+        grid_level.state = grid_level.home_state
+        logger.info(f"{event} at grid level {grid_level.price}. Transitioning to {grid_level.state.name}.")
 
 
 class SimpleGridStrategy(GridStrategy):
@@ -155,23 +165,6 @@ class SimpleGridStrategy(GridStrategy):
         logger.info(f"No free buy level for the proceeds of sell level {sell_level.price}; they stay in fiat.")
         return None
 
-    def complete_order(
-        self,
-        grid_level: GridLevel,
-        order_side: OrderSide,
-        logger,
-    ) -> None:
-        if order_side == OrderSide.BUY:
-            grid_level.state = GridCycleState.READY_TO_SELL
-            logger.info(
-                f"Buy order completed at grid level {grid_level.price}. Transitioning to READY_TO_SELL.",
-            )
-        elif order_side == OrderSide.SELL:
-            grid_level.state = GridCycleState.READY_TO_BUY
-            logger.info(
-                f"Sell order completed at grid level {grid_level.price}. Transitioning to READY_TO_BUY.",
-            )
-
     def can_place_order(
         self,
         grid_level: GridLevel,
@@ -182,15 +175,6 @@ class SimpleGridStrategy(GridStrategy):
         elif order_side == OrderSide.SELL:
             return grid_level.state == GridCycleState.READY_TO_SELL
         return False
-
-    def rollback_order_placement(
-        self,
-        grid_level: GridLevel,
-        order_side: OrderSide,
-        logger,
-    ) -> None:
-        grid_level.state = GridCycleState.READY_TO_BUY if order_side == OrderSide.BUY else GridCycleState.READY_TO_SELL
-        logger.info(f"Rolled back grid level {grid_level.price} to {grid_level.state} after cancellation.")
 
 
 class HedgedGridStrategy(GridStrategy):
@@ -266,34 +250,6 @@ class HedgedGridStrategy(GridStrategy):
             return None
         return target
 
-    def complete_order(
-        self,
-        grid_level: GridLevel,
-        order_side: OrderSide,
-        logger,
-    ) -> None:
-        if order_side == OrderSide.BUY:
-            grid_level.state = GridCycleState.READY_TO_BUY_OR_SELL
-            logger.info(
-                f"Buy order completed at grid level {grid_level.price}. Transitioning to READY_TO_BUY_OR_SELL.",
-            )
-            if grid_level.paired_sell_level:
-                grid_level.paired_sell_level.state = GridCycleState.READY_TO_SELL
-                logger.info(
-                    f"Paired sell grid level {grid_level.paired_sell_level.price} transitioned to READY_TO_SELL.",
-                )
-
-        elif order_side == OrderSide.SELL:
-            grid_level.state = GridCycleState.READY_TO_BUY_OR_SELL
-            logger.info(
-                f"Sell order completed at grid level {grid_level.price}. Transitioning to READY_TO_BUY_OR_SELL.",
-            )
-            if grid_level.paired_buy_level:
-                grid_level.paired_buy_level.state = GridCycleState.READY_TO_BUY
-                logger.info(
-                    f"Paired buy grid level {grid_level.paired_buy_level.price} transitioned to READY_TO_BUY.",
-                )
-
     def can_place_order(
         self,
         grid_level: GridLevel,
@@ -304,12 +260,3 @@ class HedgedGridStrategy(GridStrategy):
         elif order_side == OrderSide.SELL:
             return grid_level.state in {GridCycleState.READY_TO_SELL, GridCycleState.READY_TO_BUY_OR_SELL}
         return False
-
-    def rollback_order_placement(
-        self,
-        grid_level: GridLevel,
-        order_side: OrderSide,
-        logger,
-    ) -> None:
-        grid_level.state = GridCycleState.READY_TO_BUY_OR_SELL
-        logger.info(f"Rolled back grid level {grid_level.price} to READY_TO_BUY_OR_SELL after cancellation.")

@@ -26,6 +26,7 @@ def setup_order_manager():
     balance_tracker.update_after_initial_purchase = AsyncMock()
     balance_tracker.update_after_liquidation = AsyncMock()
     order_book = Mock()
+    order_book.has_open_orders_at.return_value = False
     event_bus = Mock(spec=EventBus)
     order_execution_strategy = Mock()
     notification_handler = Mock()

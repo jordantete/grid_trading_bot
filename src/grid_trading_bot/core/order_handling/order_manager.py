@@ -136,7 +136,9 @@ class OrderManager:
                 await self.balance_tracker.settle_cancelled_order(final_order)
                 self.order_book.remove_open_order(order)
                 if grid_level is not None:
-                    self.grid_manager.rollback_order_placement(grid_level, order.side)
+                    self.grid_manager.rollback_order_placement(
+                        grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
+                    )
                 self.logger.info(f"Cancelled {order.side.value} order {order.identifier} at {order.price}.")
 
             return True
@@ -287,7 +289,9 @@ class OrderManager:
 
             await self.balance_tracker.settle_cancelled_order(order)
             self.order_book.remove_open_order(order)
-            self.grid_manager.rollback_order_placement(grid_level, order.side)
+            self.grid_manager.rollback_order_placement(
+                grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
+            )
             await self.notification_handler.async_send_notification(
                 NotificationType.ORDER_CANCELLED,
                 order_details=str(order),
@@ -401,7 +405,7 @@ class OrderManager:
             grid_level: The grid level associated with the completed buy order.
         """
         self.logger.info(f"Buy order completed at grid level {grid_level}.")
-        self.grid_manager.complete_order(grid_level, OrderSide.BUY)
+        self.grid_manager.complete_order(grid_level, OrderSide.BUY, self.order_book.has_open_orders_at(grid_level))
         paired_sell_level = self.grid_manager.get_paired_sell_level(grid_level)
 
         if paired_sell_level and self.grid_manager.can_place_order(paired_sell_level, OrderSide.SELL):
@@ -425,7 +429,7 @@ class OrderManager:
             grid_level: The grid level associated with the completed sell order.
         """
         self.logger.info(f"Sell order completed at grid level {grid_level}.")
-        self.grid_manager.complete_order(grid_level, OrderSide.SELL)
+        self.grid_manager.complete_order(grid_level, OrderSide.SELL, self.order_book.has_open_orders_at(grid_level))
         paired_buy_level = self.grid_manager.get_or_create_paired_buy_level(grid_level)
 
         if paired_buy_level:

@@ -148,6 +148,7 @@ def mock_order_book():
     ob.update_order_status.return_value = None
     ob.remove_open_order.return_value = None
     ob.get_grid_level_for_order.return_value = None
+    ob.has_open_orders_at.return_value = False
     return ob
 
 
@@ -371,11 +372,43 @@ class TestStateRecoveryService:
         mock_order_book.remove_open_order.assert_called_once_with(local_order)
 
         # Grid state transition should have been called
-        mock_grid_manager.complete_order.assert_called_once_with(gl, OrderSide.BUY)
+        mock_grid_manager.complete_order.assert_called_once_with(gl, OrderSide.BUY, False)
 
         # Order should be in orders_filled_while_down
         assert len(result.orders_filled_while_down) == 1
         assert result.orders_filled_while_down[0] == (local_order, gl)
+
+    async def test_order_filled_while_bot_down_on_a_stacked_level(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+        mock_order_book,
+        mock_exchange_service,
+        mock_grid_manager,
+    ):
+        """A fill replayed on a level that still holds another open order keeps the level waiting."""
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        gl = GridLevel(3100.0, GridCycleState.WAITING_FOR_SELL_FILL)
+        mock_grid_manager.grid_levels = {3100.0: gl}
+        local_order = _make_exchange_order(identifier="s-1", status=OrderStatus.OPEN, side=OrderSide.SELL, price=3100.0)
+        mock_order_book.get_open_orders.return_value = [local_order]
+        mock_order_book.get_grid_level_for_order.return_value = gl
+        mock_order_book.has_open_orders_at.return_value = True
+        service.order_execution_strategy.get_order = AsyncMock(
+            return_value=_make_exchange_order(
+                identifier="s-1",
+                status=OrderStatus.CLOSED,
+                side=OrderSide.SELL,
+                price=3100.0,
+                filled=1.0,
+                remaining=0.0,
+            )
+        )
+
+        await service.attempt_recovery()
+
+        mock_grid_manager.complete_order.assert_called_once_with(gl, OrderSide.SELL, True)
 
     # 5. Order canceled while bot was down
     async def test_order_canceled_while_bot_down(
@@ -724,8 +757,8 @@ class TestStateRecoveryService:
 
         # Grid state transitions should have been called for both
         assert mock_grid_manager.complete_order.call_count == 2
-        mock_grid_manager.complete_order.assert_any_call(gl_buy, OrderSide.BUY)
-        mock_grid_manager.complete_order.assert_any_call(gl_sell, OrderSide.SELL)
+        mock_grid_manager.complete_order.assert_any_call(gl_buy, OrderSide.BUY, False)
+        mock_grid_manager.complete_order.assert_any_call(gl_sell, OrderSide.SELL, False)
 
     # 15. No notification sent when recovery fails
     async def test_no_notification_on_failed_recovery(

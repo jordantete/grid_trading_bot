@@ -322,7 +322,7 @@ class TestOrderManager:
 
         await manager._handle_buy_order_completion(mock_order, mock_grid_level)
 
-        grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.BUY)
+        grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.BUY, False)
         manager._place_order.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -336,7 +336,7 @@ class TestOrderManager:
 
         await manager._handle_buy_order_completion(mock_order, mock_grid_level)
 
-        grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.BUY)
+        grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.BUY, False)
         manager._place_order.assert_not_awaited()
 
     # ── _handle_sell_order_completion ───────────────────────────────────
@@ -350,7 +350,7 @@ class TestOrderManager:
 
         await manager._handle_sell_order_completion(mock_order, mock_grid_level)
 
-        grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.SELL)
+        grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.SELL, False)
 
     # ── _place_order ───────────────────────────────────────────────────
 
@@ -750,7 +750,7 @@ class TestCancelOpenGridOrders:
         order_execution_strategy.get_order.assert_awaited_once_with("b1", manager.trading_pair)
         # settles the refetched (authoritative) order, not the locally-cached one
         balance_tracker.settle_cancelled_order.assert_awaited_once_with(refetched)
-        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY, False)
         order_book.remove_open_order.assert_called_once_with(order)
 
     @pytest.mark.asyncio
@@ -768,7 +768,7 @@ class TestCancelOpenGridOrders:
 
         assert result is True
         balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
-        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY, False)
 
     @pytest.mark.asyncio
     async def test_cancel_backtest_skips_refetch(self, setup_order_manager):
@@ -787,7 +787,7 @@ class TestCancelOpenGridOrders:
         assert result is True
         order_execution_strategy.get_order.assert_not_awaited()
         balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
-        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY, False)
 
     @pytest.mark.asyncio
     async def test_cancels_all_open_orders_sell_side(self, setup_order_manager):
@@ -805,7 +805,7 @@ class TestCancelOpenGridOrders:
         assert result is True
         order_book.remove_open_order.assert_called_once_with(sell_order)
         balance_tracker.settle_cancelled_order.assert_awaited_once_with(sell_order)
-        grid_manager.rollback_order_placement.assert_called_once_with(sell_level, OrderSide.SELL)
+        grid_manager.rollback_order_placement.assert_called_once_with(sell_level, OrderSide.SELL, False)
 
     @pytest.mark.asyncio
     async def test_partial_failure_returns_false_and_stops(self, setup_order_manager):
@@ -825,7 +825,7 @@ class TestCancelOpenGridOrders:
         order_book.remove_open_order.assert_called_once_with(o1)
         # only o1's settlement happened; o2's cancel failed before any settlement was attempted
         balance_tracker.settle_cancelled_order.assert_awaited_once_with(o1)
-        grid_manager.rollback_order_placement.assert_called_once_with(lvl1, OrderSide.BUY)
+        grid_manager.rollback_order_placement.assert_called_once_with(lvl1, OrderSide.BUY, False)
 
     @pytest.mark.asyncio
     async def test_no_open_orders_is_success(self, setup_order_manager):
@@ -950,7 +950,7 @@ class TestOnOrderCancelled:
         await manager._on_order_cancelled(order)
 
         balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
-        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.BUY, False)
         grid_manager.mark_order_pending.assert_called_once_with(grid_level, new_order)
         order_book.add_order.assert_called_once_with(new_order, grid_level)
 
@@ -976,7 +976,7 @@ class TestOnOrderCancelled:
         await manager._on_order_cancelled(order)
 
         balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
-        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.SELL)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.SELL, False)
         grid_manager.mark_order_pending.assert_called_once_with(grid_level, new_order)
         order_book.add_order.assert_called_once_with(new_order, grid_level)
 

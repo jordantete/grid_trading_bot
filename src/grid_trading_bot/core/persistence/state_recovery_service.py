@@ -235,7 +235,9 @@ class StateRecoveryService:
                 # Complete grid level state transition for the filled order
                 grid_level = self.order_book.get_grid_level_for_order(order)
                 if grid_level:
-                    self.grid_manager.complete_order(grid_level, order.side)
+                    self.grid_manager.complete_order(
+                        grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
+                    )
                     filled_while_down.append((order, grid_level))
 
                 stats["reconciled"] += 1

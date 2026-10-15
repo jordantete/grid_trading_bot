@@ -357,15 +357,17 @@ class GridManager:
         self,
         grid_level: GridLevel,
         order_side: OrderSide,
+        has_open_orders: bool,
     ) -> None:
         """
-        Marks the completion of an order (buy or sell) and transitions the grid level.
+        Transitions a grid level after one of its orders filled.
 
         Args:
             grid_level: The grid level where the order was completed.
             order_side: The side of the completed order (buy or sell).
+            has_open_orders: Whether other open orders remain on the level.
         """
-        self.grid_strategy.complete_order(grid_level, order_side, self.logger)
+        self.grid_strategy.complete_order(grid_level, order_side, has_open_orders, self.logger)
 
     def can_place_order(
         self,
@@ -388,6 +390,7 @@ class GridManager:
         self,
         grid_level: GridLevel,
         order_side: OrderSide,
+        has_open_orders: bool,
     ) -> None:
         """
         Reverts a grid level to a placeable state after its pending order was cancelled.
@@ -395,8 +398,9 @@ class GridManager:
         Args:
             grid_level: The grid level whose order was cancelled.
             order_side: The side of the cancelled order (buy or sell).
+            has_open_orders: Whether other open orders remain on the level.
         """
-        self.grid_strategy.rollback_order_placement(grid_level, order_side, self.logger)
+        self.grid_strategy.rollback_order_placement(grid_level, order_side, has_open_orders, self.logger)
 
     def _extract_grid_config(self) -> tuple[float, float, int, str]:
         """

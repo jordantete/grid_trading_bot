@@ -229,68 +229,81 @@ class TestGridManager:
         assert grid_level.state == GridCycleState.WAITING_FOR_SELL_FILL
         assert order in grid_level.orders
 
-    def test_complete_order_simple_grid(self, grid_manager):
+    def test_complete_order_simple_grid_buy_frees_the_level(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
         grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
+        grid_level.state = GridCycleState.WAITING_FOR_BUY_FILL
 
-        grid_manager.complete_order(grid_level, OrderSide.BUY)
+        grid_manager.complete_order(grid_level, OrderSide.BUY, has_open_orders=False)
+
+        assert grid_level.state == GridCycleState.READY_TO_BUY
+
+    def test_complete_order_simple_grid_sell_keeps_waiting_while_stacked(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
+        grid_level.state = GridCycleState.WAITING_FOR_SELL_FILL
+
+        grid_manager.complete_order(grid_level, OrderSide.SELL, has_open_orders=True)
+
+        assert grid_level.state == GridCycleState.WAITING_FOR_SELL_FILL
+
+    def test_complete_order_simple_grid_sell_frees_the_level(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
+        grid_level.state = GridCycleState.WAITING_FOR_SELL_FILL
+
+        grid_manager.complete_order(grid_level, OrderSide.SELL, has_open_orders=False)
+
         assert grid_level.state == GridCycleState.READY_TO_SELL
 
     def test_complete_order_hedged_grid(self, config_manager):
         grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
         grid_manager.initialize_grids_and_levels()
-
         grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
-        grid_manager.complete_order(grid_level, OrderSide.BUY)
+        grid_level.state = GridCycleState.WAITING_FOR_BUY_FILL
+
+        grid_manager.complete_order(grid_level, OrderSide.BUY, has_open_orders=False)
+
         assert grid_level.state == GridCycleState.READY_TO_BUY_OR_SELL
 
-    def test_complete_order_simple_grid_buy(self, grid_manager):
-        grid_manager.initialize_grids_and_levels()
-        grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
-
-        grid_manager.complete_order(grid_level, OrderSide.BUY)
-
-        # Validate the state transition to READY_TO_SELL
-        assert grid_level.state == GridCycleState.READY_TO_SELL
-
-    def test_complete_order_simple_grid_sell(self, grid_manager):
-        grid_manager.initialize_grids_and_levels()
-        grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
-
-        grid_manager.complete_order(grid_level, OrderSide.SELL)
-
-        assert grid_level.state == GridCycleState.READY_TO_BUY
-
-    def test_complete_order_hedged_grid_buy(self, config_manager):
+    def test_complete_order_hedged_grid_buy_leaves_the_paired_level_alone(self, config_manager):
         grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
         grid_manager.initialize_grids_and_levels()
+        buy_level = grid_manager.grid_levels[grid_manager._sorted_prices[2]]
+        sell_level = grid_manager.grid_levels[grid_manager._sorted_prices[3]]
+        grid_manager.pair_grid_levels(buy_level, sell_level, "sell")
+        buy_level.state = GridCycleState.WAITING_FOR_BUY_FILL
+        sell_level.state = GridCycleState.WAITING_FOR_BUY_FILL  # holds another order
 
-        buy_grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
-        sell_grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
+        grid_manager.complete_order(buy_level, OrderSide.BUY, has_open_orders=False)
 
-        # Pair levels for testing
-        grid_manager.pair_grid_levels(sell_grid_level, buy_grid_level, "buy")
+        assert buy_level.state == GridCycleState.READY_TO_BUY_OR_SELL
+        assert sell_level.state == GridCycleState.WAITING_FOR_BUY_FILL
 
-        grid_manager.complete_order(buy_grid_level, OrderSide.BUY)
-
-        # Validate transitions
-        assert buy_grid_level.state == GridCycleState.READY_TO_BUY_OR_SELL
-        assert sell_grid_level.state == GridCycleState.READY_TO_SELL
-
-    def test_complete_order_hedged_grid_sell(self, config_manager):
+    def test_complete_order_hedged_grid_sell_leaves_the_paired_level_alone(self, config_manager):
         grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
         grid_manager.initialize_grids_and_levels()
+        buy_level = grid_manager.grid_levels[grid_manager._sorted_prices[2]]
+        sell_level = grid_manager.grid_levels[grid_manager._sorted_prices[3]]
+        grid_manager.pair_grid_levels(sell_level, buy_level, "buy")
+        sell_level.state = GridCycleState.WAITING_FOR_SELL_FILL
+        buy_level.state = GridCycleState.WAITING_FOR_SELL_FILL  # holds another order
 
-        sell_grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
-        buy_grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
+        grid_manager.complete_order(sell_level, OrderSide.SELL, has_open_orders=False)
 
-        # Pair levels for testing
-        grid_manager.pair_grid_levels(buy_grid_level, sell_grid_level, "sell")
+        assert sell_level.state == GridCycleState.READY_TO_BUY_OR_SELL
+        assert buy_level.state == GridCycleState.WAITING_FOR_SELL_FILL
 
-        grid_manager.complete_order(sell_grid_level, OrderSide.SELL)
+    def test_complete_order_hedged_top_level_returns_to_sell_only(self, config_manager):
+        grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
+        grid_manager.initialize_grids_and_levels()
+        top_level = grid_manager.grid_levels[grid_manager._sorted_prices[-1]]
+        top_level.state = GridCycleState.WAITING_FOR_SELL_FILL
 
-        assert sell_grid_level.state == GridCycleState.READY_TO_BUY_OR_SELL
-        assert buy_grid_level.state == GridCycleState.READY_TO_BUY
+        grid_manager.complete_order(top_level, OrderSide.SELL, has_open_orders=False)
+
+        assert top_level.state == GridCycleState.READY_TO_SELL
+        assert grid_manager.can_place_order(top_level, OrderSide.BUY) is False
 
     def test_can_place_order_simple_grid(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
@@ -315,7 +328,7 @@ class TestGridManager:
         grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
         grid_level.state = GridCycleState.WAITING_FOR_BUY_FILL
 
-        grid_manager.rollback_order_placement(grid_level, OrderSide.BUY)
+        grid_manager.rollback_order_placement(grid_level, OrderSide.BUY, has_open_orders=False)
 
         assert grid_level.state == GridCycleState.READY_TO_BUY
 
@@ -324,7 +337,7 @@ class TestGridManager:
         grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
         grid_level.state = GridCycleState.WAITING_FOR_SELL_FILL
 
-        grid_manager.rollback_order_placement(grid_level, OrderSide.SELL)
+        grid_manager.rollback_order_placement(grid_level, OrderSide.SELL, has_open_orders=False)
 
         assert grid_level.state == GridCycleState.READY_TO_SELL
 
@@ -334,12 +347,21 @@ class TestGridManager:
 
         grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
         grid_level.state = GridCycleState.WAITING_FOR_BUY_FILL
-        grid_manager.rollback_order_placement(grid_level, OrderSide.BUY)
+        grid_manager.rollback_order_placement(grid_level, OrderSide.BUY, has_open_orders=False)
         assert grid_level.state == GridCycleState.READY_TO_BUY_OR_SELL
 
         grid_level.state = GridCycleState.WAITING_FOR_SELL_FILL
-        grid_manager.rollback_order_placement(grid_level, OrderSide.SELL)
+        grid_manager.rollback_order_placement(grid_level, OrderSide.SELL, has_open_orders=False)
         assert grid_level.state == GridCycleState.READY_TO_BUY_OR_SELL
+
+    def test_rollback_order_placement_keeps_waiting_while_other_orders_remain(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
+        grid_level.state = GridCycleState.WAITING_FOR_SELL_FILL
+
+        grid_manager.rollback_order_placement(grid_level, OrderSide.SELL, has_open_orders=True)
+
+        assert grid_level.state == GridCycleState.WAITING_FOR_SELL_FILL
 
     def test_get_buy_target_simple_grid_picks_highest_free_buy_level(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
@@ -512,6 +534,16 @@ class TestApplyGeometry:
     def test_apply_geometry_rejects_empty_grid(self, grid_manager_simple):
         with pytest.raises(ValueError, match="empty grid geometry"):
             grid_manager_simple.apply_geometry([], central_price=100.0, atr_grid=1.0)
+
+    def test_restored_level_returns_to_its_home_state(self, config_manager_simple):
+        gm = GridManager(config_manager_simple, StrategyType.HEDGED_GRID)
+        gm.apply_geometry([90.0, 100.0, 110.0], central_price=100.0, atr_grid=None)
+        top_level = gm.grid_levels[110.0]
+        top_level.state = GridCycleState.WAITING_FOR_SELL_FILL  # as restored from the database
+
+        gm.complete_order(top_level, OrderSide.SELL, has_open_orders=False)
+
+        assert top_level.state == GridCycleState.READY_TO_SELL
 
 
 class TestReset:

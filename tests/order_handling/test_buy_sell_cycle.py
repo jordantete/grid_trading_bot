@@ -32,7 +32,7 @@ class TestBuyFillSellPlacement:
 
         await manager._on_order_filled(buy_order)
 
-        grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY)
+        grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY, False)
         grid_manager.get_paired_sell_level.assert_called_once_with(buy_grid_level)
         order_execution_strategy.execute_limit_order.assert_awaited_once_with(
             OrderSide.SELL,
@@ -78,7 +78,7 @@ class TestBuyFillSellPlacement:
         with patch.object(manager.logger, "warning") as mock_warning:
             await manager._on_order_filled(buy_order)
 
-            grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY)
+            grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY, False)
             order_execution_strategy.execute_limit_order.assert_not_awaited()
             mock_warning.assert_called_once_with(
                 f"No valid sell grid level found for buy grid level {buy_grid_level}. Skipping sell order placement.",
@@ -100,7 +100,7 @@ class TestBuyFillSellPlacement:
         with patch.object(manager.logger, "warning") as mock_warning:
             await manager._on_order_filled(buy_order)
 
-            grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY)
+            grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY, False)
             order_execution_strategy.execute_limit_order.assert_not_awaited()
             mock_warning.assert_called_once_with(
                 f"No valid sell grid level found for buy grid level {buy_grid_level}. Skipping sell order placement.",
@@ -209,6 +209,7 @@ class TestEventDrivenBuySellFlow:
     def setup_event_driven_flow(self):
         event_bus = EventBus()
         order_book = Mock()
+        order_book.has_open_orders_at.return_value = False
 
         # Tracker dependencies
         tracker_execution_strategy = Mock()
@@ -304,7 +305,7 @@ class TestEventDrivenBuySellFlow:
         order_book.update_order_status.assert_called_once_with("order_123", OrderStatus.CLOSED)
 
         # Verify manager received the event and placed the sell order
-        grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY)
+        grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY, False)
         manager_exec.execute_limit_order.assert_awaited_once_with(
             OrderSide.SELL,
             "BTC/USDT",

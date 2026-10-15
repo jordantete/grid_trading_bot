@@ -5,9 +5,12 @@ order manager → balance tracker → performance analyzer) with **zero mocks**.
 Only the plotting is disabled.
 """
 
+import logging
+
 import pytest
 
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
+from grid_trading_bot.core.order_handling.order import OrderSide
 
 from .snapshot_utils import (
     compare_snapshots,
@@ -128,51 +131,44 @@ async def test_backtest_balance_coherence(strategy_type, spacing, run_backtest_b
 # V4: Grid cycle integrity
 # ---------------------------------------------------------------------------
 
-VALID_END_STATES_SIMPLE = {
-    GridCycleState.READY_TO_BUY,
-    GridCycleState.READY_TO_SELL,
-    GridCycleState.WAITING_FOR_BUY_FILL,
-    GridCycleState.WAITING_FOR_SELL_FILL,
-}
-
-VALID_END_STATES_HEDGED = VALID_END_STATES_SIMPLE | {GridCycleState.READY_TO_BUY_OR_SELL}
-
 
 @pytest.mark.integration
 @pytest.mark.parametrize(("strategy_type", "spacing"), SCENARIOS)
-async def test_backtest_grid_cycle_integrity(strategy_type, spacing, run_backtest_bot):
-    """All grid levels end in valid states, and pending orders have matching open orders."""
+async def test_backtest_grid_cycle_integrity(strategy_type, spacing, run_backtest_bot, caplog):
+    """Every grid level agrees with its open orders and no strategy rule had to drop a paired order."""
+    caplog.set_level(logging.INFO)
     bot, _ = await run_backtest_bot(strategy_type, spacing)
     grid_manager = bot.strategy.grid_manager
     order_book = bot.strategy.order_manager.order_book
 
-    valid_states = VALID_END_STATES_HEDGED if "hedged" in strategy_type else VALID_END_STATES_SIMPLE
-
-    open_buy_prices = {o.price for o in order_book.get_all_buy_orders() if o.is_open()}
-    open_sell_prices = {o.price for o in order_book.get_all_sell_orders() if o.is_open()}
+    open_orders_by_price: dict[float, list] = {}
+    for order in order_book.get_open_orders():
+        level = order_book.get_grid_level_for_order(order)
+        if level is not None:
+            open_orders_by_price.setdefault(level.price, []).append(order)
 
     for price, level in grid_manager.grid_levels.items():
-        assert level.state in valid_states, f"Grid level {price} in invalid state: {level.state.name}"
-
-        if level.state == GridCycleState.WAITING_FOR_BUY_FILL:
-            assert price in open_buy_prices, (
-                f"Grid level {price} is WAITING_FOR_BUY_FILL but no open buy order exists at that price"
-            )
-
-        if level.state == GridCycleState.WAITING_FOR_SELL_FILL:
-            assert price in open_sell_prices, (
-                f"Grid level {price} is WAITING_FOR_SELL_FILL but no open sell order exists at that price"
-            )
-
-    # Every filled buy should have had a corresponding sell placed (or the level is ready to sell)
-    filled_buys = [o for o in order_book.get_all_buy_orders() if o.is_filled()]
-    for buy_order in filled_buys:
-        grid_level = order_book.get_grid_level_for_order(buy_order)
-        if grid_level is None:
-            continue  # initial purchase or non-grid order
-        assert grid_level.state != GridCycleState.READY_TO_BUY, (
-            f"Buy filled at {grid_level.price} but level reverted to READY_TO_BUY without sell cycle"
+        orders = open_orders_by_price.get(price, [])
+        if not orders:
+            assert level.state == level.home_state, f"Level {price} holds no order but is {level.state.name}"
+            continue
+        sides = {order.side for order in orders}
+        assert len(sides) == 1, f"Level {price} holds both buy and sell orders"
+        expected = (
+            GridCycleState.WAITING_FOR_BUY_FILL if OrderSide.BUY in sides else GridCycleState.WAITING_FOR_SELL_FILL
         )
+        assert level.state == expected, f"Level {price} is {level.state.name} with open {sides} orders"
+
+    if strategy_type == "hedged_grid":
+        assert all(len(orders) == 1 for orders in open_orders_by_price.values()), "A hedged level holds two orders"
+        assert len(open_orders_by_price) < len(grid_manager.grid_levels), "No free level left in the hedged grid"
+    else:
+        for price, orders in open_orders_by_price.items():
+            expected_side = OrderSide.BUY if price <= grid_manager.central_price else OrderSide.SELL
+            assert all(order.side == expected_side for order in orders), f"Level {price} trades on the wrong half"
+
+    dropped = [r.getMessage() for r in caplog.records if r.name == "GridManager" and r.levelno >= logging.ERROR]
+    assert not dropped, f"Strategy dropped paired orders: {dropped}"
 
 
 # ---------------------------------------------------------------------------
