@@ -52,11 +52,15 @@ class OrderSimulator:
         )
         self.logger.debug(f"Crossed buy levels: {crossed_buy_levels}, Crossed sell levels: {crossed_sell_levels}")
 
-        for order in pending_orders:
-            if (order.side == OrderSide.BUY and order.price in crossed_buy_levels) or (
-                order.side == OrderSide.SELL and order.price in crossed_sell_levels
-            ):
-                await self.simulate_fill(order, timestamp_val)
+        crossed_buys = [o for o in pending_orders if o.side == OrderSide.BUY and o.price in crossed_buy_levels]
+        crossed_sells = [o for o in pending_orders if o.side == OrderSide.SELL and o.price in crossed_sell_levels]
+
+        # Fills follow the order the price reaches the levels, so each fill finds the level it frees already processed.
+        crossed_buys.sort(key=lambda o: o.price, reverse=True)
+        crossed_sells.sort(key=lambda o: o.price)
+
+        for order in [*crossed_buys, *crossed_sells]:
+            await self.simulate_fill(order, timestamp_val)
 
     async def simulate_fill(
         self,
