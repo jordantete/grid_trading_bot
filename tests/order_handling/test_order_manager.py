@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
@@ -303,67 +303,65 @@ class TestOrderManager:
         manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
         mock_order = Mock(side=OrderSide.BUY, filled=0.01)
         mock_grid_level = Mock(price=50000)
-        grid_manager.get_paired_sell_level.return_value = Mock()
-        grid_manager.can_place_order.return_value = True
+        target = Mock(price=52000)
+        grid_manager.get_sell_target.return_value = target
         manager._place_order = AsyncMock()
 
         await manager._handle_order_completion(mock_order, mock_grid_level)
 
-        manager._place_order.assert_awaited_once()
+        grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.BUY, False)
+        manager._place_order.assert_awaited_once_with(OrderSide.SELL, mock_grid_level, target, 0.01)
 
     @pytest.mark.asyncio
     async def test_handle_order_completion_sell(self, setup_order_manager):
         manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
         mock_order = Mock(side=OrderSide.SELL, filled=0.01)
         mock_grid_level = Mock(price=50000)
-        grid_manager.get_or_create_paired_buy_level.return_value = Mock(price=48000)
+        target = Mock(price=48000)
+        grid_manager.get_buy_target.return_value = target
         manager._place_order = AsyncMock()
 
         await manager._handle_order_completion(mock_order, mock_grid_level)
 
-        manager._place_order.assert_awaited_once()
-
-    # ── _handle_buy_order_completion ────────────────────────────────────
+        grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.SELL, False)
+        manager._place_order.assert_awaited_once_with(OrderSide.BUY, mock_grid_level, target, 0.01)
 
     @pytest.mark.asyncio
-    async def test_handle_buy_order_completion_no_paired_sell_level(self, setup_order_manager):
+    async def test_handle_order_completion_buy_without_target_places_nothing(self, setup_order_manager):
         manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
-        mock_order = Mock(side=OrderSide.BUY, filled=0.01)
         mock_grid_level = Mock(price=50000)
-        grid_manager.get_paired_sell_level.return_value = None
+        grid_manager.get_sell_target.return_value = None
         manager._place_order = AsyncMock()
 
-        await manager._handle_buy_order_completion(mock_order, mock_grid_level)
+        await manager._handle_order_completion(Mock(side=OrderSide.BUY, filled=0.01), mock_grid_level)
 
         grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.BUY, False)
         manager._place_order.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_handle_buy_order_completion_sell_level_cannot_place(self, setup_order_manager):
+    async def test_handle_order_completion_trusts_a_stacked_sell_target(self, setup_order_manager):
         manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
-        mock_order = Mock(side=OrderSide.BUY, filled=0.01)
-        mock_grid_level = Mock(price=50000)
-        grid_manager.get_paired_sell_level.return_value = Mock()
+        mock_grid_level = Mock(price=95.0)
+        stacked = GridLevel(price=105.0, state=GridCycleState.WAITING_FOR_SELL_FILL)
+        grid_manager.get_sell_target.return_value = stacked
         grid_manager.can_place_order.return_value = False
         manager._place_order = AsyncMock()
 
-        await manager._handle_buy_order_completion(mock_order, mock_grid_level)
+        await manager._handle_order_completion(Mock(side=OrderSide.BUY, filled=0.5), mock_grid_level)
 
-        grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.BUY, False)
-        manager._place_order.assert_not_awaited()
-
-    # ── _handle_sell_order_completion ───────────────────────────────────
+        manager._place_order.assert_awaited_once_with(OrderSide.SELL, mock_grid_level, stacked, 0.5)
 
     @pytest.mark.asyncio
-    async def test_handle_sell_order_completion_no_paired_level(self, setup_order_manager):
+    async def test_handle_order_completion_sell_without_target_places_nothing(self, setup_order_manager):
         manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
-        mock_order = Mock(side=OrderSide.SELL, filled=0.1)
         mock_grid_level = Mock(price=50000)
-        grid_manager.get_or_create_paired_buy_level.return_value = None
+        grid_manager.get_buy_target.return_value = None
+        manager._place_order = AsyncMock()
 
-        await manager._handle_sell_order_completion(mock_order, mock_grid_level)
+        await manager._handle_order_completion(Mock(side=OrderSide.SELL, filled=0.1), mock_grid_level)
 
         grid_manager.complete_order.assert_called_once_with(mock_grid_level, OrderSide.SELL, False)
+        manager._place_order.assert_not_awaited()
 
     # ── _place_order ───────────────────────────────────────────────────
 
@@ -687,11 +685,10 @@ class TestOrderManager:
         mock_order = Mock(side=OrderSide.BUY, filled=1.0)
         mock_grid_level = Mock(price=50000)
         paired_sell_level = Mock(price=52000)
-        grid_manager.get_paired_sell_level.return_value = paired_sell_level
-        grid_manager.can_place_order.return_value = True
+        grid_manager.get_sell_target.return_value = paired_sell_level
         manager._place_order = AsyncMock()
 
-        await manager._handle_buy_order_completion(mock_order, mock_grid_level)
+        await manager._handle_order_completion(mock_order, mock_grid_level)
 
         manager._place_order.assert_awaited_once_with(OrderSide.SELL, mock_grid_level, paired_sell_level, 0.5)
 
@@ -702,11 +699,10 @@ class TestOrderManager:
         mock_order = Mock(side=OrderSide.BUY, filled=1.0)
         mock_grid_level = Mock(price=50000)
         paired_sell_level = Mock(price=52000)
-        grid_manager.get_paired_sell_level.return_value = paired_sell_level
-        grid_manager.can_place_order.return_value = True
+        grid_manager.get_sell_target.return_value = paired_sell_level
         manager._place_order = AsyncMock()
 
-        await manager._handle_buy_order_completion(mock_order, mock_grid_level)
+        await manager._handle_order_completion(mock_order, mock_grid_level)
 
         manager._place_order.assert_awaited_once_with(OrderSide.SELL, mock_grid_level, paired_sell_level, 1.0)
 
@@ -717,10 +713,10 @@ class TestOrderManager:
         mock_order = Mock(side=OrderSide.SELL, filled=0.5)
         mock_grid_level = Mock(price=52000)
         paired_buy_level = Mock(price=50000)
-        grid_manager.get_or_create_paired_buy_level.return_value = paired_buy_level
+        grid_manager.get_buy_target.return_value = paired_buy_level
         manager._place_order = AsyncMock()
 
-        await manager._handle_sell_order_completion(mock_order, mock_grid_level)
+        await manager._handle_order_completion(mock_order, mock_grid_level)
 
         # buy_qty = 0.5 * 1.0 = 0.5 (same as filled, backward compatible)
         manager._place_order.assert_awaited_once_with(OrderSide.BUY, mock_grid_level, paired_buy_level, 0.5)
@@ -732,10 +728,10 @@ class TestOrderManager:
         mock_order = Mock(side=OrderSide.SELL, filled=1.0)
         mock_grid_level = Mock(price=52000)
         paired_buy_level = Mock(price=50000)
-        grid_manager.get_or_create_paired_buy_level.return_value = paired_buy_level
+        grid_manager.get_buy_target.return_value = paired_buy_level
         manager._place_order = AsyncMock()
 
-        await manager._handle_sell_order_completion(mock_order, mock_grid_level)
+        await manager._handle_order_completion(mock_order, mock_grid_level)
 
         # buy_qty = 1.0 * 0.5 = 0.5 (accumulate 50% fiat)
         manager._place_order.assert_awaited_once_with(OrderSide.BUY, mock_grid_level, paired_buy_level, 0.5)
@@ -1300,3 +1296,40 @@ class TestOrderManagerPostOnlyRejection:
         assert NotificationType.ORDER_CANCELLED in sent
         assert NotificationType.ORDER_FAILED not in sent
         assert NotificationType.ERROR_OCCURRED not in sent
+
+
+class TestPlacePairedOrdersForRecoveredFills:
+    @pytest.mark.asyncio
+    async def test_places_the_paired_order_of_each_recovered_fill(self, setup_order_manager):
+        manager, grid_manager, _, _, _, _, _, _ = setup_order_manager
+        buy_level, sell_level = Mock(price=95.0), Mock(price=105.0)
+        sell_target, buy_target = Mock(price=105.0), Mock(price=95.0)
+        grid_manager.get_sell_target.return_value = sell_target
+        grid_manager.get_buy_target.return_value = buy_target
+        manager._place_order = AsyncMock()
+        buy_fill = Mock(side=OrderSide.BUY, filled=1.0, identifier="b")
+        sell_fill = Mock(side=OrderSide.SELL, filled=0.5, identifier="s")
+
+        await manager.place_paired_orders_for_recovered_fills([(buy_fill, buy_level), (sell_fill, sell_level)])
+
+        assert manager._place_order.await_args_list == [
+            call(OrderSide.SELL, buy_level, sell_target, 1.0),
+            call(OrderSide.BUY, sell_level, buy_target, 0.5),
+        ]
+        grid_manager.complete_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_one_failure_does_not_stop_the_next_fill(self, setup_order_manager):
+        manager, grid_manager, _, _, _, _, _, notification_handler = setup_order_manager
+        grid_manager.get_sell_target.return_value = Mock(price=105.0)
+        manager._place_order = AsyncMock(side_effect=[RuntimeError("boom"), None])
+        fills = [
+            (Mock(side=OrderSide.BUY, filled=1.0, identifier="b1"), Mock(price=95.0)),
+            (Mock(side=OrderSide.BUY, filled=1.0, identifier="b2"), Mock(price=96.0)),
+        ]
+
+        await manager.place_paired_orders_for_recovered_fills(fills)
+
+        assert manager._place_order.await_count == 2
+        sent = [c.args[0] for c in notification_handler.async_send_notification.await_args_list]
+        assert NotificationType.ERROR_OCCURRED in sent

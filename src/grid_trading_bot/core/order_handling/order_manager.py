@@ -368,63 +368,30 @@ class OrderManager:
         grid_level: GridLevel,
     ) -> None:
         """
-        Handles the completion of an order (buy or sell).
+        Transitions the filled level, then places the paired order on the level the strategy chooses.
 
         Args:
             order: The filled Order instance.
             grid_level: The grid level associated with the filled order.
         """
-        if order.side == OrderSide.BUY:
-            await self._handle_buy_order_completion(order, grid_level)
+        self.logger.info(f"{order.side.value.capitalize()} order completed at grid level {grid_level}.")
+        self.grid_manager.complete_order(grid_level, order.side, self.order_book.has_open_orders_at(grid_level))
+        await self._place_paired_order(order, grid_level)
 
-        elif order.side == OrderSide.SELL:
-            await self._handle_sell_order_completion(order, grid_level)
-
-    async def _handle_buy_order_completion(
-        self,
-        order: Order,
-        grid_level: GridLevel,
-    ) -> None:
+    async def _place_paired_order(self, filled_order: Order, grid_level: GridLevel) -> None:
         """
-        Handles the completion of a buy order.
-
-        Args:
-            order: The completed Buy Order instance.
-            grid_level: The grid level associated with the completed buy order.
+        Places the sell for a filled buy, or the rebuy for a filled sell, on the strategy's target level.
         """
-        self.logger.info(f"Buy order completed at grid level {grid_level}.")
-        self.grid_manager.complete_order(grid_level, OrderSide.BUY, self.order_book.has_open_orders_at(grid_level))
-        paired_sell_level = self.grid_manager.get_paired_sell_level(grid_level)
-
-        if paired_sell_level and self.grid_manager.can_place_order(paired_sell_level, OrderSide.SELL):
-            sell_quantity = order.filled * self.grid_manager.sell_ratio
-            await self._place_order(OrderSide.SELL, grid_level, paired_sell_level, sell_quantity)
+        if filled_order.side == OrderSide.BUY:
+            target = self.grid_manager.get_sell_target(grid_level)
+            if target is not None:
+                quantity = filled_order.filled * self.grid_manager.sell_ratio
+                await self._place_order(OrderSide.SELL, grid_level, target, quantity)
         else:
-            self.logger.warning(
-                f"No valid sell grid level found for buy grid level {grid_level}. Skipping sell order placement.",
-            )
-
-    async def _handle_sell_order_completion(
-        self,
-        order: Order,
-        grid_level: GridLevel,
-    ) -> None:
-        """
-        Handles the completion of a sell order.
-
-        Args:
-            order: The completed Sell Order instance.
-            grid_level: The grid level associated with the completed sell order.
-        """
-        self.logger.info(f"Sell order completed at grid level {grid_level}.")
-        self.grid_manager.complete_order(grid_level, OrderSide.SELL, self.order_book.has_open_orders_at(grid_level))
-        paired_buy_level = self.grid_manager.get_or_create_paired_buy_level(grid_level)
-
-        if paired_buy_level:
-            buy_quantity = order.filled * self.grid_manager.buy_ratio
-            await self._place_order(OrderSide.BUY, grid_level, paired_buy_level, buy_quantity)
-        else:
-            self.logger.error(f"Failed to find or create a paired buy grid level for grid level {grid_level}.")
+            target = self.grid_manager.get_buy_target(grid_level)
+            if target is not None:
+                quantity = filled_order.filled * self.grid_manager.buy_ratio
+                await self._place_order(OrderSide.BUY, grid_level, target, quantity)
 
     async def _place_order(
         self,
@@ -513,20 +480,7 @@ class OrderManager:
         async with self._lock:
             for order, grid_level in filled_orders:
                 try:
-                    if order.side == OrderSide.BUY:
-                        paired_sell_level = self.grid_manager.get_paired_sell_level(grid_level)
-                        if paired_sell_level and self.grid_manager.can_place_order(paired_sell_level, OrderSide.SELL):
-                            sell_quantity = order.filled * self.grid_manager.sell_ratio
-                            await self._place_order(OrderSide.SELL, grid_level, paired_sell_level, sell_quantity)
-                        else:
-                            self.logger.warning(f"No valid sell level for recovered buy fill at {grid_level.price}.")
-                    elif order.side == OrderSide.SELL:
-                        paired_buy_level = self.grid_manager.get_or_create_paired_buy_level(grid_level)
-                        if paired_buy_level:
-                            buy_quantity = order.filled * self.grid_manager.buy_ratio
-                            await self._place_order(OrderSide.BUY, grid_level, paired_buy_level, buy_quantity)
-                        else:
-                            self.logger.error(f"No paired buy level for recovered sell fill at {grid_level.price}.")
+                    await self._place_paired_order(order, grid_level)
                 except Exception as e:
                     await self._handle_order_error(
                         e, f"Error placing paired order for recovered fill {order.identifier}"

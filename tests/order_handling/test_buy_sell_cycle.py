@@ -25,15 +25,14 @@ class TestBuyFillSellPlacement:
         mock_sell_order = Mock(amount=0.01)
 
         order_book.get_grid_level_for_order.return_value = buy_grid_level
-        grid_manager.get_paired_sell_level.return_value = sell_grid_level
-        grid_manager.can_place_order.return_value = True
+        grid_manager.get_sell_target.return_value = sell_grid_level
         order_validator.adjust_and_validate_sell_quantity.return_value = 0.01
         order_execution_strategy.execute_limit_order = AsyncMock(return_value=mock_sell_order)
 
         await manager._on_order_filled(buy_order)
 
         grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY, False)
-        grid_manager.get_paired_sell_level.assert_called_once_with(buy_grid_level)
+        grid_manager.get_sell_target.assert_called_once_with(buy_grid_level)
         order_execution_strategy.execute_limit_order.assert_awaited_once_with(
             OrderSide.SELL,
             "BTC/USDT",
@@ -51,8 +50,7 @@ class TestBuyFillSellPlacement:
         sell_grid_level = Mock(price=52000)
 
         order_book.get_grid_level_for_order.return_value = buy_grid_level
-        grid_manager.get_paired_sell_level.return_value = sell_grid_level
-        grid_manager.can_place_order.return_value = True
+        grid_manager.get_sell_target.return_value = sell_grid_level
         order_validator.adjust_and_validate_sell_quantity.return_value = 0.0075
         order_execution_strategy.execute_limit_order = AsyncMock(return_value=Mock(amount=0.0075))
 
@@ -66,45 +64,37 @@ class TestBuyFillSellPlacement:
 
     @pytest.mark.parametrize("strategy_label", ["simple_grid", "hedged_grid"])
     @pytest.mark.asyncio
-    async def test_buy_fill_no_paired_sell_level(self, setup_order_manager, strategy_label):
+    async def test_buy_fill_without_sell_target_places_nothing(self, setup_order_manager, strategy_label):
         manager, grid_manager, _, _, order_book, _, order_execution_strategy, _ = setup_order_manager
         buy_order = Mock(side=OrderSide.BUY, filled=0.01, price=50000)
         buy_grid_level = Mock(price=50000)
 
         order_book.get_grid_level_for_order.return_value = buy_grid_level
-        grid_manager.get_paired_sell_level.return_value = None
+        grid_manager.get_sell_target.return_value = None
         order_execution_strategy.execute_limit_order = AsyncMock()
 
-        with patch.object(manager.logger, "warning") as mock_warning:
-            await manager._on_order_filled(buy_order)
+        await manager._on_order_filled(buy_order)
 
-            grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY, False)
-            order_execution_strategy.execute_limit_order.assert_not_awaited()
-            mock_warning.assert_called_once_with(
-                f"No valid sell grid level found for buy grid level {buy_grid_level}. Skipping sell order placement.",
-            )
+        grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY, False)
+        order_execution_strategy.execute_limit_order.assert_not_awaited()
 
     @pytest.mark.parametrize("strategy_label", ["simple_grid", "hedged_grid"])
     @pytest.mark.asyncio
-    async def test_buy_fill_sell_level_cannot_place(self, setup_order_manager, strategy_label):
-        manager, grid_manager, _, _, order_book, _, order_execution_strategy, _ = setup_order_manager
+    async def test_buy_fill_trusts_the_sell_target(self, setup_order_manager, strategy_label):
+        manager, grid_manager, order_validator, _, order_book, _, order_execution_strategy, _ = setup_order_manager
         buy_order = Mock(side=OrderSide.BUY, filled=0.01, price=50000)
         buy_grid_level = Mock(price=50000)
         sell_grid_level = Mock(price=52000)
 
         order_book.get_grid_level_for_order.return_value = buy_grid_level
-        grid_manager.get_paired_sell_level.return_value = sell_grid_level
+        grid_manager.get_sell_target.return_value = sell_grid_level
         grid_manager.can_place_order.return_value = False
-        order_execution_strategy.execute_limit_order = AsyncMock()
+        order_validator.adjust_and_validate_sell_quantity.return_value = 0.01
+        order_execution_strategy.execute_limit_order = AsyncMock(return_value=Mock(amount=0.01))
 
-        with patch.object(manager.logger, "warning") as mock_warning:
-            await manager._on_order_filled(buy_order)
+        await manager._on_order_filled(buy_order)
 
-            grid_manager.complete_order.assert_called_once_with(buy_grid_level, OrderSide.BUY, False)
-            order_execution_strategy.execute_limit_order.assert_not_awaited()
-            mock_warning.assert_called_once_with(
-                f"No valid sell grid level found for buy grid level {buy_grid_level}. Skipping sell order placement.",
-            )
+        order_execution_strategy.execute_limit_order.assert_awaited_once_with(OrderSide.SELL, "BTC/USDT", 0.01, 52000)
 
 
 class TestCcxtResponseHandling:
@@ -290,8 +280,7 @@ class TestEventDrivenBuySellFlow:
         sell_grid_level = Mock(price=52000)
         order_book.get_grid_level_for_order.return_value = buy_grid_level
 
-        grid_manager.get_paired_sell_level.return_value = sell_grid_level
-        grid_manager.can_place_order.return_value = True
+        grid_manager.get_sell_target.return_value = sell_grid_level
         order_validator.adjust_and_validate_sell_quantity.return_value = 0.01
 
         mock_sell_order = Mock(amount=0.01)

@@ -40,19 +40,6 @@ class GridStrategy(ABC):
         pass
 
     @abstractmethod
-    def get_paired_sell_level(
-        self,
-        buy_grid_level: GridLevel,
-        grid_levels: dict[float, GridLevel],
-        sorted_sell_grids: list[float],
-        sorted_prices: list[float],
-        price_index_map: dict[float, int],
-        can_place_order_fn,
-    ) -> GridLevel | None:
-        """Determines the paired sell level for a given buy grid level."""
-        pass
-
-    @abstractmethod
     def initial_order_plan(self, layout: GridLayout, current_price: float) -> list[tuple[GridLevel, OrderSide]]:
         """Levels that receive an order when the grid is armed at current_price: buys then sells, ascending."""
 
@@ -121,23 +108,6 @@ class SimpleGridStrategy(GridStrategy):
         }
         return buy_grids, sell_grids, grid_levels
 
-    def get_paired_sell_level(
-        self,
-        buy_grid_level: GridLevel,
-        grid_levels: dict[float, GridLevel],
-        sorted_sell_grids: list[float],
-        sorted_prices: list[float],
-        price_index_map: dict[float, int],
-        can_place_order_fn,
-    ) -> GridLevel | None:
-        for sell_price in sorted_sell_grids:
-            sell_level = grid_levels[sell_price]
-            if not can_place_order_fn(sell_level, OrderSide.SELL):
-                continue
-            if sell_price > buy_grid_level.price:
-                return sell_level
-        return None
-
     def initial_order_plan(self, layout: GridLayout, current_price: float) -> list[tuple[GridLevel, OrderSide]]:
         buys = [(layout.grid_levels[p], OrderSide.BUY) for p in layout.sorted_buy_grids if p < current_price]
         sells = [(layout.grid_levels[p], OrderSide.SELL) for p in layout.sorted_sell_grids if p > current_price]
@@ -193,21 +163,6 @@ class HedgedGridStrategy(GridStrategy):
             for price in price_grids
         }
         return buy_grids, sell_grids, grid_levels
-
-    def get_paired_sell_level(
-        self,
-        buy_grid_level: GridLevel,
-        grid_levels: dict[float, GridLevel],
-        sorted_sell_grids: list[float],
-        sorted_prices: list[float],
-        price_index_map: dict[float, int],
-        can_place_order_fn,
-    ) -> GridLevel | None:
-        current_index = price_index_map[buy_grid_level.price]
-        if current_index + 1 < len(sorted_prices):
-            paired_sell_price = sorted_prices[current_index + 1]
-            return grid_levels[paired_sell_price]
-        return None
 
     def initial_order_plan(self, layout: GridLayout, current_price: float) -> list[tuple[GridLevel, OrderSide]]:
         # The level nearest the price stays free so every fill finds its neighbour empty.
