@@ -129,6 +129,22 @@ async def test_backtest_balance_coherence(strategy_type, spacing, run_backtest_b
     assert bot.strategy.data["account_value"].notna().all(), "Some candles have no account value"
 
 
+@pytest.mark.integration
+@pytest.mark.parametrize(("strategy_type", "spacing"), SCENARIOS)
+async def test_backtest_value_change_splits_into_realized_and_unrealized(strategy_type, spacing, run_backtest_bot):
+    """Realized plus unrealized PnL accounts for the whole change in account value."""
+    bot, result = await run_backtest_bot(strategy_type, spacing)
+    final_price = bot.strategy.close_prices[-1]
+    snapshot = bot.balance_tracker.snapshot(final_price)
+
+    value_change = snapshot.value - bot.config_manager.get_initial_balance()
+    assert value_change == pytest.approx(snapshot.realized_pnl + snapshot.unrealized_pnl, abs=1e-4)
+
+    summary = result["performance_summary"]
+    assert summary["Grid Trading Gains"] == f"{snapshot.realized_pnl:.2f}"
+    assert summary["Unrealized PnL"] == f"{snapshot.unrealized_pnl:.2f}"
+
+
 # ---------------------------------------------------------------------------
 # V4: Grid cycle integrity
 # ---------------------------------------------------------------------------

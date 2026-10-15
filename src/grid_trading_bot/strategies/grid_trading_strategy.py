@@ -376,6 +376,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         if self.trading_mode == TradingMode.BACKTEST:
             initial_price = self.close_prices[0]
             final_price = self.close_prices[-1]
+            snapshot = self.balance_tracker.snapshot(final_price)
             return self.trading_performance_analyzer.generate_performance_summary(
                 self.data,
                 initial_price,
@@ -383,6 +384,8 @@ class GridTradingStrategy(TradingStrategyInterface):
                 self.balance_tracker.get_adjusted_crypto_balance(),
                 final_price,
                 self.balance_tracker.total_fees,
+                snapshot.realized_pnl,
+                snapshot.unrealized_pnl,
                 initial_balance=self._starting_account_value,
                 armed=self.armed,
                 stop_reason=self.stop_reason,
@@ -396,6 +399,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             live_data.set_index("timestamp", inplace=True)
             initial_price = live_data.iloc[0]["price"]
             final_price = live_data.iloc[-1]["price"]
+            snapshot = self.balance_tracker.snapshot(final_price)
 
             return self.trading_performance_analyzer.generate_performance_summary(
                 live_data,
@@ -404,6 +408,8 @@ class GridTradingStrategy(TradingStrategyInterface):
                 self.balance_tracker.get_adjusted_crypto_balance(),
                 final_price,
                 self.balance_tracker.total_fees,
+                snapshot.realized_pnl,
+                snapshot.unrealized_pnl,
                 initial_balance=live_data.iloc[0]["account_value"],
                 armed=self.armed,
                 stop_reason=self.stop_reason,

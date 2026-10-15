@@ -58,40 +58,30 @@ class TradingPerformanceAnalyzer:
         roi = (final_balance - initial_balance) / initial_balance * 100
         return round(roi, 2)
 
-    def _calculate_trading_gains(self) -> float | None:
-        """
-        Calculates the total trading gains from completed buy and sell orders.
-
-        The computation uses only closed orders to determine the net profit or loss
-        from executed trades.
-
-        Returns:
-            float | None: the total grid trading gains, or None if there are no sell orders.
-        """
-        total_buy_cost = 0.0
-        total_sell_revenue = 0.0
-        closed_buy_orders = [order for order in self.order_book.get_all_buy_orders() if order.is_filled()]
-        closed_sell_orders = [order for order in self.order_book.get_all_sell_orders() if order.is_filled()]
-
-        for buy_order in closed_buy_orders:
-            fill_price = buy_order.average if buy_order.average is not None else buy_order.price
-            trade_value = buy_order.amount * fill_price
-            buy_fee = buy_order.fee.get("cost", 0.0) if buy_order.fee else 0.0
-            total_buy_cost += trade_value + buy_fee
-
-        for sell_order in closed_sell_orders:
-            fill_price = sell_order.average if sell_order.average is not None else sell_order.price
-            trade_value = sell_order.amount * fill_price
-            sell_fee = sell_order.fee.get("cost", 0.0) if sell_order.fee else 0.0
-            total_sell_revenue += trade_value - sell_fee
-
-        return None if total_sell_revenue == 0 else total_sell_revenue - total_buy_cost
+    def _calculate_grid_trading_gains(self, realized_pnl: float) -> float | None:
+        """Realized PnL, or None when nothing was ever sold (liquidation sells never enter the order book)."""
+        has_filled_sell = any(order.is_filled() for order in self.order_book.get_all_sell_orders())
+        if not has_filled_sell and realized_pnl == 0:
+            return None
+        return realized_pnl
 
     def _calculate_drawdown(self, data: pd.DataFrame) -> float:
         peak = data["account_value"].expanding(min_periods=1).max()
         drawdown = (peak - data["account_value"]) / peak * 100
         max_drawdown = drawdown.max()
         return max_drawdown
+
+    def _calculate_max_drawdown_duration(self, data: pd.DataFrame) -> pd.Timedelta:
+        """Longest time from an account value peak to its recovery, or to the last row when it never recovers."""
+        values = data["account_value"].dropna()
+        at_peak = values >= values.cummax()
+        underwater = ~at_peak
+        in_drawdown = underwater | underwater.shift(1, fill_value=False)
+        if not in_drawdown.any():
+            return pd.Timedelta(0)
+        timestamps = values.index.to_series()
+        last_peak_time = timestamps.where(at_peak).ffill().shift(1)
+        return (timestamps - last_peak_time)[in_drawdown].max()
 
     def _calculate_runup(self, data: pd.DataFrame) -> float:
         trough = data["account_value"].expanding(min_periods=1).min()
@@ -242,6 +232,8 @@ class TradingPerformanceAnalyzer:
         final_crypto_balance: float,
         final_crypto_price: float,
         total_fees: float,
+        realized_pnl: float,
+        unrealized_pnl: float,
         *,
         initial_balance: float,
         armed: bool,
@@ -256,6 +248,8 @@ class TradingPerformanceAnalyzer:
             final_crypto_balance (float): Final cryptocurrency balance.
             final_crypto_price (float): Final cryptocurrency price.
             total_fees (float): Total trading fees incurred.
+            realized_pnl (float): Realized PnL at the weighted average cost.
+            unrealized_pnl (float): Unrealized PnL of the crypto still held, at the final price.
             initial_balance (float): Account value before any trade, the baseline of the ROI.
             armed (bool): Whether the grid was armed during the session.
             stop_reason (str | None): Why trading stopped, or None if it ran to the end.
@@ -269,16 +263,19 @@ class TradingPerformanceAnalyzer:
         duration = end_date - start_date
         final_crypto_value = final_crypto_balance * final_crypto_price
         final_balance = final_fiat_balance + final_crypto_value
+        max_drawdown_duration = self._calculate_max_drawdown_duration(data)
         max_runup = self._calculate_runup(data)
         time_in_profit, time_in_loss = self._calculate_time_in_profit_loss(initial_balance, data)
         num_buy_trades, num_sell_trades = self._calculate_trade_counts()
         metrics = PerformanceMetrics(
             roi_pct=float(self._calculate_roi(initial_balance, final_balance)),
             max_drawdown_pct=float(self._calculate_drawdown(data)),
+            max_drawdown_duration_hours=max_drawdown_duration / pd.Timedelta(hours=1),
             sharpe_ratio=float(self._calculate_sharpe_ratio(data)),
             sortino_ratio=float(self._calculate_sortino_ratio(data)),
             buy_and_hold_return_pct=float(self._calculate_buy_and_hold_return(data, initial_price, final_crypto_price)),
-            grid_trading_gains=self._calculate_trading_gains(),
+            grid_trading_gains=self._calculate_grid_trading_gains(realized_pnl),
+            unrealized_pnl=float(unrealized_pnl),
             total_fees=float(total_fees),
             final_balance=float(final_balance),
             num_buy_trades=num_buy_trades,
@@ -296,11 +293,13 @@ class TradingPerformanceAnalyzer:
             "Duration": duration,
             "ROI": f"{metrics.roi_pct:.2f}%",
             "Max Drawdown": f"{metrics.max_drawdown_pct:.2f}%",
+            "Max Drawdown Duration": max_drawdown_duration,
             "Max Runup": f"{max_runup:.2f}%",
             "Time in Profit %": f"{time_in_profit:.2f}%",
             "Time in Loss %": f"{time_in_loss:.2f}%",
             "Buy and Hold Return %": f"{metrics.buy_and_hold_return_pct:.2f}%",
             "Grid Trading Gains": "N/A" if metrics.grid_trading_gains is None else f"{metrics.grid_trading_gains:.2f}",
+            "Unrealized PnL": f"{metrics.unrealized_pnl:.2f}",
             "Total Fees": f"{metrics.total_fees:.2f}",
             "Final Balance (Fiat)": f"{metrics.final_balance:.2f}",
             "Final Crypto Balance": f"{final_crypto_balance:.4f} {self.base_currency}",

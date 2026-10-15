@@ -8,7 +8,7 @@ from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
-from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
+from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
@@ -266,9 +266,13 @@ class TestGridTradingStrategy:
         balance_tracker.total_fees = 10
         strategy._starting_account_value = 15000
         trading_performance_analyzer.generate_performance_summary = Mock()
+        balance_tracker.snapshot.return_value = AccountSnapshot(
+            price=11000.0, value=16000.0, peak=16000.0, drawdown_pct=0.0, realized_pnl=42.0, unrealized_pnl=-3.0
+        )
 
         strategy.generate_performance_report()
 
+        balance_tracker.snapshot.assert_called_once_with(final_price)
         trading_performance_analyzer.generate_performance_summary.assert_called_once_with(
             strategy.data,
             initial_price,
@@ -276,6 +280,8 @@ class TestGridTradingStrategy:
             balance_tracker.get_adjusted_crypto_balance(),
             final_price,
             balance_tracker.total_fees,
+            42.0,
+            -3.0,
             initial_balance=15000,
             armed=False,
             stop_reason=None,
@@ -534,10 +540,15 @@ class TestGridTradingStrategy:
             (pd.Timestamp("2024-01-01"), 10000, 100),
             (pd.Timestamp("2024-01-02"), 11000, 110),
         ]
+        balance_tracker.snapshot.return_value = AccountSnapshot(
+            price=11000.0, value=16000.0, peak=16000.0, drawdown_pct=0.0, realized_pnl=42.0, unrealized_pnl=-3.0
+        )
 
         strategy.generate_performance_report()
 
+        balance_tracker.snapshot.assert_called_once_with(110)
         trading_performance_analyzer.generate_performance_summary.assert_called_once()
+        assert trading_performance_analyzer.generate_performance_summary.call_args.args[-2:] == (42.0, -3.0)
 
     def test_generate_performance_report_live_mode_no_metrics(self, setup_strategy):
         create_strategy, _, _, _, _, _, trading_performance_analyzer, _, _ = setup_strategy

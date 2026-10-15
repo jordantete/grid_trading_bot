@@ -53,51 +53,61 @@ class TestPerformanceAnalyzer:
         max_runup = analyzer._calculate_runup(mock_account_data)
         assert max_runup == 5.0  # Expected max runup from 10000 to 10500 (5%)
 
-    def test_calculate_trading_gains(self, setup_performance_analyzer):
+    @staticmethod
+    def _daily(values: list[float]) -> pd.DataFrame:
+        return pd.DataFrame({"account_value": values}, index=pd.date_range("2024-01-01", periods=len(values), freq="D"))
+
+    def test_drawdown_duration_runs_from_the_peak_to_the_recovery(self, setup_performance_analyzer):
+        analyzer, _, _ = setup_performance_analyzer
+
+        duration = analyzer._calculate_max_drawdown_duration(self._daily([100, 90, 95, 100, 101]))
+
+        assert duration == pd.Timedelta(days=3)
+
+    def test_drawdown_still_open_runs_to_the_last_row(self, setup_performance_analyzer):
+        analyzer, _, _ = setup_performance_analyzer
+
+        duration = analyzer._calculate_max_drawdown_duration(self._daily([100, 110, 99, 105]))
+
+        assert duration == pd.Timedelta(days=2)
+
+    def test_drawdown_duration_keeps_the_longest_one(self, setup_performance_analyzer):
+        analyzer, _, _ = setup_performance_analyzer
+
+        duration = analyzer._calculate_max_drawdown_duration(self._daily([100, 90, 100, 95, 92, 99, 101]))
+
+        assert duration == pd.Timedelta(days=4)
+
+    def test_rising_or_flat_account_has_no_drawdown_duration(self, setup_performance_analyzer):
+        analyzer, _, _ = setup_performance_analyzer
+
+        assert analyzer._calculate_max_drawdown_duration(self._daily([100, 100, 100])) == pd.Timedelta(0)
+        assert analyzer._calculate_max_drawdown_duration(self._daily([100, 101, 102])) == pd.Timedelta(0)
+
+    def test_drawdown_duration_ignores_missing_account_values(self, setup_performance_analyzer):
+        analyzer, _, _ = setup_performance_analyzer
+
+        duration = analyzer._calculate_max_drawdown_duration(self._daily([100, 90, float("nan"), float("nan")]))
+
+        assert duration == pd.Timedelta(days=1)
+
+    def test_grid_trading_gains_are_the_realized_pnl(self, setup_performance_analyzer):
         analyzer, _, order_book = setup_performance_analyzer
+        order_book.get_all_sell_orders.return_value = [Mock(spec=Order, is_filled=Mock(return_value=True))]
 
-        buy_order_1 = Mock(
-            spec=Order, amount=1.0, price=1000.0, average=None, fee={"cost": 2.0}, is_filled=Mock(return_value=True)
-        )
-        buy_order_2 = Mock(
-            spec=Order, amount=0.5, price=1100.0, average=None, fee={"cost": 1.0}, is_filled=Mock(return_value=True)
-        )
+        assert analyzer._calculate_grid_trading_gains(-12.5) == -12.5
 
-        sell_order_1 = Mock(
-            spec=Order, amount=1.0, price=1200.0, average=None, fee={"cost": 1.5}, is_filled=Mock(return_value=True)
-        )
-        sell_order_2 = Mock(
-            spec=Order, amount=0.5, price=1300.0, average=None, fee={"cost": 0.5}, is_filled=Mock(return_value=True)
-        )
-
-        order_book.get_all_buy_orders.return_value = [buy_order_1, buy_order_2]
-        order_book.get_all_sell_orders.return_value = [sell_order_1, sell_order_2]
-
-        result = analyzer._calculate_trading_gains()
-
-        # Total buy cost: (1 * 1000 + 2) + (0.5 * 1100 + 1) = 1002 + 551 = 1553
-        # Total sell revenue: (1 * 1200 - 1.5) + (0.5 * 1300 - 0.5) = 1198.5 + 649.5 = 1848
-        # Gains: 1848 - 1553 = 295.00
-        assert result == pytest.approx(295.0)
-
-    def test_calculate_trading_gains_uses_average_fill_price(self, setup_performance_analyzer):
-        """Gains must be computed at the actual (slipped) fill price when available."""
+    def test_grid_trading_gains_not_available_before_any_sale(self, setup_performance_analyzer):
         analyzer, _, order_book = setup_performance_analyzer
+        order_book.get_all_sell_orders.return_value = []
 
-        buy_order = Mock(
-            spec=Order, amount=1.0, price=1000.0, average=1010.0, fee={"cost": 0.0}, is_filled=Mock(return_value=True)
-        )
-        sell_order = Mock(
-            spec=Order, amount=1.0, price=1200.0, average=1190.0, fee={"cost": 0.0}, is_filled=Mock(return_value=True)
-        )
+        assert analyzer._calculate_grid_trading_gains(0.0) is None
 
-        order_book.get_all_buy_orders.return_value = [buy_order]
-        order_book.get_all_sell_orders.return_value = [sell_order]
+    def test_grid_trading_gains_show_a_liquidation_without_grid_sells(self, setup_performance_analyzer):
+        analyzer, _, order_book = setup_performance_analyzer
+        order_book.get_all_sell_orders.return_value = []
 
-        result = analyzer._calculate_trading_gains()
-
-        # Buy at 1010 (slipped), sell at 1190 (slipped): 1190 - 1010 = 180.00, not 200.00
-        assert result == pytest.approx(180.0)
+        assert analyzer._calculate_grid_trading_gains(-3.2) == -3.2
 
     def test_avg_crypto_exposure_is_the_mean_share_held_in_crypto(self, setup_performance_analyzer):
         analyzer, _, _ = setup_performance_analyzer
@@ -111,14 +121,6 @@ class TestPerformanceAnalyzer:
         analyzer, _, _ = setup_performance_analyzer
 
         assert analyzer._calculate_avg_crypto_exposure(mock_account_data) is None
-
-    def test_calculate_trading_gains_zero_trades(self, setup_performance_analyzer):
-        analyzer, _, order_book = setup_performance_analyzer
-        order_book.get_all_buy_orders.return_value = []
-        order_book.get_all_sell_orders.return_value = []
-
-        trading_gains = analyzer._calculate_trading_gains()
-        assert trading_gains is None
 
     def test_calculate_sharpe_ratio(self, setup_performance_analyzer, mock_account_data):
         analyzer, _, _ = setup_performance_analyzer
@@ -302,6 +304,8 @@ class TestPerformanceAnalyzer:
                 final_crypto_balance,
                 final_crypto_price,
                 total_fees,
+                12.5,
+                -7.25,
                 initial_balance=initial_balance,
                 armed=True,
                 stop_reason=None,
@@ -319,7 +323,9 @@ class TestPerformanceAnalyzer:
             final_fiat_balance + final_crypto_balance * final_crypto_price,
         )
         assert performance_summary["ROI"] == f"{expected_roi:.2f}%"
-        assert performance_summary["Grid Trading Gains"] == "197.50"  # Adjusted for mocked fees
+        assert performance_summary["Grid Trading Gains"] == "12.50"
+        assert performance_summary["Unrealized PnL"] == "-7.25"
+        assert performance_summary["Max Drawdown Duration"] == pd.Timedelta(days=2)
         assert performance_summary["Total Fees"] == f"{total_fees:.2f}"
         assert (
             performance_summary["Final Balance (Fiat)"]
@@ -343,6 +349,8 @@ class TestPerformanceAnalyzer:
         assert performance_summary["Sortino Ratio"] == f"{metrics.sortino_ratio:.2f}"
         assert performance_summary["Buy and Hold Return %"] == f"{metrics.buy_and_hold_return_pct:.2f}%"
         assert performance_summary["Grid Trading Gains"] == f"{metrics.grid_trading_gains:.2f}"
+        assert performance_summary["Unrealized PnL"] == f"{metrics.unrealized_pnl:.2f}"
+        assert metrics.max_drawdown_duration_hours == 48.0
         assert performance_summary["Total Fees"] == f"{metrics.total_fees:.2f}"
         assert performance_summary["Final Balance (Fiat)"] == f"{metrics.final_balance:.2f}"
         assert performance_summary["Number of Buy Trades"] == metrics.num_buy_trades
