@@ -18,7 +18,7 @@ jobs:
           python-version-file: "pyproject.toml"
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --locked --all-extras --dev
 
       - name: Run tests
         run: uv run pytest --cov=grid_trading_bot --cov-report=term
