@@ -8,7 +8,7 @@ from grid_trading_bot.core.bot_management.notification.notification_handler impo
 from grid_trading_bot.core.services.exceptions import DataFetchError, PostOnlyRejectedError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
-from ..grid_management.grid_level import GridCycleState, GridLevel
+from ..grid_management.grid_level import GridLevel
 from ..grid_management.grid_manager import GridManager
 from ..order_handling.balance_tracker import BalanceTracker
 from ..order_handling.order_book import OrderBook
@@ -53,6 +53,7 @@ class OrderManager:
         self.market_constraints: MarketConstraints | None = None
         self._lock = asyncio.Lock()
         self._positions_closed = False
+        self._settled_cancellation_ids: set[str] = set()
         self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
 
@@ -134,6 +135,7 @@ class OrderManager:
                         )
 
                 await self.balance_tracker.settle_cancelled_order(final_order)
+                self._settled_cancellation_ids.add(order.identifier)
                 self.order_book.remove_open_order(order)
                 if grid_level is not None:
                     self.grid_manager.rollback_order_placement(
@@ -256,11 +258,14 @@ class OrderManager:
     async def _on_order_cancelled(self, order: Order) -> None:
         """
         Handles an externally-cancelled grid order: settles balances (incl. any partial
-        fill), rolls the grid level back to a placeable state, and re-places the order.
-        Orders already handled by a bulk cancellation (level no longer WAITING_FOR_*)
-        are skipped — the OrderManager lock serializes the two paths.
+        fill), rolls the grid level back, and re-places the order. Each cancellation is
+        settled once: orders already settled here or by a bulk cancellation are skipped.
         """
         async with self._lock:
+            if order.identifier in self._settled_cancellation_ids:
+                self.logger.info(f"Cancel event for {order.identifier} already handled; skipping.")
+                return
+
             grid_level = self.order_book.get_grid_level_for_order(order)
 
             if grid_level is None:
@@ -271,11 +276,8 @@ class OrderManager:
                 )
                 return
 
-            if grid_level.state not in {GridCycleState.WAITING_FOR_BUY_FILL, GridCycleState.WAITING_FOR_SELL_FILL}:
-                self.logger.info(f"Cancel event for {order.identifier} already handled; skipping.")
-                return
-
             await self.balance_tracker.settle_cancelled_order(order)
+            self._settled_cancellation_ids.add(order.identifier)
             self.order_book.remove_open_order(order)
             self.grid_manager.rollback_order_placement(
                 grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
