@@ -57,6 +57,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.close_prices = None
         self.live_trading_metrics: deque = deque(maxlen=self.MAX_LIVE_METRICS)
         self._running = True
+        self.armed = False
+        self.stop_reason: str | None = None
         self.trailing_stop: TrailingStopLoss | None = (
             TrailingStopLoss(config_manager.get_trailing_atr_multiplier())
             if config_manager.is_trailing_stop_loss_enabled()
@@ -150,6 +152,8 @@ class GridTradingStrategy(TradingStrategyInterface):
             Exception: If any error occurs during the trading session.
         """
         self._running = True
+        self.armed = False
+        self.stop_reason = None
         self.data = await self._initialize_historical_data()
 
         if self.trading_mode == TradingMode.BACKTEST:
@@ -276,30 +280,41 @@ class GridTradingStrategy(TradingStrategyInterface):
         for i, (current_price, high_price, low_price, timestamp) in enumerate(
             zip(self.close_prices, high_prices, low_prices, timestamps, strict=False),
         ):
-            if i >= start_index:
-                grid_orders_initialized = await self._initialize_grid_orders_once(
-                    current_price,
-                    grid_orders_initialized,
-                )
-
+            if i >= start_index and self.stop_reason is None:
+                if not grid_orders_initialized:
+                    grid_orders_initialized = await self._initialize_grid_orders_once(current_price, False)
                 if grid_orders_initialized:
-                    await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
-
-                    trailing_atr = self._backtest_atr_at(self._trailing_atr_series, i)
-                    if await self._handle_trailing_stop(current_price, trailing_atr):
-                        break
-
-                    if await self._handle_take_profit_stop_loss(current_price):
-                        break
-
-                    dynamic_atr = self._backtest_atr_at(self._dynamic_atr_series, i)
-                    await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
+                    await self._simulate_backtest_candle(i, current_price, high_price, low_price, timestamp)
 
             account_values[i] = self.balance_tracker.get_total_balance_value(current_price)
             crypto_values[i] = self.balance_tracker.get_adjusted_crypto_balance() * current_price
 
         self.data["account_value"] = account_values
         self.data["crypto_value"] = crypto_values
+
+    async def _simulate_backtest_candle(
+        self,
+        index: int,
+        current_price: float,
+        high_price: float,
+        low_price: float,
+        timestamp: pd.Timestamp,
+    ) -> None:
+        """
+        Fills the orders the candle crosses, then applies the trailing stop, TP/SL and the
+        volatility regrid at its close. A stop sets `stop_reason`, which ends trading.
+        """
+        await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
+
+        trailing_atr = self._backtest_atr_at(self._trailing_atr_series, index)
+        if await self._handle_trailing_stop(current_price, trailing_atr):
+            return
+
+        if await self._handle_take_profit_stop_loss(current_price):
+            return
+
+        dynamic_atr = self._backtest_atr_at(self._dynamic_atr_series, index)
+        await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
 
     async def _initialize_grid_orders_once(
         self,
@@ -315,6 +330,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             bool: True if grid orders have been initialized, False otherwise.
         """
         if grid_orders_initialized:
+            self.armed = True
             return True
 
         if not self.grid_manager.is_within_grid_range(current_price):
@@ -325,6 +341,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             self.order_manager.validate_grid_feasibility(current_price)
         except GridFeasibilityError as e:
             self.logger.error(f"Grid infeasible: {e}")
+            self.stop_reason = "grid_infeasible"
             await self.event_bus.publish(Events.STOP_BOT, f"Grid infeasible: {e}")
             return False
 
@@ -339,6 +356,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.logger.info("Initial purchase done, will initialize grid orders")
         await self.order_manager.initialize_grid_orders(current_price)
         await self.event_bus.publish(Events.GRID_ORDERS_INITIALIZED, None)
+        self.armed = True
         return True
 
     def generate_performance_report(self) -> tuple[dict, list]:
@@ -427,6 +445,7 @@ class GridTradingStrategy(TradingStrategyInterface):
 
         if self.config_manager.get_trailing_on_trigger() == "stop":
             self.logger.info(f"Trailing stop triggered at {current_price}. Liquidating and stopping.")
+            self.stop_reason = "trailing_stop"
             await self.order_manager.execute_take_profit_or_stop_loss_order(
                 current_price=current_price,
                 stop_loss_order=True,
@@ -634,6 +653,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             and current_price >= self.config_manager.get_take_profit_threshold()
         ):
             self.logger.info(f"Take-profit triggered at {current_price}. Executing TP order...")
+            self.stop_reason = "take_profit"
             await self.order_manager.execute_take_profit_or_stop_loss_order(
                 current_price=current_price,
                 take_profit_order=True,
@@ -651,6 +671,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             and current_price <= self.config_manager.get_stop_loss_threshold()
         ):
             self.logger.info(f"Stop-loss triggered at {current_price}. Executing SL order...")
+            self.stop_reason = "stop_loss"
             await self.order_manager.execute_take_profit_or_stop_loss_order(
                 current_price=current_price,
                 stop_loss_order=True,

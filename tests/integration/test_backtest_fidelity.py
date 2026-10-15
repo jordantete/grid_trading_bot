@@ -6,7 +6,7 @@ import pytest
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.config_validator import ConfigValidator
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
+from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
@@ -150,3 +150,52 @@ async def test_backtest_without_minimum_keys_has_no_constraints(tmp_path):
     bot, _ = await _run(_config(tmp_path, DROP_THEN_RALLY))
 
     assert bot.order_manager.market_constraints is None
+
+
+async def test_account_is_valued_flat_after_a_stop_loss(tmp_path):
+    config = _config(tmp_path, DROP_THEN_RALLY, risk_management={"stop_loss": {"enabled": True, "threshold": 85.0}})
+
+    bot, result = await _run(config)
+
+    data = bot.strategy.data
+    account_value = data["account_value"]
+    assert account_value.notna().all()
+    stop_index = int((data["close"] <= 85.0).to_numpy().argmax())
+    assert (account_value.iloc[stop_index:] == account_value.iloc[stop_index]).all()
+    final_balance = float(result["performance_summary"]["Final Balance (Fiat)"])
+    assert account_value.iloc[-1] == pytest.approx(final_balance, abs=0.01)
+    assert bot.strategy.stop_reason == "stop_loss"
+    assert bot.strategy.armed is True
+
+
+@pytest.mark.parametrize(
+    ("rows", "risk_management", "expected_reason"),
+    [
+        (RALLY, {"take_profit": {"enabled": True, "threshold": 104.0}}, "take_profit"),
+        (DROP_THEN_RALLY, {"trailing_stop_loss": TRAILING_STOP}, "trailing_stop"),
+    ],
+)
+async def test_account_is_valued_after_any_stop(tmp_path, rows, risk_management, expected_reason):
+    bot, _ = await _run(_config(tmp_path, rows, risk_management=risk_management))
+
+    assert bot.strategy.stop_reason == expected_reason
+    assert bot.strategy.data["account_value"].notna().all()
+
+
+async def test_infeasible_grid_stops_the_backtest_once(tmp_path):
+    event_bus = EventBus()
+    stop_events = []
+
+    async def record_stop(reason):
+        stop_events.append(reason)
+
+    event_bus.subscribe(Events.STOP_BOT, record_stop)
+    config = _config(tmp_path, DROP_THEN_RALLY, execution={"backtest_min_cost": 1_000_000.0})
+
+    bot, result = await _run(config, event_bus)
+
+    assert len(stop_events) == 1
+    assert bot.strategy.stop_reason == "grid_infeasible"
+    assert bot.strategy.armed is False
+    assert bot.strategy.data["account_value"].notna().all()
+    assert _roi(result) == 0.0

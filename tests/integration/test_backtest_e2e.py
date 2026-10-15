@@ -126,6 +126,8 @@ async def test_backtest_balance_coherence(strategy_type, spacing, run_backtest_b
         f"Balance mismatch: tracker says {computed_total:.4f}, summary says {reported_final:.4f}"
     )
 
+    assert bot.strategy.data["account_value"].notna().all(), "Some candles have no account value"
+
 
 # ---------------------------------------------------------------------------
 # V4: Grid cycle integrity
@@ -348,6 +350,8 @@ async def test_atr_scenario_balance_coherence(run_backtest_bot):
     assert abs(computed_total - reported_final) < 0.02, (
         f"Balance mismatch: tracker says {computed_total:.4f}, summary says {reported_final:.4f}"
     )
+
+    assert bot.strategy.data["account_value"].notna().all(), "Some candles have no account value"
 
 
 @pytest.mark.integration
