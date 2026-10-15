@@ -220,6 +220,7 @@ class StateRecoveryService:
                 # Order not found on exchange → mark as canceled (ghost)
                 self.logger.warning(f"Ghost order {order.identifier} not found on exchange. Marking as canceled.")
                 self.order_book.update_order_status(order.identifier, OrderStatus.CANCELED)
+                self._release_grid_level(order)
                 stats["ghosts"] += 1
                 stats["reconciled"] += 1
 
@@ -245,6 +246,7 @@ class StateRecoveryService:
             elif exchange_order.status == OrderStatus.CANCELED:
                 self.logger.info(f"Order {order.identifier} was canceled on exchange while bot was down.")
                 self.order_book.update_order_status(order.identifier, OrderStatus.CANCELED)
+                self._release_grid_level(order)
                 stats["reconciled"] += 1
 
             # OPEN on exchange → keep as-is
@@ -267,6 +269,14 @@ class StateRecoveryService:
         return stats, filled_while_down
 
     # ── Step 5: Balance Restoration ──────────────────────────────────────
+
+    def _release_grid_level(self, order: Order) -> None:
+        """Frees the grid level of a cancelled order unless another open order still sits on it."""
+        grid_level = self.order_book.get_grid_level_for_order(order)
+        if grid_level:
+            self.grid_manager.rollback_order_placement(
+                grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
+            )
 
     async def _restore_balance(self) -> str:
         saved_balance = self.repository.load_balance_state()

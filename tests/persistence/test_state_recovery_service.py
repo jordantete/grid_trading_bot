@@ -417,6 +417,7 @@ class TestStateRecoveryService:
         mock_repository,
         mock_config_manager,
         mock_order_book,
+        mock_grid_manager,
         mock_balance_tracker,
     ):
         """If an order was open in the DB but the exchange now reports CANCELED,
@@ -427,6 +428,8 @@ class TestStateRecoveryService:
             identifier="cancel-1", status=OrderStatus.OPEN, side=OrderSide.BUY, price=2950.0, remaining=1.0
         )
         mock_order_book.get_open_orders.return_value = [local_order]
+        gl = MagicMock()
+        mock_order_book.get_grid_level_for_order.return_value = gl
 
         exchange_order = _make_exchange_order(
             identifier="cancel-1", status=OrderStatus.CANCELED, side=OrderSide.BUY, price=2950.0
@@ -438,6 +441,34 @@ class TestStateRecoveryService:
         assert result.recovered is True
         assert result.orders_reconciled >= 1
         mock_order_book.update_order_status.assert_any_call("cancel-1", OrderStatus.CANCELED)
+        mock_grid_manager.rollback_order_placement.assert_called_once_with(gl, OrderSide.BUY, False)
+
+    async def test_order_canceled_while_bot_down_on_stacked_level(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+        mock_order_book,
+        mock_grid_manager,
+    ):
+        """A cancelled order on a level that still holds another open order keeps the level busy."""
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+
+        local_order = _make_exchange_order(
+            identifier="cancel-2", status=OrderStatus.OPEN, side=OrderSide.SELL, price=3050.0, remaining=1.0
+        )
+        mock_order_book.get_open_orders.return_value = [local_order]
+        gl = MagicMock()
+        mock_order_book.get_grid_level_for_order.return_value = gl
+        mock_order_book.has_open_orders_at.return_value = True
+        exchange_order = _make_exchange_order(
+            identifier="cancel-2", status=OrderStatus.CANCELED, side=OrderSide.SELL, price=3050.0
+        )
+        service.order_execution_strategy.get_order = AsyncMock(return_value=exchange_order)
+
+        await service.attempt_recovery()
+
+        mock_grid_manager.rollback_order_placement.assert_called_once_with(gl, OrderSide.SELL, True)
 
     # 6. Ghost order (not found on exchange)
     async def test_ghost_order_not_on_exchange(
@@ -446,6 +477,7 @@ class TestStateRecoveryService:
         mock_repository,
         mock_config_manager,
         mock_order_book,
+        mock_grid_manager,
         mock_balance_tracker,
     ):
         """If an order exists locally but get_order returns None (not on exchange),
@@ -456,6 +488,8 @@ class TestStateRecoveryService:
             identifier="ghost-1", status=OrderStatus.OPEN, side=OrderSide.SELL, price=3050.0, remaining=0.5
         )
         mock_order_book.get_open_orders.return_value = [local_order]
+        gl = MagicMock()
+        mock_order_book.get_grid_level_for_order.return_value = gl
 
         service.order_execution_strategy.get_order = AsyncMock(return_value=None)
 
@@ -465,6 +499,7 @@ class TestStateRecoveryService:
         assert result.ghost_orders_found == 1
         assert result.orders_reconciled >= 1
         mock_order_book.update_order_status.assert_any_call("ghost-1", OrderStatus.CANCELED)
+        mock_grid_manager.rollback_order_placement.assert_called_once_with(gl, OrderSide.SELL, False)
 
     # 7. Orphan order on exchange not in local book
     async def test_orphan_order_on_exchange(
