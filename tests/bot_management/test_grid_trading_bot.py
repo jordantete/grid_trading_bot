@@ -30,7 +30,7 @@ def mock_env_vars():
         yield
 
 
-class TestGridTradingBot:
+class BotFixtures:
     @pytest.fixture
     def config_manager(self):
         mock_config = Mock(spec=ConfigManager)
@@ -72,6 +72,8 @@ class TestGridTradingBot:
             no_plot=True,
         )
 
+
+class TestGridTradingBot(BotFixtures):
     @patch(
         "grid_trading_bot.core.bot_management.grid_trading_bot.ExchangeServiceFactory.create_exchange_service",
         side_effect=UnsupportedExchangeError("Unsupported Exchange"),
@@ -548,6 +550,7 @@ class TestStrategyStatePersistenceWiring:
     @pytest.mark.asyncio
     async def test_stop_checkpoints_before_cleanup(self, bot):
         bot.is_running = True
+        bot._state_ready = True
         bot.order_status_tracker.stop_tracking = AsyncMock()
         bot.reconciliation_service = None
         call_order = []
@@ -572,6 +575,7 @@ def _record_shutdown(bot, calls, run_files=None):
     bot.exchange_service.close = AsyncMock(side_effect=lambda: calls.append("close"))
     bot.run_files = run_files
     bot.is_running = True
+    bot._state_ready = True
     return bot
 
 
@@ -583,7 +587,7 @@ def _run_files(tmp_path):
     )
 
 
-class TestShutdownSequence(TestGridTradingBot):
+class TestShutdownSequence(BotFixtures):
     @pytest.mark.asyncio
     async def test_a_halt_cancels_checkpoints_marks_notifies_and_closes_last(self, bot, tmp_path):
         calls = []
@@ -651,6 +655,50 @@ class TestShutdownSequence(TestGridTradingBot):
 
         assert calls == ["tracking", "strategy", "cancel", "checkpoint", "notify", "close"]
         assert (tmp_path / "halted_x.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_a_stop_before_the_state_is_loaded_keeps_the_saved_state(self, bot):
+        calls = []
+        _record_shutdown(bot, calls)
+        bot._state_ready = False
+
+        await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
+
+        assert calls == ["tracking", "strategy", "notify", "close"]
+        bot.state_persistence_service.checkpoint_now.assert_not_awaited()
+        bot.state_persistence_service.cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_startup_crash_keeps_the_saved_state(self, bot):
+        calls = []
+        _record_shutdown(bot, calls)
+        bot._state_ready = False
+        bot.exchange_service.load_exchange_markets = AsyncMock(side_effect=ConnectionError("exchange unreachable"))
+
+        with pytest.raises(ConnectionError, match="exchange unreachable"):
+            await bot.run()
+
+        assert bot.stop_request.kind is StopKind.CRASH
+        bot.state_persistence_service.checkpoint_now.assert_not_awaited()
+        bot.state_persistence_service.cleanup.assert_called_once()
+        assert calls[-1] == "close"
+
+    @pytest.mark.asyncio
+    async def test_a_crash_once_setup_completed_checkpoints(self, bot):
+        calls = []
+        _record_shutdown(bot, calls)
+        bot._state_ready = False
+        bot.exchange_service.load_exchange_markets = AsyncMock()
+        bot.exchange_service.get_market_constraints = Mock(return_value=MarketConstraints(None, None))
+        bot.balance_tracker.setup_balances = AsyncMock()
+        bot.order_status_tracker.start_tracking = Mock()
+        bot.strategy.initialize_strategy = Mock()
+        bot.strategy.run = AsyncMock(side_effect=RuntimeError("bug"))
+
+        with pytest.raises(RuntimeError, match="bug"):
+            await bot.run()
+
+        assert calls.index("checkpoint") < calls.index("close")
 
     @pytest.mark.asyncio
     async def test_a_backtest_halt_writes_no_marker_and_sends_nothing(self, bot, tmp_path):

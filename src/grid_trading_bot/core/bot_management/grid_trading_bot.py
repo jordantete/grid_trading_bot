@@ -61,6 +61,7 @@ class GridTradingBot:
     ):
         self.run_files = run_files
         self.stop_request: StopRequest | None = None
+        self._state_ready = False
         self._stopped = asyncio.Event()
         try:
             self.logger = logging.getLogger(self.__class__.__name__)
@@ -255,6 +256,7 @@ class GridTradingBot:
                     exchange_service=self.exchange_service,
                 )
 
+            self._state_ready = True
             if self.stop_request is None:
                 await self._start_trading(recovery_result, skip_initial_purchase, skip_grid_init)
             if self.stop_request is None and self._is_live_or_paper():
@@ -317,7 +319,8 @@ class GridTradingBot:
     async def _stop(self, request: StopRequest) -> None:
         """
         Runs the shutdown once: stops tracking, cancels the open orders only for a halt, writes the final
-        checkpoint and the halt marker, notifies, then closes the exchange last. Later requests are ignored.
+        checkpoint once the state was loaded and the halt marker, notifies, then closes the exchange last.
+        Later requests are ignored.
         """
         if self.stop_request is not None:
             self.logger.info(
@@ -336,7 +339,10 @@ class GridTradingBot:
             if request.kind.halts and self._is_live_or_paper():
                 await self._attempt("order cancellation", lambda: self.order_manager.close_positions(liquidate=False))
             if self.state_persistence_service:
-                await self._attempt("final checkpoint", self.state_persistence_service.checkpoint_now)
+                if self._state_ready:
+                    await self._attempt("final checkpoint", self.state_persistence_service.checkpoint_now)
+                else:
+                    self.logger.info("No state was loaded yet; skipping the final checkpoint to keep the saved state.")
                 await self._attempt("persistence cleanup", self.state_persistence_service.cleanup)
             if self._is_live_or_paper():
                 if request.kind.halts and self.run_files is not None:
