@@ -238,9 +238,28 @@ class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
         self.health_check._check_and_alert_resource_usage = AsyncMock()
 
         await self.health_check._perform_checks()
+        await self.health_check._perform_checks()
 
         self.health_check._check_and_alert_bot_health.assert_awaited_with({"strategy": True, "exchange_status": "ok"})
-        self.health_check._check_and_alert_resource_usage.assert_awaited_with({"cpu": 10, "memory": 10, "disk": 10})
+        self.health_check._check_and_alert_resource_usage.assert_awaited_once_with(
+            {"cpu": 10, "memory": 10, "disk": 10}
+        )
+
+    async def test_the_first_resource_sample_sends_no_alert(self):
+        self.bot.get_bot_health_status = AsyncMock(return_value={"strategy": True, "exchange_status": "ok"})
+        self.health_check._check_resource_usage = Mock(return_value={"cpu": 100.0, "memory": 10, "disk": 10})
+
+        with self.assertLogs("HealthCheck", level="INFO") as logs:
+            await self.health_check._perform_checks()
+
+        self.notification_handler.async_send_notification.assert_not_awaited()
+        assert any("System resource usage" in line for line in logs.output)
+
+        await self.health_check._perform_checks()
+
+        sent = self.notification_handler.async_send_notification
+        sent.assert_awaited_once()
+        assert "CPU usage is high" in sent.await_args.kwargs["alert_details"]
 
     async def test_check_and_alert_bot_health_with_alerts(self):
         health_status = {"strategy": False, "exchange_status": "maintenance"}

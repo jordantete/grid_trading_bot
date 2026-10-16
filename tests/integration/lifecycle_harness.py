@@ -3,6 +3,7 @@
 import asyncio
 import itertools
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -113,8 +114,10 @@ class FakeExchange:
 
 
 def main() -> None:
+    os.environ.setdefault("APPRISE_NOTIFICATION_URLS", "")
     FakeExchange.scenario = json.loads(Path(sys.argv[1]).read_text())
     FakeExchange.calls_path = Path(sys.argv[2])
+    assert hasattr(live_exchange_service, "ccxtpro")
     live_exchange_service.ccxtpro = SimpleNamespace(binance=FakeExchange)
     GridTradingStrategy.TICKER_REFRESH_INTERVAL = 0.2
     cli.main(args=sys.argv[3:], prog_name="grid_trading_bot")

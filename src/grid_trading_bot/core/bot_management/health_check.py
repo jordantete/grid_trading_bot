@@ -71,6 +71,7 @@ class HealthCheck:
         self._metrics_history: list[ResourceMetrics] = []
         self.metrics_history_size = metrics_history_size
         self._last_alert_times: dict[str, datetime] = {}
+        self._resource_alerts_armed = False
         self.process.cpu_percent()  # First call to initialize CPU monitoring
         psutil.cpu_percent(interval=None)  # First call primes the system-wide counter
         self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop)
@@ -138,7 +139,11 @@ class HealthCheck:
 
         resource_usage = self._check_resource_usage()
         self.logger.info(f"System resource usage: {resource_usage}")
-        await self._check_and_alert_resource_usage(resource_usage)
+        if self._resource_alerts_armed:
+            await self._check_and_alert_resource_usage(resource_usage)
+        else:
+            # The first CPU sample spans only the milliseconds since priming, too short to alert on.
+            self._resource_alerts_armed = True
 
     def _report_account_metrics(self) -> None:
         # The start() loop exits on the first uncaught exception, so a failed snapshot must not escape.
