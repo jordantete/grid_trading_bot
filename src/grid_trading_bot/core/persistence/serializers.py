@@ -95,7 +95,6 @@ def compute_config_hash(config_manager: ConfigManager) -> str:
         "dynamic_spacing": config_manager.get_dynamic_spacing() or None,
         "exchange_name": config_manager.get_exchange_name(),
         "trading_mode": trading_mode.value if trading_mode else None,
-        "risk_management": config_manager.get_risk_management() or None,
         "timeframe": config_manager.get_timeframe(),
     }
     canonical = json.dumps(hash_input, sort_keys=True, separators=(",", ":"))

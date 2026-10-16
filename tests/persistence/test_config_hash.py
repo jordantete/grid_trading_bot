@@ -133,7 +133,6 @@ class TestComputeConfigHash:
             "dynamic_spacing": None,
             "exchange_name": "binance",
             "trading_mode": "backtest",
-            "risk_management": None,
             "timeframe": "1h",
         }
         canonical = json.dumps(hash_input, sort_keys=True, separators=(",", ":"))
@@ -202,11 +201,11 @@ class TestComputeConfigHash:
             config_manager_factory(exchange_name="kraken")
         )
 
-    def test_hash_changes_when_risk_management_changes(self, config_manager_factory):
-        """Changing risk_management produces a different hash."""
+    def test_hash_ignores_risk_management(self, config_manager_factory):
+        """A TP, SL or trailing change keeps the saved state, so it must not change the hash."""
         base = config_manager_factory()
         changed = config_manager_factory(risk_management={"take_profit": {"enabled": True, "threshold": 3700}})
-        assert compute_config_hash(base) != compute_config_hash(changed)
+        assert compute_config_hash(base) == compute_config_hash(changed)
 
     def test_hash_changes_when_timeframe_changes(self, config_manager_factory):
         """Changing timeframe produces a different hash."""
