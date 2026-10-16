@@ -9,6 +9,7 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.bot_management.stop_request import StopKind
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 pytestmark = pytest.mark.integration
@@ -186,8 +187,8 @@ async def test_infeasible_grid_stops_the_backtest_once(tmp_path):
     event_bus = EventBus()
     stop_events = []
 
-    async def record_stop(reason):
-        stop_events.append(reason)
+    async def record_stop(request):
+        stop_events.append(request)
 
     event_bus.subscribe(Events.STOP_BOT, record_stop)
     config = _config(tmp_path, DROP_THEN_RALLY, execution={"backtest_min_cost": 1_000_000.0})
@@ -195,6 +196,7 @@ async def test_infeasible_grid_stops_the_backtest_once(tmp_path):
     bot, result = await _run(config, event_bus)
 
     assert len(stop_events) == 1
+    assert stop_events[0].kind is StopKind.INFEASIBLE
     assert bot.strategy.stop_reason == "grid_infeasible"
     assert bot.strategy.armed is False
     assert bot.strategy.data["account_value"].notna().all()

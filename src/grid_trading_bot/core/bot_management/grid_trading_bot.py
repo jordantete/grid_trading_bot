@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.stop_request import StopRequest
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_factory import (
@@ -36,7 +37,6 @@ from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerf
 if TYPE_CHECKING:
     from grid_trading_bot.core.domain.strategy_type import StrategyType
 
-from .notification.notification_content import NotificationType
 from .notification.notification_handler import NotificationHandler
 
 
@@ -59,7 +59,6 @@ class GridTradingBot:
             self.notification_handler = notification_handler
             self.event_bus = event_bus
             self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop_bot_event)
-            self.event_bus.subscribe(Events.START_BOT, self._handle_start_bot_event)
             self.save_performance_results_path = save_performance_results_path
             self.no_plot = no_plot
             self.trading_mode: TradingMode = self.config_manager.get_trading_mode()
@@ -281,13 +280,9 @@ class GridTradingBot:
         finally:
             self.is_running = False
 
-    async def _handle_stop_bot_event(self, reason: str) -> None:
-        self.logger.info(f"Handling STOP_BOT event: {reason}")
+    async def _handle_stop_bot_event(self, request: StopRequest) -> None:
+        self.logger.info(f"Handling STOP_BOT event: {request.kind.value} ({request.reason})")
         await self._stop()
-
-    async def _handle_start_bot_event(self, reason: str) -> None:
-        self.logger.info(f"Handling START_BOT event: {reason}")
-        await self.restart()
 
     async def _stop(self) -> None:
         if not self.is_running:
@@ -315,46 +310,11 @@ class GridTradingBot:
     def _cleanup_subscriptions(self) -> None:
         """Unsubscribes all components from EventBus events."""
         self.event_bus.unsubscribe(Events.STOP_BOT, self._handle_stop_bot_event)
-        self.event_bus.unsubscribe(Events.START_BOT, self._handle_start_bot_event)
         self.order_manager.cleanup()
         self.balance_tracker.cleanup()
         if self.reconciliation_service:
             self.reconciliation_service.cleanup()
         self.notification_handler.cleanup()
-
-    async def restart(self) -> None:
-        if self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}:
-            self.logger.error(
-                "In-process restart/pause is not supported in live/paper trading mode. "
-                "Restart the process instead — state recovery will resume trading from the last checkpoint.",
-            )
-            await self.notification_handler.async_send_notification(
-                NotificationType.ERROR_OCCURRED,
-                error_details=(
-                    "Restart/pause requested but in-process restart is not supported in live/paper trading. "
-                    "Restart the bot process instead; state recovery will resume from the last checkpoint."
-                ),
-            )
-            return
-
-        if self.is_running:
-            self.logger.info("Bot is already running. Restarting...")
-            await self._stop()
-
-        self.logger.info("Restarting Grid Trading Bot...")
-        self.is_running = True
-
-        try:
-            self.order_manager.reset_shutdown_state()
-            self.order_status_tracker.start_tracking()
-            if self.reconciliation_service:
-                self.reconciliation_service.start()
-            await self.strategy.restart()
-
-        except Exception as e:
-            self.logger.error(f"Error while restarting components: {e}", exc_info=True)
-
-        self.logger.info("Grid Trading Bot has been restarted.")
 
     def _generate_and_log_performance(self) -> dict[str, Any] | None:
         metrics, performance_summary, formatted_orders = self.strategy.generate_performance_report()

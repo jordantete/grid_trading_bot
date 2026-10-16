@@ -1066,17 +1066,6 @@ class TestClosePositions:
         manager.cancel_open_grid_orders.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_reset_shutdown_state_rearms(self, setup_order_manager):
-        manager, *_ = setup_order_manager
-        manager.cancel_open_grid_orders = AsyncMock(return_value=True)
-
-        await manager.close_positions(liquidate=False)
-        manager.reset_shutdown_state()
-        await manager.close_positions(liquidate=False)
-
-        assert manager.cancel_open_grid_orders.await_count == 2
-
-    @pytest.mark.asyncio
     async def test_cancel_failure_still_attempts_liquidation_and_notifies(self, setup_order_manager):
         manager, _, _, balance_tracker, _, _, order_execution_strategy, notification_handler = setup_order_manager
         manager.cancel_open_grid_orders = AsyncMock(return_value=False)

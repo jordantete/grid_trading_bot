@@ -6,6 +6,7 @@ import pytest
 
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
+from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.reconciliation.reconciliation_service import ReconciliationService
 from grid_trading_bot.core.services.exceptions import DataFetchError
 
@@ -259,10 +260,6 @@ class TestLifecycle:
             "stop_bot",
             service._handle_stop,
         )
-        event_bus.unsubscribe.assert_any_call(
-            "start_bot",
-            service._handle_start,
-        )
 
     @pytest.mark.asyncio
     async def test_handle_stop_cancels_task(self, setup_reconciliation_service):
@@ -271,7 +268,7 @@ class TestLifecycle:
         service.start()
         assert service._monitoring_task is not None
 
-        service._handle_stop("User requested stop")
+        service._handle_stop(StopRequest(StopKind.MANUAL, "User requested stop"))
         await asyncio.sleep(0.1)
         assert service._monitoring_task.cancelled() or service._monitoring_task.done()
 

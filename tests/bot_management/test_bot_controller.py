@@ -7,6 +7,7 @@ import pytest
 from grid_trading_bot.core.bot_management.bot_controller.bot_controller import BotController
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
+from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 
 
 @pytest.mark.asyncio
@@ -63,7 +64,10 @@ class TestBotController:
 
         await self.run_command_test(bot_controller, mock_input)
 
-        event_bus.publish_sync.assert_called_once_with(Events.STOP_BOT, "User requested shutdown")
+        event_bus.publish_sync.assert_called_once_with(
+            Events.STOP_BOT,
+            StopRequest(StopKind.MANUAL, "User issued stop command"),
+        )
         assert bot_controller._stop_listening
 
     @pytest.mark.asyncio
@@ -100,20 +104,24 @@ class TestBotController:
 
         await self.run_command_test(bot_controller, mock_input)
 
-        event_bus.publish_sync.assert_called_once_with(Events.STOP_BOT, "User issued stop command")
+        event_bus.publish_sync.assert_called_once_with(
+            Events.STOP_BOT,
+            StopRequest(StopKind.MANUAL, "User issued stop command"),
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(2)
-    async def test_command_listener_restart(self, mock_input, setup_bot_controller):
+    @pytest.mark.parametrize("command", ["restart", "pause 5"])
+    async def test_removed_commands_are_unknown(self, command, mock_input, setup_bot_controller):
         bot_controller, _, event_bus = setup_bot_controller
-        mock_input.side_effect = ["restart", StopIteration]
         event_bus.publish_sync = Mock()
+        mock_input.side_effect = [command, StopIteration]
 
-        await self.run_command_test(bot_controller, mock_input)
+        with patch.object(bot_controller.logger, "warning") as mock_warning:
+            await self.run_command_test(bot_controller, mock_input)
 
-        assert event_bus.publish_sync.call_count == 2
-        event_bus.publish_sync.assert_any_call(Events.STOP_BOT, "User issued restart command")
-        event_bus.publish_sync.assert_any_call(Events.START_BOT, "User issued restart command")
+        mock_warning.assert_called_once()
+        event_bus.publish_sync.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(2)
@@ -130,7 +138,7 @@ class TestBotController:
         bot_controller, _, _ = setup_bot_controller
 
         with patch.object(bot_controller.logger, "info") as mock_logger:
-            bot_controller._handle_stop_event("Test stop reason")
+            bot_controller._handle_stop_event(StopRequest(StopKind.MANUAL, "Test stop reason"))
 
             assert bot_controller._stop_listening is True
             mock_logger.assert_has_calls(
@@ -154,16 +162,6 @@ class TestBotController:
                 "Unexpected error in command listener: Unexpected error",
                 exc_info=True,
             )
-
-    @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    async def test_command_listener_invalid_pause_duration(self, mock_input, setup_bot_controller):
-        bot_controller, _, _ = setup_bot_controller
-        mock_input.side_effect = ["pause invalid", StopIteration]
-
-        with patch.object(bot_controller.logger, "warning") as mock_logger:
-            await self.run_command_test(bot_controller, mock_input)
-            mock_logger.assert_called_once()
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(2)

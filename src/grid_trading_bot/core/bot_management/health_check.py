@@ -9,6 +9,7 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.bot_management.stop_request import StopRequest
 from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot
 from grid_trading_bot.utils.constants import RESOURCE_THRESHOLDS
 
@@ -72,7 +73,6 @@ class HealthCheck:
         self._last_alert_times: dict[str, datetime] = {}
         self.process.cpu_percent()  # First call to initialize CPU monitoring
         self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop)
-        self.event_bus.subscribe(Events.START_BOT, self._handle_start)
 
     async def start(self):
         """
@@ -294,14 +294,13 @@ class HealthCheck:
     def cleanup(self) -> None:
         """Unsubscribes from all EventBus events."""
         self.event_bus.unsubscribe(Events.STOP_BOT, self._handle_stop)
-        self.event_bus.unsubscribe(Events.START_BOT, self._handle_start)
 
-    def _handle_stop(self, reason: str) -> None:
+    def _handle_stop(self, request: StopRequest) -> None:
         """
         Handles the STOP_BOT event to stop the HealthCheck.
 
         Args:
-            reason: The reason for stopping the bot.
+            request: The stop request that ends the bot.
         """
         if not self._is_running:
             self.logger.warning("HealthCheck is not running.")
@@ -309,18 +308,4 @@ class HealthCheck:
 
         self._is_running = False
         self._stop_event.set()
-        self.logger.info(f"HealthCheck stopped: {reason}")
-
-    async def _handle_start(self, reason: str) -> None:
-        """
-        Handles the START_BOT event to start the HealthCheck.
-
-        Args:
-            reason: The reason for starting the bot.
-        """
-        if self._is_running:
-            self.logger.warning("HealthCheck is already running.")
-            return
-
-        self.logger.info(f"HealthCheck starting: {reason}")
-        await self.start()
+        self.logger.info(f"HealthCheck stopped: {request.reason}")

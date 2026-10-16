@@ -1,5 +1,5 @@
 import logging
-from unittest.mock import ANY, AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock
 
 import pandas as pd
 import pytest
@@ -7,6 +7,7 @@ import pytest
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
@@ -187,30 +188,6 @@ class TestGridTradingStrategy:
         # Verify connection still closes despite close_positions failure
         exchange_service.close_connection.assert_awaited_once()
         assert strategy._running is False
-
-    @pytest.mark.asyncio
-    async def test_restart_live_trading(self, setup_strategy):
-        create_strategy, _, exchange_service, grid_manager, _, _, _, _, _ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-        grid_manager.get_trigger_price.return_value = 10500
-        exchange_service.listen_to_ticker_updates = AsyncMock()
-        strategy._running = False
-
-        await strategy.restart()
-
-        # Assert that the strategy started and `listen_to_ticker_updates` was called
-        assert strategy._running is True, "Expected strategy to be running after restart in LIVE mode."
-
-        # Extract the actual callback passed to `listen_to_ticker_updates`
-        actual_call_args = exchange_service.listen_to_ticker_updates.call_args
-        actual_callback = actual_call_args[0][1]  # Extract the callback argument
-
-        # Verify `listen_to_ticker_updates` was called with the correct parameters
-        assert actual_call_args[0][0] == strategy.trading_pair, "Expected the trading pair to be passed."
-        assert actual_call_args[0][2] == strategy.TICKER_REFRESH_INTERVAL, (
-            "Expected the correct ticker refresh interval."
-        )
-        assert callable(actual_callback), "Expected a callable callback for on_ticker_update."
 
     @pytest.mark.asyncio
     async def test_run_backtest(self, setup_strategy):
@@ -492,6 +469,7 @@ class TestGridTradingStrategy:
 
         assert result is True
         event_bus.publish.assert_called_once()
+        assert event_bus.publish.await_args.args[1] == StopRequest(StopKind.RISK, "TP or SL hit.")
 
     @pytest.mark.asyncio
     async def test_initialize_grid_orders_once_already_initialized(self, setup_strategy):
@@ -573,18 +551,28 @@ class TestGridTradingStrategy:
         exchange_service.listen_to_ticker_updates.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_listen_failure_publishes_stop_bot(self, setup_strategy):
-        """A dead ticker feed (Task 13's DataFetchError) must stop the strategy and publish STOP_BOT
-        so the bot performs a clean shutdown instead of silently hanging."""
+    async def test_a_dead_feed_publishes_a_feed_lost_stop(self, setup_strategy):
         create_strategy, _, exchange_service, _, _, _, _, _, event_bus = setup_strategy
         strategy = create_strategy(TradingMode.LIVE)
-
         exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=DataFetchError("feed died"))
 
         await strategy._run_live_or_paper_trading()
 
-        event_bus.publish.assert_awaited_with(Events.STOP_BOT, ANY)
+        request = event_bus.publish.await_args.args[1]
+        assert event_bus.publish.await_args.args[0] == Events.STOP_BOT
+        assert request.kind is StopKind.FEED_LOST
+        assert "feed died" in request.reason
         assert strategy._running is False
+
+    @pytest.mark.asyncio
+    async def test_an_unexpected_loop_error_publishes_a_crash_stop(self, setup_strategy):
+        create_strategy, _, exchange_service, _, _, _, _, _, event_bus = setup_strategy
+        strategy = create_strategy(TradingMode.LIVE)
+        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=RuntimeError("bug"))
+
+        await strategy._run_live_or_paper_trading()
+
+        assert event_bus.publish.await_args.args[1].kind is StopKind.CRASH
 
     @pytest.mark.asyncio
     async def test_run_backtest_with_no_data(self, setup_strategy):
@@ -708,6 +696,7 @@ class TestTrailingStopOrchestration:
             current_price=94.0,
             stop_loss_order=True,
         )
+        assert s.event_bus.publish.await_args.args[1] == StopRequest(StopKind.RISK, "Trailing stop hit.")
 
     async def test_trailing_stop_with_regrid_trigger_rebuilds_grid(self, strategy_fixture):
         s = strategy_fixture
@@ -960,7 +949,10 @@ class TestGridFeasibilityOrchestration:
         result = await strategy._initialize_grid_orders_once(100.0, False)
 
         assert result is False
-        strategy.event_bus.publish.assert_awaited_with(Events.STOP_BOT, ANY)
+        request = strategy.event_bus.publish.await_args.args[1]
+        assert strategy.event_bus.publish.await_args.args[0] == Events.STOP_BOT
+        assert request.kind is StopKind.INFEASIBLE
+        assert "num_grids too high" in request.reason
         strategy.order_manager.perform_initial_purchase.assert_not_awaited()
 
     async def test_grid_feasibility_ok_proceeds_to_initial_purchase(self, strategy_fixture):

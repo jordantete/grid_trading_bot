@@ -9,6 +9,7 @@ import pandas as pd
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.indicators.atr_calculator import ATRCalculator
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
@@ -125,14 +126,6 @@ class GridTradingStrategy(TradingStrategyInterface):
                 self.logger.error(f"Failed to cancel open orders during stop: {e}", exc_info=True)
         await self.exchange_service.close_connection()
         self.logger.info("Trading execution stopped.")
-
-    async def restart(self):
-        """
-        Restarts the trading session. If the strategy is not running, starts it.
-        """
-        if not self._running:
-            self.logger.info("Restarting trading session.")
-            await self.run()
 
     async def run(
         self,
@@ -251,7 +244,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         except Exception as e:
             self.logger.error(f"Error in live/paper trading loop: {e}", exc_info=True)
             self._running = False
-            await self.event_bus.publish(Events.STOP_BOT, f"Live trading loop failed: {e}")
+            kind = StopKind.FEED_LOST if isinstance(e, DataFetchError) else StopKind.CRASH
+            await self.event_bus.publish(Events.STOP_BOT, StopRequest(kind, f"Live trading loop failed: {e}"))
 
         finally:
             self.logger.info("Exiting live/paper trading loop.")
@@ -346,7 +340,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         except GridFeasibilityError as e:
             self.logger.error(f"Grid infeasible: {e}")
             self.stop_reason = "grid_infeasible"
-            await self.event_bus.publish(Events.STOP_BOT, f"Grid infeasible: {e}")
+            await self.event_bus.publish(Events.STOP_BOT, StopRequest(StopKind.INFEASIBLE, f"Grid infeasible: {e}"))
             return False
 
         if not skip_initial_purchase:
@@ -436,7 +430,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         tp_or_sl_triggered = await self._evaluate_tp_or_sl(current_price)
         if tp_or_sl_triggered:
             self.logger.info("Take-profit or stop-loss triggered, ending trading session.")
-            await self.event_bus.publish(Events.STOP_BOT, "TP or SL hit.")
+            await self.event_bus.publish(Events.STOP_BOT, StopRequest(StopKind.RISK, "TP or SL hit."))
             return True
         return False
 
@@ -466,7 +460,7 @@ class GridTradingStrategy(TradingStrategyInterface):
                 current_price=current_price,
                 stop_loss_order=True,
             )
-            await self.event_bus.publish(Events.STOP_BOT, "Trailing stop hit.")
+            await self.event_bus.publish(Events.STOP_BOT, StopRequest(StopKind.RISK, "Trailing stop hit."))
             return True
 
         self.logger.info(f"Trailing stop triggered at {current_price}. Regridding around current price.")

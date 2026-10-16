@@ -9,6 +9,7 @@ from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.health_check import HealthCheck, ResourceMetrics, format_account_metrics
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot
 
 
@@ -213,19 +214,10 @@ class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
 
     async def test_stop_event(self):
         self.health_check._is_running = True
-        reason = "User initiated stop"
 
-        self.health_check._handle_stop(reason)
+        self.health_check._handle_stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
 
         assert not self.health_check._is_running
-
-    async def test_start_event(self):
-        self.health_check._is_running = False
-        self.health_check.start = AsyncMock()
-
-        await self.health_check._handle_start("User initiated start")
-
-        self.health_check.start.assert_awaited_once()
 
     async def test_perform_checks_success(self):
         self.bot.get_bot_health_status = AsyncMock(return_value={"strategy": True, "exchange_status": "ok"})
@@ -309,7 +301,7 @@ class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
         self.health_check._is_running = False
         self.health_check.logger.warning = Mock()
 
-        self.health_check._handle_stop("Already stopped")
+        self.health_check._handle_stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
 
         self.health_check.logger.warning.assert_called_once_with("HealthCheck is not running.")
 

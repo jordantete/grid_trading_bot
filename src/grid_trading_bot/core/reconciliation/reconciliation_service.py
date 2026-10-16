@@ -6,6 +6,7 @@ import logging
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.bot_management.stop_request import StopRequest
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.services.exceptions import DataFetchError
@@ -52,7 +53,6 @@ class ReconciliationService:
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop)
-        self.event_bus.subscribe(Events.START_BOT, self._handle_start)
 
     def start(self) -> None:
         if self._monitoring_task and not self._monitoring_task.done():
@@ -74,7 +74,6 @@ class ReconciliationService:
 
     def cleanup(self) -> None:
         self.event_bus.unsubscribe(Events.STOP_BOT, self._handle_stop)
-        self.event_bus.unsubscribe(Events.START_BOT, self._handle_start)
 
     async def _reconciliation_loop(self) -> None:
         try:
@@ -200,11 +199,7 @@ class ReconciliationService:
 
     # ── Event Handlers ───────────────────────────────────────────────────
 
-    def _handle_stop(self, reason: str) -> None:
+    def _handle_stop(self, request: StopRequest) -> None:
         if self._monitoring_task and not self._monitoring_task.done():
             self._monitoring_task.cancel()
-            self.logger.info(f"ReconciliationService stopping: {reason}")
-
-    async def _handle_start(self, reason: str) -> None:
-        self.logger.info(f"ReconciliationService starting: {reason}")
-        self.start()
+            self.logger.info(f"ReconciliationService stopping: {request.reason}")

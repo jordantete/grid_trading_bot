@@ -551,10 +551,6 @@ class OrderManager:
                     error_details=f"Error while performing initial purchase. {e}",
                 )
 
-    def reset_shutdown_state(self) -> None:
-        """Re-arms close_positions after a bot restart."""
-        self._positions_closed = False
-
     async def close_positions(self, liquidate: bool, current_price: float | None = None) -> None:
         """
         Unified shutdown path: cancels every open grid order (releasing reservations),
