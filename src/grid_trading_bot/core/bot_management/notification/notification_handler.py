@@ -29,6 +29,8 @@ class NotificationHandler:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.event_bus = event_bus
         self.enabled = bool(urls) and trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
+        if trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING} and not urls:
+            self.logger.warning("Notifications are disabled: APPRISE_NOTIFICATION_URLS is empty.")
         self.lock = asyncio.Lock()
         self.apprise_instance = apprise.Apprise() if self.enabled else None
 
@@ -72,7 +74,8 @@ class NotificationHandler:
                 title = "Notification"
                 message = content
 
-            self.apprise_instance.notify(title=title, body=message)
+            if not self.apprise_instance.notify(title=title, body=message):
+                self.logger.error(f"Notification not delivered: {title}")
 
     async def async_send_notification(
         self,

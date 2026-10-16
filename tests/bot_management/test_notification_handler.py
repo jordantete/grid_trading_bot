@@ -152,3 +152,23 @@ class TestNotificationHandler:
         with patch("apprise.Apprise.notify") as mock_notify:
             handler.send_notification(NotificationType.ORDER_FILLED, order_details="test")
             mock_notify.assert_not_called()
+
+    @pytest.mark.parametrize("urls", [None, []])
+    @pytest.mark.parametrize("mode", [TradingMode.LIVE, TradingMode.PAPER_TRADING])
+    def test_warns_when_live_notifications_are_disabled(self, urls, mode, event_bus, caplog):
+        NotificationHandler(event_bus=event_bus, urls=urls, trading_mode=mode)
+
+        assert "Notifications are disabled: APPRISE_NOTIFICATION_URLS is empty." in caplog.text
+
+    def test_no_warning_in_backtest(self, event_bus, caplog):
+        NotificationHandler(event_bus=event_bus, urls=None, trading_mode=TradingMode.BACKTEST)
+
+        assert "Notifications are disabled" not in caplog.text
+
+    def test_logs_an_undelivered_notification(self, notification_handler_enabled, caplog):
+        notification_handler_enabled.apprise_instance = Mock()
+        notification_handler_enabled.apprise_instance.notify.return_value = False
+
+        notification_handler_enabled.send_notification(NotificationType.ERROR_OCCURRED, error_details="x")
+
+        assert "Notification not delivered: Error Occurred" in caplog.text
