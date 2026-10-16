@@ -16,6 +16,8 @@ class OrderStatusTracker:
     when their states change (e.g., open, filled, canceled).
     """
 
+    HANDLER_DRAIN_TIMEOUT = 10.0  # seconds
+
     def __init__(
         self,
         order_book: OrderBook,
@@ -156,9 +158,18 @@ class OrderStatusTracker:
 
     async def stop_tracking(self) -> None:
         """
-        Stops the order tracking task.
+        Stops the order tracking task once the status handlers already running have finished, cancelling those
+        still running after HANDLER_DRAIN_TIMEOUT seconds.
         """
         if self._monitoring_task:
+            # Cancelling the monitoring task cancels the handlers it gathers, so they get their time first.
+            if self._active_tasks:
+                _, still_running = await asyncio.wait(set(self._active_tasks), timeout=self.HANDLER_DRAIN_TIMEOUT)
+                if still_running:
+                    self.logger.warning(
+                        f"Cancelling {len(still_running)} order status handler(s) still running after "
+                        f"{self.HANDLER_DRAIN_TIMEOUT} s."
+                    )
             self._monitoring_task.cancel()
             try:
                 await self._monitoring_task

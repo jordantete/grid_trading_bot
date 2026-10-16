@@ -92,16 +92,24 @@ class Run:
     def limit_order_ids(self):
         return {e["id"] for e in self.entries() if e["method"] == "create_order" and e["type"] == "limit"}
 
-    def wait_for_grid(self, timeout=30.0):
-        """Waits until every grid level holds a limit order."""
+    def open_order_ids(self):
+        cancelled = {e["id"] for e in self.entries() if e["method"] == "cancel_order"}
+        return self.limit_order_ids() - cancelled
+
+    def wait_for_limit_orders(self, count, timeout=30.0):
+        """Waits until at least `count` limit orders were placed."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if len(self.limit_order_ids()) >= NUM_GRIDS:
+            if len(self.limit_order_ids()) >= count:
                 return
             if self.process.poll() is not None:
                 raise AssertionError(f"bot exited early:\n{self.log.read_text()}")
-            time.sleep(0.1)
-        raise AssertionError(f"grid never placed:\n{self.log.read_text()}")
+            time.sleep(0.02)
+        raise AssertionError(f"{count} limit orders never placed:\n{self.log.read_text()}")
+
+    def wait_for_grid(self, timeout=30.0):
+        """Waits until every grid level holds a limit order."""
+        self.wait_for_limit_orders(NUM_GRIDS, timeout)
 
     def finish(self, timeout=30.0):
         return self.process.wait(timeout=timeout)
@@ -141,6 +149,20 @@ def test_sigterm_keeps_the_orders_and_exits_143(tmp_path):
     assert methods[-1] == "close"
     assert _saved_open_order_ids(tmp_path) == run.limit_order_ids()
     assert _halt_markers(tmp_path) == []
+
+
+def test_sigterm_while_the_grid_is_placed_waits_for_it_and_saves_every_order(tmp_path):
+    run = _start(tmp_path, "arming", scenario={"order_delay": 0.3})
+    run.wait_for_limit_orders(1)
+    assert len(run.limit_order_ids()) < NUM_GRIDS
+
+    run.process.send_signal(signal.SIGTERM)
+
+    assert run.finish() == 143, run.log.read_text()
+    methods = _methods(run)
+    assert "cancel_order" not in methods
+    assert "create_order" not in methods[methods.index("close") :]
+    assert _saved_open_order_ids(tmp_path) == run.open_order_ids()
 
 
 def test_a_lost_feed_keeps_the_orders_and_exits_75(tmp_path):

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from unittest.mock import AsyncMock, Mock
 
@@ -1005,3 +1006,82 @@ class TestLiveAtrRefresh:
         # "1M" (month) must map, not KeyError — ConfigValidator accepts it as a timeframe.
         assert strategy_fixture._timeframe_to_seconds("1M") == 2_592_000
         assert strategy_fixture._timeframe_to_seconds("1m") == 60  # minute still distinct
+
+
+class TestTickDrain:
+    @staticmethod
+    def _live_with_one_tick(strategy):
+        strategy.trading_mode = TradingMode.LIVE
+
+        async def one_tick(_pair, on_tick, _interval):
+            await on_tick(100.0)
+
+        strategy.exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=one_tick)
+        return strategy
+
+    @staticmethod
+    def _block_the_tick(strategy, may_finish: asyncio.Event, events: list) -> asyncio.Event:
+        started = asyncio.Event()
+
+        async def slow_arming(*_args, **_kwargs):
+            started.set()
+            await may_finish.wait()
+            events.append("tick finished")
+            return False
+
+        strategy._initialize_grid_orders_once = AsyncMock(side_effect=slow_arming)
+        return started
+
+    async def test_the_drain_waits_for_a_ticker_update_in_flight(self, strategy_fixture):
+        s = self._live_with_one_tick(strategy_fixture)
+        may_finish = asyncio.Event()
+        events = []
+        started = self._block_the_tick(s, may_finish, events)
+        run = asyncio.create_task(s.run())
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        drain = asyncio.create_task(s.wait_for_tick_to_finish(timeout=5))
+        await asyncio.sleep(0.02)
+        assert not drain.done()
+
+        may_finish.set()
+        await asyncio.wait_for(drain, timeout=1)
+        events.append("drained")
+        await asyncio.wait_for(run, timeout=1)
+
+        assert events == ["tick finished", "drained"]
+
+    async def test_a_stop_published_inside_a_ticker_update_does_not_wait_for_it(self, strategy_fixture):
+        s = self._live_with_one_tick(strategy_fixture)
+        s.event_bus = EventBus()
+        drained = []
+
+        async def on_stop(_request):
+            await s.wait_for_tick_to_finish(timeout=30)
+            drained.append(True)
+
+        s.event_bus.subscribe(Events.STOP_BOT, on_stop)
+        s._initialize_grid_orders_once = AsyncMock(return_value=True)
+        s._maybe_refresh_live_atr = AsyncMock(return_value=False)
+        s._handle_trailing_stop = AsyncMock(return_value=False)
+        s._evaluate_tp_or_sl = AsyncMock(return_value=True)
+
+        await asyncio.wait_for(s.run(), timeout=1)
+
+        assert drained == [True]
+
+    async def test_the_drain_gives_up_after_its_timeout_with_a_warning(self, strategy_fixture, caplog):
+        s = self._live_with_one_tick(strategy_fixture)
+        may_finish = asyncio.Event()
+        started = self._block_the_tick(s, may_finish, [])
+        run = asyncio.create_task(s.run())
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        with caplog.at_level(logging.WARNING, logger="GridTradingStrategy"):
+            await asyncio.wait_for(s.wait_for_tick_to_finish(timeout=0.05), timeout=1)
+
+        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "ticker update" in warnings[0].getMessage()
+        may_finish.set()
+        await asyncio.wait_for(run, timeout=1)

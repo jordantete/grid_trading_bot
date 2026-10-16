@@ -48,6 +48,7 @@ from .notification.notification_handler import NotificationHandler
 
 class GridTradingBot:
     TICKER_FEED_STALENESS_THRESHOLD = 120.0  # seconds
+    TICK_DRAIN_TIMEOUT = 20.0  # seconds
 
     def __init__(
         self,
@@ -352,8 +353,9 @@ class GridTradingBot:
 
     async def _shutdown(self, request: StopRequest) -> None:
         """
-        Runs the shutdown sequence at most once: stops tracking, cancels the open orders only for a halt, writes
-        the final checkpoint once the state was loaded and the halt marker, notifies, then closes the exchange last.
+        Runs the shutdown sequence at most once: stops tracking and the strategy, waits for the ticker update in
+        progress, cancels the open orders only for a halt, writes the final checkpoint once the state was loaded and
+        the halt marker, notifies, then closes the exchange last.
         """
         if self._shutdown_started:
             return
@@ -365,6 +367,7 @@ class GridTradingBot:
                 await self._attempt("reconciliation", self.reconciliation_service.stop)
             await self._attempt("order tracking", self.order_status_tracker.stop_tracking)
             await self._attempt("strategy", self.strategy.stop)
+            await self._attempt("ticker update", lambda: self.strategy.wait_for_tick_to_finish(self.TICK_DRAIN_TIMEOUT))
             if request.kind.halts and self._is_live_or_paper():
                 await self._attempt("order cancellation", lambda: self.order_manager.close_positions(liquidate=False))
             if self.state_persistence_service:

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -225,3 +226,55 @@ class TestOrderStatusTracker:
 
         tracker._handle_order_status_change.assert_any_call(mock_remote_order1)
         tracker._handle_order_status_change.assert_any_call(mock_remote_order2)
+
+
+class TestStopTrackingDrain:
+    @staticmethod
+    def _one_query_in_flight(tracker, order_book, order_execution_strategy, query):
+        order_book.get_open_orders.return_value = [Mock(identifier="order_1", symbol="BTC/USDT")]
+        started = asyncio.Event()
+
+        async def query_side_effect(*_args):
+            started.set()
+            return await query()
+
+        order_execution_strategy.get_order = AsyncMock(side_effect=query_side_effect)
+        return started
+
+    async def test_stop_tracking_lets_a_status_handler_in_flight_finish(self, setup_tracker):
+        tracker, order_book, order_execution_strategy, _ = setup_tracker
+        handled = []
+
+        async def slow_query():
+            await asyncio.sleep(0.05)
+            return Mock(identifier="order_1")
+
+        started = self._one_query_in_flight(tracker, order_book, order_execution_strategy, slow_query)
+        tracker._handle_order_status_change = AsyncMock(side_effect=lambda order: handled.append(order.identifier))
+        tracker.start_tracking()
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        await asyncio.wait_for(tracker.stop_tracking(), timeout=1)
+
+        assert handled == ["order_1"]
+        assert tracker._monitoring_task is None
+
+    async def test_stop_tracking_cancels_a_status_handler_that_outlasts_the_bound(self, setup_tracker, caplog):
+        tracker, order_book, order_execution_strategy, _ = setup_tracker
+        tracker.HANDLER_DRAIN_TIMEOUT = 0.05
+
+        async def stuck_query():
+            await asyncio.Event().wait()
+
+        started = self._one_query_in_flight(tracker, order_book, order_execution_strategy, stuck_query)
+        tracker.start_tracking()
+        await asyncio.wait_for(started.wait(), timeout=1)
+        handler = next(iter(tracker._active_tasks))
+
+        with caplog.at_level(logging.WARNING, logger="OrderStatusTracker"):
+            await asyncio.wait_for(tracker.stop_tracking(), timeout=1)
+
+        assert handler.cancelled()
+        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "cancel" in warnings[0].getMessage().lower()

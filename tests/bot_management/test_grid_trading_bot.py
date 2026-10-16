@@ -615,6 +615,16 @@ class TestShutdownSequence(BotFixtures):
         assert bot.notification_handler.async_send_notification.await_args.args[0] == NotificationType.BOT_HALTED
 
     @pytest.mark.asyncio
+    async def test_a_stop_waits_for_the_ticker_update_once_the_strategy_is_stopped(self, bot, tmp_path):
+        calls = []
+        _record_shutdown(bot, calls, _run_files(tmp_path))
+        bot.strategy.wait_for_tick_to_finish = AsyncMock(side_effect=lambda timeout: calls.append(f"tick {timeout}"))
+
+        await bot._stop(StopRequest(StopKind.MANUAL, "User issued stop command"))
+
+        assert calls == ["tracking", "strategy", "tick 20.0", "cancel", "checkpoint", "notify", "close"]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "request_",
         [

@@ -70,6 +70,9 @@ class FakeExchange:
         return {"last": self._price}
 
     async def create_order(self, pair, order_type, side, amount, price=None, params=None):
+        delay = self.scenario.get("order_delay")
+        if delay:
+            await asyncio.sleep(delay)
         order_id = str(next(self._ids))
         is_market = order_type == "market"
         order = {

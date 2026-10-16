@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+from contextvars import ContextVar
 import logging
 import math
 
@@ -24,6 +25,9 @@ from grid_trading_bot.strategies.plotter import Plotter
 from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
 
 from .trading_strategy_interface import TradingStrategyInterface
+
+# Tasks started inside a ticker update copy the context, so a stop published from the update sees True.
+_IN_TICK: ContextVar[bool] = ContextVar("in_ticker_update", default=False)
 
 
 class GridTradingStrategy(TradingStrategyInterface):
@@ -59,6 +63,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.close_prices = None
         self.live_trading_metrics: deque = deque(maxlen=self.MAX_LIVE_METRICS)
         self._running = True
+        self._tick_lock = asyncio.Lock()
         self.armed = False
         self.stop_reason: str | None = None
         self._starting_account_value: float | None = None
@@ -118,6 +123,20 @@ class GridTradingStrategy(TradingStrategyInterface):
         self._running = False
         await self.exchange_service.close_connection()
         self.logger.info("Trading execution stopped.")
+
+    async def wait_for_tick_to_finish(self, timeout: float) -> None:
+        """
+        Waits up to `timeout` seconds for a ticker update in progress to finish. Returns at once when called from
+        inside that update, which cannot finish before its own stop does.
+        """
+        if _IN_TICK.get():
+            return
+        try:
+            await asyncio.wait_for(self._tick_lock.acquire(), timeout)
+        except TimeoutError:
+            self.logger.warning(f"A ticker update was still running after {timeout} s; shutting down without it.")
+            return
+        self._tick_lock.release()
 
     async def run(
         self,
@@ -184,6 +203,14 @@ class GridTradingStrategy(TradingStrategyInterface):
         grid_orders_initialized = skip_grid_init
 
         async def on_ticker_update(current_price):
+            async with self._tick_lock:
+                token = _IN_TICK.set(True)
+                try:
+                    await process_ticker_update(current_price)
+                finally:
+                    _IN_TICK.reset(token)
+
+        async def process_ticker_update(current_price):
             nonlocal grid_orders_initialized
             try:
                 if not self._running:
