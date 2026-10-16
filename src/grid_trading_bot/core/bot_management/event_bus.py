@@ -80,19 +80,19 @@ class EventBus:
         data: Any = None,
     ) -> None:
         """
-        Publishes an event asynchronously to all subscribers.
+        Publishes an event: sync subscribers run on the loop thread, async ones are awaited together.
         """
         if event_type not in self.subscribers:
             self.logger.warning(f"No subscribers for event: {event_type}")
             return
 
         self.logger.info(f"Publishing async event: {event_type} with data: {data}")
-        tasks = [
-            self._safe_invoke_async(callback, data)
-            if inspect.iscoroutinefunction(callback)
-            else asyncio.to_thread(self._safe_invoke_sync, callback, data)
-            for callback in self.subscribers[event_type]
-        ]
+        tasks = []
+        for callback in list(self.subscribers[event_type]):
+            if inspect.iscoroutinefunction(callback):
+                tasks.append(self._safe_invoke_async(callback, data))
+            else:
+                self._safe_invoke_sync(callback, data)
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for result in results:

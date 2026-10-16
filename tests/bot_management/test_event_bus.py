@@ -1,3 +1,4 @@
+import threading
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -42,6 +43,30 @@ class TestEventBus:
 
         assert "Exception in async event callback" in caplog.text
         assert "Test Error" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_publish_runs_sync_subscribers_on_the_loop_thread(self, event_bus):
+        threads = []
+        event_bus.subscribe(Events.STOP_BOT, lambda _data: threads.append(threading.get_ident()))
+
+        await event_bus.publish(Events.STOP_BOT, "x")
+
+        assert threads == [threading.get_ident()]
+
+    @pytest.mark.asyncio
+    async def test_a_subscriber_may_unsubscribe_during_publish(self, event_bus):
+        calls = []
+
+        def first(_data):
+            calls.append("first")
+            event_bus.unsubscribe(Events.STOP_BOT, first)
+
+        event_bus.subscribe(Events.STOP_BOT, first)
+        event_bus.subscribe(Events.STOP_BOT, lambda _data: calls.append("second"))
+
+        await event_bus.publish(Events.STOP_BOT, "x")
+
+        assert calls == ["first", "second"]
 
     def test_publish_sync(self, event_bus):
         sync_callback = Mock()

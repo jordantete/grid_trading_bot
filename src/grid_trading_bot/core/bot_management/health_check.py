@@ -72,6 +72,7 @@ class HealthCheck:
         self.metrics_history_size = metrics_history_size
         self._last_alert_times: dict[str, datetime] = {}
         self.process.cpu_percent()  # First call to initialize CPU monitoring
+        psutil.cpu_percent(interval=None)  # First call primes the system-wide counter
         self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop)
 
     async def start(self):
@@ -189,7 +190,7 @@ class HealthCheck:
             Dictionary containing various resource metrics.
         """
         # Get system-wide metrics
-        cpu_percent = psutil.cpu_percent(interval=1)  # 1 second interval for accurate measurement
+        cpu_percent = psutil.cpu_percent(interval=None)
         virtual_memory = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
 

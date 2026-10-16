@@ -67,6 +67,17 @@ class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
         assert usage["memory"] == 85
         assert usage["disk"] == 10
 
+    def test_cpu_is_sampled_without_blocking(self):
+        with (
+            patch("psutil.cpu_percent", return_value=10.0) as mock_cpu,
+            patch("psutil.virtual_memory"),
+            patch("psutil.disk_usage"),
+        ):
+            self.health_check._check_resource_usage()
+
+        assert mock_cpu.call_args_list
+        assert all(call.kwargs.get("interval") is None for call in mock_cpu.call_args_list)
+
     async def test_resource_metrics_collection(self):
         """Test that resource metrics are properly collected and stored"""
         with (
