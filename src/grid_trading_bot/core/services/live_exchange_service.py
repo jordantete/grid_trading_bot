@@ -66,6 +66,8 @@ class LiveExchangeService(ExchangeInterface):
         self.secret_key = self._get_env_variable("EXCHANGE_SECRET_KEY")
         self.exchange = self._initialize_exchange()
         self.connection_active = False
+        self._closing = False
+        self._exchange_closed = False
         self.websocket_max_retries: int = self.config_manager.get_websocket_max_retries()
         self.websocket_retry_base_delay: int = self.config_manager.get_websocket_retry_base_delay()
         self.post_only: bool = self.config_manager.get_post_only()
@@ -175,10 +177,12 @@ class LiveExchangeService(ExchangeInterface):
         on_ticker_update: Callable[[float], None],
         update_interval: float,
     ) -> None:
+        if self._closing:
+            return
         self.connection_active = True
         retry_count = 0
 
-        while self.connection_active:
+        while self.connection_active and not self._closing:
             try:
                 ticker = await self.exchange.watch_ticker(pair)
                 current_price = self._validate_price(ticker.get("last"), pair)
@@ -196,6 +200,8 @@ class LiveExchangeService(ExchangeInterface):
                 retry_count = 0  # Reset retry count after a successful operation
 
             except (NetworkError, ExchangeError) as e:
+                if self._closing:
+                    break
                 retry_count += 1
                 retry_interval = min(retry_count * self.websocket_retry_base_delay, 60)
                 self.logger.error(
@@ -218,6 +224,8 @@ class LiveExchangeService(ExchangeInterface):
                 break
 
             except Exception as e:
+                if self._closing:
+                    break
                 retry_count += 1
                 retry_interval = min(retry_count * self.websocket_retry_base_delay, 60)
                 self.logger.error(
@@ -231,15 +239,6 @@ class LiveExchangeService(ExchangeInterface):
                     ) from e
                 await asyncio.sleep(retry_interval)
 
-            finally:
-                if not self.connection_active:
-                    try:
-                        self.logger.info("Connection to Websocket no longer active.")
-                        await self.exchange.close()
-
-                    except Exception as e:
-                        self.logger.error(f"Error while closing WebSocket connection: {e}", exc_info=True)
-
     async def listen_to_ticker_updates(
         self,
         pair: str,
@@ -249,8 +248,22 @@ class LiveExchangeService(ExchangeInterface):
         await self._subscribe_to_ticker_updates(pair, on_price_update, update_interval)
 
     async def close_connection(self) -> None:
+        """Ends the ticker loop; the exchange stays open for the shutdown's REST calls."""
+        self._closing = True
         self.connection_active = False
-        self.logger.info("Closing WebSocket connection...")
+        self.logger.info("Stopping the ticker feed...")
+
+    async def close(self) -> None:
+        """Closes the ccxt instance once; the bot calls it last during its shutdown."""
+        await self.close_connection()
+        if self._exchange_closed:
+            return
+        self._exchange_closed = True
+        try:
+            await self.exchange.close()
+            self.logger.info("Exchange connection closed.")
+        except Exception as e:
+            self.logger.error(f"Error while closing the exchange connection: {e}", exc_info=True)
 
     async def get_balance(self) -> dict[str, Any]:
         try:

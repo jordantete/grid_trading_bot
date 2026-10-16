@@ -201,3 +201,6 @@ class BacktestExchangeService(ExchangeInterface):
 
     async def close_connection(self) -> None:
         self.logger.info("[BACKTEST] Closing WebSocket connection...")
+
+    async def close(self) -> None:
+        pass

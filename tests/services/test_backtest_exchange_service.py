@@ -197,3 +197,9 @@ class TestBacktestExchangeService:
         with patch.object(service, "logger") as mock_logger:
             await service.close_connection()
             mock_logger.info.assert_called_once_with("[BACKTEST] Closing WebSocket connection...")
+
+    @pytest.mark.asyncio
+    async def test_close_is_a_no_op(self, config_manager):
+        service = BacktestExchangeService(config_manager)
+
+        await service.close()

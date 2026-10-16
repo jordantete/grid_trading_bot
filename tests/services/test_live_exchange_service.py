@@ -442,7 +442,7 @@ class TestLiveExchangeService:
     @pytest.mark.asyncio
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    async def test_subscribe_to_ticker_updates_close_error(
+    async def test_the_ticker_loop_never_closes_the_exchange(
         self,
         mock_getattr,
         mock_ccxtpro,
@@ -453,15 +453,15 @@ class TestLiveExchangeService:
         mock_getattr.return_value = mock_ccxtpro.binance
         mock_ccxtpro.binance.return_value = mock_exchange_instance
         mock_exchange_instance.watch_ticker = AsyncMock(side_effect=asyncio.CancelledError())
-        mock_exchange_instance.close = AsyncMock(side_effect=Exception("Close error"))
+        mock_exchange_instance.close = AsyncMock()
 
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
         service.connection_active = True
         on_ticker_update = AsyncMock()
 
-        with patch.object(service.logger, "error") as mock_logger_error:
-            await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
-            mock_logger_error.assert_any_call("Error while closing WebSocket connection: Close error", exc_info=True)
+        await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
+
+        mock_exchange_instance.close.assert_not_awaited()
 
     @pytest.mark.parametrize(
         ("exchange_name", "expected_url"),
@@ -1105,7 +1105,7 @@ class TestWebSocketFailureHandling:
             await exchange_service.listen_to_ticker_updates("SOL/USDT", AsyncMock(), 0.0)
 
         assert exchange_service.connection_active is False
-        exchange_service.exchange.close.assert_awaited_once()
+        exchange_service.exchange.close.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(5)
@@ -1130,7 +1130,49 @@ class TestWebSocketFailureHandling:
         await exchange_service.listen_to_ticker_updates("SOL/USDT", on_ticker_update, 0.0)
 
         assert exchange_service.connection_active is False
+        exchange_service.exchange.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_close_closes_the_exchange_once(self, exchange_service):
+        exchange_service.exchange.close = AsyncMock()
+
+        await exchange_service.close()
+        await exchange_service.close()
+
         exchange_service.exchange.close.assert_awaited_once()
+        assert exchange_service.connection_active is False
+
+    @pytest.mark.asyncio
+    async def test_close_logs_a_close_error_without_raising(self, exchange_service):
+        exchange_service.exchange.close = AsyncMock(side_effect=Exception("Close error"))
+
+        with patch.object(exchange_service.logger, "error") as mock_error:
+            await exchange_service.close()
+
+        mock_error.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.timeout(5)
+    async def test_an_error_after_a_requested_stop_ends_the_loop_without_retrying(self, exchange_service):
+        exchange_service.websocket_max_retries = 5
+        exchange_service.websocket_retry_base_delay = 30
+
+        async def watch_ticker(_pair):
+            await exchange_service.close_connection()
+            raise RuntimeError("instance was closed by the user")
+
+        exchange_service.exchange.watch_ticker = watch_ticker
+
+        await asyncio.wait_for(exchange_service.listen_to_ticker_updates("SOL/USDT", AsyncMock(), 0.0), timeout=1)
+
+    @pytest.mark.asyncio
+    async def test_a_feed_stopped_before_it_starts_never_listens(self, exchange_service):
+        exchange_service.exchange.watch_ticker = AsyncMock()
+
+        await exchange_service.close_connection()
+        await exchange_service.listen_to_ticker_updates("SOL/USDT", AsyncMock(), 0.0)
+
+        exchange_service.exchange.watch_ticker.assert_not_awaited()
 
 
 class TestLiveExchangeServicePostOnly:

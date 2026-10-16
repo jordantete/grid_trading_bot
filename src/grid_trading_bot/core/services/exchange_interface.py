@@ -75,3 +75,8 @@ class ExchangeInterface(ABC):
     async def close_connection(self) -> None:
         """Close current exchange connection."""
         pass
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Releases the exchange connection; called once, last, by the bot's shutdown."""
+        pass
