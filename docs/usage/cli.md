@@ -121,8 +121,10 @@ See [Going Live](going-live.md#4-stopping) for what causes a halt.
 
 In **live** and **paper trading** modes, the bot starts a command listener (BotController) that accepts commands while the bot is running. The listener runs only in an interactive terminal: in a detached container or under a service manager it does not start.
 
+The listener prints no prompt. When it starts, it logs:
+
 ```
-Enter command (quit, orders, balance, stop):
+Command listener started. Commands: orders, balance, stop, quit.
 ```
 
 ### Command Reference
@@ -140,16 +142,18 @@ After `stop` or `quit`, no relaunch trades until [`resume`](#resume) is run.
 
 ### Examples
 
+Type a command and press Enter.
+
 Halt the bot:
 
 ```
-Enter command: stop
+stop
 ```
 
 View active orders:
 
 ```
-Enter command: orders
+orders
 ```
 
 The `orders` command outputs a table with the following columns:

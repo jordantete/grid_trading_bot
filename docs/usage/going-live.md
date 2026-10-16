@@ -89,18 +89,25 @@ A config change gives a new hash, so a new state database and no marker.
 # Start the bot (add --build after a code change)
 docker compose --profile bot up -d bot
 
-# Suspend: orders kept, exit 143, relaunched after a reboot
+# Suspend: orders kept, exit 143, relaunched after a Docker daemon restart or a reboot
 docker compose stop bot
+
+# Suspend and keep it down across reboots: orders kept, container removed
+docker compose down bot
 
 # Halt: orders cancelled, exit 0, stays down
 docker compose kill -s SIGUSR1 bot
 
 # After a halt: clear it, then start a new grid
-docker compose run --rm bot resume --config config/config.json
+docker compose run --rm bot resume --config ${BOT_CONFIG:-config/config.json}
 docker compose --profile bot up -d bot
 ```
 
 The compose file sets `restart: on-failure`. A halted bot exits with 0 and stays down, while a crash, a lost feed or a reboot relaunches it. The container gets the default SIGTERM and a 30 second grace period, and has no `stdin_open`: the command listener only runs in an interactive terminal.
+
+`on-failure` looks at the exit code only. A container stopped by `docker compose stop` exits with 143, so the Docker daemon relaunches it after a daemon restart or a host reboot. To keep a suspended bot down across reboots, remove it with `docker compose down bot`, or halt it with SIGUSR1. The manual Docker check run before go-live confirms this behavior.
+
+The `resume` example passes `${BOT_CONFIG:-config/config.json}`, the same config file the service runs.
 
 | Exit code | Meaning | Relaunched by `on-failure` |
 |-----------|---------|----------------------------|
@@ -109,7 +116,7 @@ The compose file sets `restart: on-failure`. A halted bot exits with 0 and stays
 | 75 | Ticker feed lost | Yes |
 | 78 | Config error | Yes, and fails again until the config is fixed |
 | 130 | SIGINT | Yes |
-| 143 | SIGTERM (`docker compose stop`, reboot) | After a reboot, not after `docker compose stop` |
+| 143 | SIGTERM (`docker compose stop`, reboot) | After a Docker daemon restart or a host reboot, even when stopped by `docker compose stop` |
 
 ## 5. Crash / restart behavior
 
