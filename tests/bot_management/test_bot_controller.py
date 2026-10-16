@@ -1,6 +1,10 @@
 import asyncio
 import contextlib
-from unittest.mock import Mock, call, patch
+import io
+import os
+import sys
+import threading
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 
@@ -8,6 +12,11 @@ from grid_trading_bot.core.bot_management.bot_controller.bot_controller import B
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
+
+
+async def _listen(bot_controller, monkeypatch, text):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(text))
+    await asyncio.wait_for(bot_controller.command_listener(), timeout=2)
 
 
 @pytest.mark.asyncio
@@ -27,111 +36,71 @@ class TestBotController:
         bot_controller, _, _ = setup_bot_controller
         bot_controller.logger = Mock()
 
-    @pytest.fixture
-    def mock_input(self):
-        with patch("builtins.input") as mock_input:
-            yield mock_input
-
-    async def run_command_test(self, bot_controller, mock_input):
-        """Helper method to run command listener tests."""
-        listener_task = asyncio.create_task(bot_controller.command_listener())
-
-        try:
-            await asyncio.sleep(0.1)
-            bot_controller._stop_listening = True
-
-            try:
-                await asyncio.wait_for(listener_task, timeout=1.0)
-            except TimeoutError:
-                listener_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await listener_task
-
-        finally:
-            if not listener_task.done():
-                listener_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await listener_task
-
     @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    async def test_command_listener_quit(self, mock_input, setup_bot_controller):
+    @pytest.mark.parametrize("command", ["stop", "quit", "  STOP  "])
+    async def test_stop_and_quit_publish_a_manual_stop(self, command, setup_bot_controller, monkeypatch):
         bot_controller, _, event_bus = setup_bot_controller
-        mock_input.return_value = "quit"
-        event_bus.publish_sync = Mock()
+        event_bus.publish = AsyncMock()
 
-        mock_input.side_effect = ["quit", StopIteration]
+        await _listen(bot_controller, monkeypatch, f"{command}\n")
 
-        await self.run_command_test(bot_controller, mock_input)
-
-        event_bus.publish_sync.assert_called_once_with(
-            Events.STOP_BOT,
-            StopRequest(StopKind.MANUAL, "User issued stop command"),
+        event_bus.publish.assert_awaited_once_with(
+            Events.STOP_BOT, StopRequest(StopKind.MANUAL, "User issued stop command")
         )
-        assert bot_controller._stop_listening
 
     @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    async def test_command_listener_orders(self, mock_input, setup_bot_controller):
+    async def test_orders_and_balance_are_displayed(self, setup_bot_controller, monkeypatch):
         bot_controller, bot, _ = setup_bot_controller
-        # Set up mock to return "orders" and then raise StopIteration
-        mock_input.side_effect = ["orders", StopIteration]
-        bot.strategy.get_formatted_orders.return_value = [
-            ["BUY", "LIMIT", "OPEN", "50000", "0.1", "2024-01-01", "1", "0.1%"],
-        ]
 
-        await self.run_command_test(bot_controller, mock_input)
+        await _listen(bot_controller, monkeypatch, "orders\nbalance\n")
 
         bot.strategy.get_formatted_orders.assert_called_once()
-
-    @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    async def test_command_listener_balance(self, mock_input, setup_bot_controller):
-        bot_controller, bot, _ = setup_bot_controller
-        mock_input.side_effect = ["balance", StopIteration]
-        bot.get_balances.return_value = {"USD": 1000, "BTC": 0.1}
-
-        await self.run_command_test(bot_controller, mock_input)
-
         bot.get_balances.assert_called_once()
 
     @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    async def test_command_listener_stop(self, mock_input, setup_bot_controller):
+    @pytest.mark.parametrize("command", ["restart", "pause 5", "nonsense"])
+    async def test_unknown_commands_are_rejected(self, command, setup_bot_controller, monkeypatch):
         bot_controller, _, event_bus = setup_bot_controller
-        mock_input.side_effect = ["stop", StopIteration]
-        event_bus.publish_sync = Mock()
+        event_bus.publish = AsyncMock()
 
-        await self.run_command_test(bot_controller, mock_input)
+        await _listen(bot_controller, monkeypatch, f"{command}\n")
 
-        event_bus.publish_sync.assert_called_once_with(
-            Events.STOP_BOT,
-            StopRequest(StopKind.MANUAL, "User issued stop command"),
-        )
+        bot_controller.logger.warning.assert_called_once()
+        event_bus.publish.assert_not_awaited()
 
     @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    @pytest.mark.parametrize("command", ["restart", "pause 5"])
-    async def test_removed_commands_are_unknown(self, command, mock_input, setup_bot_controller):
-        bot_controller, _, event_bus = setup_bot_controller
-        event_bus.publish_sync = Mock()
-        mock_input.side_effect = [command, StopIteration]
-
-        with patch.object(bot_controller.logger, "warning") as mock_warning:
-            await self.run_command_test(bot_controller, mock_input)
-
-        mock_warning.assert_called_once()
-        event_bus.publish_sync.assert_not_called()
-
-    @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    async def test_command_listener_invalid_command(self, mock_input, setup_bot_controller):
+    async def test_end_of_input_ends_the_listener(self, setup_bot_controller, monkeypatch):
         bot_controller, _, _ = setup_bot_controller
-        mock_input.side_effect = ["invalid", StopIteration]
 
-        with patch.object(bot_controller.logger, "warning") as mock_logger:
-            await self.run_command_test(bot_controller, mock_input)
-            mock_logger.assert_called_once()
+        await _listen(bot_controller, monkeypatch, "")
+
+        bot_controller.logger.info.assert_any_call("Command input closed; command listener stopped.")
+
+    @pytest.mark.asyncio
+    async def test_a_command_error_does_not_end_the_listener(self, setup_bot_controller, monkeypatch):
+        bot_controller, bot, _ = setup_bot_controller
+        bot.get_balances.side_effect = [Exception("boom"), {}]
+
+        await _listen(bot_controller, monkeypatch, "balance\nbalance\n")
+
+        assert bot.get_balances.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_the_reader_thread_never_holds_the_process(self, setup_bot_controller, monkeypatch):
+        bot_controller, _, _ = setup_bot_controller
+        read_fd, write_fd = os.pipe()
+        monkeypatch.setattr(sys, "stdin", os.fdopen(read_fd))
+        listener = asyncio.create_task(bot_controller.command_listener())
+        await asyncio.sleep(0.05)
+
+        reader = next(thread for thread in threading.enumerate() if thread.name == "CommandReader")
+        assert reader.daemon is True
+
+        listener.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await listener
+        os.close(write_fd)
+        reader.join(timeout=2)
 
     @pytest.mark.asyncio
     async def test_handle_stop_event(self, setup_bot_controller):
@@ -148,20 +117,6 @@ class TestBotController:
                 ],
             )
             assert mock_logger.call_count == 2
-
-    @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    async def test_command_listener_unexpected_error(self, mock_input, setup_bot_controller):
-        bot_controller, _, _ = setup_bot_controller
-        mock_input.side_effect = Exception("Unexpected error")
-
-        with patch.object(bot_controller.logger, "error") as mock_logger:
-            await self.run_command_test(bot_controller, mock_input)
-
-            mock_logger.assert_called_with(
-                "Unexpected error in command listener: Unexpected error",
-                exc_info=True,
-            )
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(2)

@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import sys
+import threading
 
 from tabulate import tabulate
 
@@ -33,27 +35,36 @@ class BotController:
         self._stop_listening = False
         self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop_event)
 
-    async def command_listener(self):
-        """
-        Listens for user commands and processes them.
-        """
-        self.logger.info("Command listener started. Type 'quit' to exit.")
-        loop = asyncio.get_event_loop()
+    async def command_listener(self) -> None:
+        """Reads commands from stdin until end of input or a stop."""
+        loop = asyncio.get_running_loop()
+        lines: asyncio.Queue[str | None] = asyncio.Queue()
+        threading.Thread(target=self._read_lines, args=(loop, lines), name="CommandReader", daemon=True).start()
+        self.logger.info("Command listener started. Commands: orders, balance, stop, quit.")
 
         while not self._stop_listening:
+            line = await lines.get()
+            if line is None:
+                self.logger.info("Command input closed; command listener stopped.")
+                return
             try:
-                command = await loop.run_in_executor(
-                    None,
-                    input,
-                    "Enter command (orders, balance, stop, quit): ",
-                )
-                await self._handle_command(command.strip().lower())
-
+                await self._handle_command(line.strip().lower())
             except CommandParsingError as e:
                 self.logger.warning(f"Command error: {e}")
-
             except Exception as e:
                 self.logger.error(f"Unexpected error in command listener: {e}", exc_info=True)
+
+    @staticmethod
+    def _read_lines(loop: asyncio.AbstractEventLoop, lines: "asyncio.Queue[str | None]") -> None:
+        # A daemon thread, because a pending readline() must never keep the process alive after the bot stops.
+        while True:
+            line = sys.stdin.readline()
+            try:
+                loop.call_soon_threadsafe(lines.put_nowait, line or None)
+            except RuntimeError:
+                return
+            if not line:
+                return
 
     async def _handle_command(self, command: str):
         """
@@ -64,7 +75,7 @@ class BotController:
         """
         if command in {"stop", "quit"}:
             self.logger.info("Stop command received")
-            self.event_bus.publish_sync(Events.STOP_BOT, StopRequest(StopKind.MANUAL, "User issued stop command"))
+            await self.event_bus.publish(Events.STOP_BOT, StopRequest(StopKind.MANUAL, "User issued stop command"))
 
         elif command == "orders":
             await self._display_orders()
