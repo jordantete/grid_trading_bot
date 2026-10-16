@@ -701,6 +701,64 @@ class TestShutdownSequence(BotFixtures):
         assert calls.index("checkpoint") < calls.index("close")
 
     @pytest.mark.asyncio
+    async def test_a_stop_during_recovery_runs_once_recovery_returns_and_checkpoints_the_recovered_state(self, bot):
+        calls = []
+        _record_shutdown(bot, calls)
+        bot._state_ready = False
+        bot.order_manager.cleanup = Mock(side_effect=lambda: calls.append("order manager"))
+        recovery_started = asyncio.Event()
+        recovery_may_return = asyncio.Event()
+
+        async def slow_recovery():
+            recovery_started.set()
+            await recovery_may_return.wait()
+            calls.append("recovered")
+            return RecoveryResult(recovered=True, initial_purchase_done=True, grid_orders_initialized=True)
+
+        bot.state_recovery_service = Mock()
+        bot.state_recovery_service.attempt_recovery = AsyncMock(side_effect=slow_recovery)
+        bot.exchange_service.load_exchange_markets = AsyncMock()
+        bot.exchange_service.get_market_constraints = Mock(return_value=MarketConstraints(None, None))
+        bot.order_status_tracker.start_tracking = Mock()
+        bot.strategy.initialize_strategy = Mock()
+        bot.strategy.run = AsyncMock()
+        bot._generate_and_log_performance = Mock(return_value={})
+
+        run_task = asyncio.create_task(bot.run())
+        await asyncio.wait_for(recovery_started.wait(), timeout=1)
+        await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
+
+        assert calls == []
+        recovery_may_return.set()
+        await asyncio.wait_for(run_task, timeout=1)
+
+        assert calls == ["recovered", "tracking", "strategy", "checkpoint", "notify", "order manager", "close"]
+        bot.strategy.run.assert_not_awaited()
+        bot.order_status_tracker.start_tracking.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_stop_during_startup_then_a_startup_error_shuts_down_once(self, bot):
+        calls = []
+        _record_shutdown(bot, calls)
+        bot._state_ready = False
+        calls_when_requested = []
+
+        async def markets_fail(_pair):
+            await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
+            calls_when_requested.extend(calls)
+            raise ConnectionError("exchange unreachable")
+
+        bot.exchange_service.load_exchange_markets = AsyncMock(side_effect=markets_fail)
+
+        with pytest.raises(ConnectionError, match="exchange unreachable"):
+            await asyncio.wait_for(bot.run(), timeout=1)
+
+        assert calls_when_requested == []
+        assert calls == ["tracking", "strategy", "notify", "close"]
+        assert bot.stop_request.kind is StopKind.SIGNAL
+        bot.state_persistence_service.checkpoint_now.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_a_backtest_halt_writes_no_marker_and_sends_nothing(self, bot, tmp_path):
         calls = []
         _record_shutdown(bot, calls, _run_files(tmp_path))

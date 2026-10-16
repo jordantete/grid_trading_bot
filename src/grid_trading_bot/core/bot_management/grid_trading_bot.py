@@ -61,7 +61,9 @@ class GridTradingBot:
     ):
         self.run_files = run_files
         self.stop_request: StopRequest | None = None
+        self._starting = False
         self._state_ready = False
+        self._shutdown_started = False
         self._stopped = asyncio.Event()
         try:
             self.logger = logging.getLogger(self.__class__.__name__)
@@ -205,6 +207,7 @@ class GridTradingBot:
     async def run(self) -> dict[str, Any] | None:
         try:
             self.is_running = True
+            self._starting = True
             skip_initial_purchase = False
             skip_grid_init = False
             recovery_result = None
@@ -256,13 +259,13 @@ class GridTradingBot:
                     exchange_service=self.exchange_service,
                 )
 
+            self._starting = False
             self._state_ready = True
             if self.stop_request is None:
                 await self._start_trading(recovery_result, skip_initial_purchase, skip_grid_init)
             if self.stop_request is None and self._is_live_or_paper():
                 await self._stop(StopRequest(StopKind.CRASH, "Trading loop ended without a stop request"))
-            if self.stop_request is not None:
-                await self._stopped.wait()
+            await self._complete_stop()
 
             if not self.no_plot:
                 self.strategy.plot_results()
@@ -270,11 +273,12 @@ class GridTradingBot:
             return self._generate_and_log_performance()
 
         except Exception as e:
+            self._starting = False
             self.logger.error(f"An unexpected error occurred {e}")
             self.logger.error(traceback.format_exc())
-            if self._is_live_or_paper():
+            if self.stop_request is None and self._is_live_or_paper():
                 await self._stop(StopRequest(StopKind.CRASH, f"{type(e).__name__}: {e}"))
-                await self._stopped.wait()
+            await self._complete_stop()
             raise
 
         finally:
@@ -318,9 +322,8 @@ class GridTradingBot:
 
     async def _stop(self, request: StopRequest) -> None:
         """
-        Runs the shutdown once: stops tracking, cancels the open orders only for a halt, writes the final
-        checkpoint once the state was loaded and the halt marker, notifies, then closes the exchange last.
-        Later requests are ignored.
+        Records the first stop request and shuts down for it, or defers the shutdown until startup ends when
+        it arrives during startup. Later requests are ignored.
         """
         if self.stop_request is not None:
             self.logger.info(
@@ -329,6 +332,25 @@ class GridTradingBot:
             )
             return
         self.stop_request = request
+        if self._starting:
+            self.logger.info("Stop requested during startup; it runs once startup ends.")
+            return
+        await self._shutdown(request)
+
+    async def _complete_stop(self) -> None:
+        """Runs the shutdown of a pending stop request, if any, and waits until the shutdown has finished."""
+        if self.stop_request is not None:
+            await self._shutdown(self.stop_request)
+            await self._stopped.wait()
+
+    async def _shutdown(self, request: StopRequest) -> None:
+        """
+        Runs the shutdown sequence at most once: stops tracking, cancels the open orders only for a halt, writes
+        the final checkpoint once the state was loaded and the halt marker, notifies, then closes the exchange last.
+        """
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
         self.logger.info(f"Stopping Grid Trading Bot ({request.kind.value}): {request.reason}")
 
         try:
