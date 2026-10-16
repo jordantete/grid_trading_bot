@@ -57,8 +57,8 @@ class NotificationType(Enum):
         title="Bot Halted",
         message=(
             "Trading halted ({kind}): {reason}\n"
-            "Open orders were cancelled. The bot will not trade again until "
-            "`grid_trading_bot resume --config {config_path}` is run."
+            "The bot will not trade again until `grid_trading_bot resume --config {config_path}` is run. "
+            "Check the exchange for orders left open before resuming."
         ),
     )
     BOT_SUSPENDED = NotificationContent(

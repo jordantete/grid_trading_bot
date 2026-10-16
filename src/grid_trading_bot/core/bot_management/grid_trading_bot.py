@@ -25,7 +25,7 @@ from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatu
 from grid_trading_bot.core.persistence.run_files import HaltRecord, RunFiles, write_halt_marker
 from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
 from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
-from grid_trading_bot.core.persistence.state_recovery_service import RecoveryResult, StateRecoveryService
+from grid_trading_bot.core.persistence.state_recovery_service import StateRecoveryService
 from grid_trading_bot.core.reconciliation.reconciliation_service import ReconciliationService
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
@@ -207,6 +207,10 @@ class GridTradingBot:
     async def run(self) -> dict[str, Any] | None:
         try:
             self.is_running = True
+            if self.stop_request is not None:
+                await self._complete_stop()
+                return self._report_results()
+
             self._starting = True
             skip_initial_purchase = False
             skip_grid_init = False
@@ -259,18 +263,26 @@ class GridTradingBot:
                     exchange_service=self.exchange_service,
                 )
 
-            self._starting = False
             self._state_ready = True
+            # Placed even when a stop arrived during recovery: recovery already took these fills out of the open
+            # orders, so a final checkpoint without their pairs would lose them.
+            if recovery_result and recovery_result.orders_filled_while_down:
+                self.logger.info(
+                    f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
+                    f"orders filled while bot was down."
+                )
+                await self.order_manager.place_paired_orders_for_recovered_fills(
+                    recovery_result.orders_filled_while_down
+                )
+            self._starting = False
+
+            # _start_trading does not yield before strategy.run, so this one check covers everything it starts.
             if self.stop_request is None:
-                await self._start_trading(recovery_result, skip_initial_purchase, skip_grid_init)
+                await self._start_trading(skip_initial_purchase, skip_grid_init)
             if self.stop_request is None and self._is_live_or_paper():
                 await self._stop(StopRequest(StopKind.CRASH, "Trading loop ended without a stop request"))
             await self._complete_stop()
-
-            if not self.no_plot:
-                self.strategy.plot_results()
-
-            return self._generate_and_log_performance()
+            return self._report_results()
 
         except Exception as e:
             self._starting = False
@@ -284,19 +296,8 @@ class GridTradingBot:
         finally:
             self.is_running = False
 
-    async def _start_trading(
-        self,
-        recovery_result: RecoveryResult | None,
-        skip_initial_purchase: bool,
-        skip_grid_init: bool,
-    ) -> None:
-        if recovery_result and recovery_result.orders_filled_while_down:
-            self.logger.info(
-                f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
-                f"orders filled while bot was down."
-            )
-            await self.order_manager.place_paired_orders_for_recovered_fills(recovery_result.orders_filled_while_down)
-
+    async def _start_trading(self, skip_initial_purchase: bool, skip_grid_init: bool) -> None:
+        """Starts order tracking, periodic checkpoints, reconciliation and the strategy."""
         self.order_status_tracker.start_tracking()
         if self.state_persistence_service:
             self.state_persistence_service.start_periodic_checkpoints(
@@ -308,6 +309,11 @@ class GridTradingBot:
             skip_initial_purchase=skip_initial_purchase,
             skip_grid_init=skip_grid_init,
         )
+
+    def _report_results(self) -> dict[str, Any] | None:
+        if not self.no_plot:
+            self.strategy.plot_results()
+        return self._generate_and_log_performance()
 
     def _is_live_or_paper(self) -> bool:
         return self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
@@ -368,7 +374,7 @@ class GridTradingBot:
                 await self._attempt("persistence cleanup", self.state_persistence_service.cleanup)
             if self._is_live_or_paper():
                 if request.kind.halts and self.run_files is not None:
-                    self._write_halt_marker(request)
+                    await self._attempt("halt marker", lambda: self._write_halt_marker(request))
                 await self._attempt("stop notification", lambda: self._notify_stop(request))
             await self._attempt("subscription cleanup", self._cleanup_subscriptions)
         finally:
@@ -392,10 +398,7 @@ class GridTradingBot:
             pair=self.trading_pair,
             halted_at=datetime.now(UTC).isoformat(),
         )
-        try:
-            write_halt_marker(self.run_files.halt_path, record)
-        except OSError as e:
-            self.logger.error(f"Could not write the halt marker {self.run_files.halt_path}: {e}", exc_info=True)
+        write_halt_marker(self.run_files.halt_path, record)
 
     async def _notify_stop(self, request: StopRequest) -> None:
         if request.kind.halts:
