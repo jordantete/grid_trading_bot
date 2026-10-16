@@ -146,6 +146,7 @@ class GridTradingBot:
                 self.state_persistence_service = StatePersistenceService(
                     repository=state_repository,
                     event_bus=self.event_bus,
+                    notification_handler=self.notification_handler,
                     order_book=order_book,
                     grid_manager=grid_manager,
                     balance_tracker=self.balance_tracker,

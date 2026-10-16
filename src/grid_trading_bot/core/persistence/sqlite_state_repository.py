@@ -3,7 +3,7 @@ import sqlite3
 import threading
 from typing import Any
 
-from .state_repository_interface import StateRepositoryInterface
+from .state_repository_interface import StateRepositoryInterface, StateSnapshot
 
 SCHEMA_VERSION = 3
 
@@ -132,23 +132,32 @@ class SQLiteStateRepository(StateRepositoryInterface):
 
     # ── Bot State ────────────────────────────────────────────────────────
 
-    def save_bot_state(self, state: dict[str, Any]) -> None:
-        with self._write_lock:
-            self._conn.execute(
-                """INSERT OR REPLACE INTO bot_state
-                   (id, config_hash, trading_pair, strategy_type,
-                    initial_purchase_done, grid_orders_initialized, strategy_state, updated_at)
-                   VALUES (1, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-                (
-                    state["config_hash"],
-                    state["trading_pair"],
-                    state["strategy_type"],
-                    1 if state.get("initial_purchase_done") else 0,
-                    1 if state.get("grid_orders_initialized") else 0,
-                    state.get("strategy_state"),
-                ),
-            )
-            self._conn.commit()
+    def save_state(self, snapshot: StateSnapshot) -> None:
+        with self._write_lock, self._conn:
+            self._conn.execute("DELETE FROM orders")
+            self._conn.execute("DELETE FROM grid_levels")
+            self._upsert_bot_state(snapshot.bot_state)
+            self._upsert_balance_state(snapshot.balance_state)
+            for order_dict in snapshot.orders:
+                self._upsert_order(order_dict)
+            for grid_level_dict in snapshot.grid_levels:
+                self._upsert_grid_level(grid_level_dict)
+
+    def _upsert_bot_state(self, state: dict[str, Any]) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO bot_state
+               (id, config_hash, trading_pair, strategy_type,
+                initial_purchase_done, grid_orders_initialized, strategy_state, updated_at)
+               VALUES (1, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (
+                state["config_hash"],
+                state["trading_pair"],
+                state["strategy_type"],
+                1 if state.get("initial_purchase_done") else 0,
+                1 if state.get("grid_orders_initialized") else 0,
+                state.get("strategy_state"),
+            ),
+        )
 
     def load_bot_state(self) -> dict[str, Any] | None:
         cursor = self._conn.execute("SELECT * FROM bot_state WHERE id = 1")
@@ -167,25 +176,23 @@ class SQLiteStateRepository(StateRepositoryInterface):
 
     # ── Balance State ────────────────────────────────────────────────────
 
-    def save_balance_state(self, state: dict[str, str | None]) -> None:
-        with self._write_lock:
-            self._conn.execute(
-                """INSERT OR REPLACE INTO balance_state
-                   (id, fiat_balance, crypto_balance, total_fees,
-                    reserved_fiat, reserved_crypto, avg_cost, realized_pnl, peak_value, updated_at)
-                   VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-                (
-                    state["fiat_balance"],
-                    state["crypto_balance"],
-                    state["total_fees"],
-                    state["reserved_fiat"],
-                    state["reserved_crypto"],
-                    state.get("avg_cost"),
-                    state.get("realized_pnl"),
-                    state.get("peak_value"),
-                ),
-            )
-            self._conn.commit()
+    def _upsert_balance_state(self, state: dict[str, str | None]) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO balance_state
+               (id, fiat_balance, crypto_balance, total_fees,
+                reserved_fiat, reserved_crypto, avg_cost, realized_pnl, peak_value, updated_at)
+               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (
+                state["fiat_balance"],
+                state["crypto_balance"],
+                state["total_fees"],
+                state["reserved_fiat"],
+                state["reserved_crypto"],
+                state.get("avg_cost"),
+                state.get("realized_pnl"),
+                state.get("peak_value"),
+            ),
+        )
 
     def load_balance_state(self) -> dict[str, str | None] | None:
         cursor = self._conn.execute("SELECT * FROM balance_state WHERE id = 1")
@@ -205,17 +212,6 @@ class SQLiteStateRepository(StateRepositoryInterface):
         }
 
     # ── Orders ───────────────────────────────────────────────────────────
-
-    def save_order(self, order_dict: dict[str, Any]) -> None:
-        with self._write_lock:
-            self._upsert_order(order_dict)
-            self._conn.commit()
-
-    def save_orders(self, order_dicts: list[dict[str, Any]]) -> None:
-        with self._write_lock:
-            for order_dict in order_dicts:
-                self._upsert_order(order_dict)
-            self._conn.commit()
 
     def _upsert_order(self, d: dict[str, Any]) -> None:
         self._conn.execute(
@@ -255,17 +251,6 @@ class SQLiteStateRepository(StateRepositoryInterface):
         return [dict(row) for row in cursor.fetchall()]
 
     # ── Grid Levels ──────────────────────────────────────────────────────
-
-    def save_grid_level(self, grid_level_dict: dict[str, Any]) -> None:
-        with self._write_lock:
-            self._upsert_grid_level(grid_level_dict)
-            self._conn.commit()
-
-    def save_grid_levels(self, grid_level_dicts: list[dict[str, Any]]) -> None:
-        with self._write_lock:
-            for gl_dict in grid_level_dicts:
-                self._upsert_grid_level(gl_dict)
-            self._conn.commit()
 
     def _upsert_grid_level(self, d: dict[str, Any]) -> None:
         self._conn.execute(

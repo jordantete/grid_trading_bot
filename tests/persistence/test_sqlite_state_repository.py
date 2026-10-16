@@ -5,6 +5,32 @@ import tempfile
 import pytest
 
 from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
+from grid_trading_bot.core.persistence.state_repository_interface import StateSnapshot
+
+
+def _save(repo, *, bot_state=None, balance=None, orders=(), grid_levels=()):
+    repo.save_state(
+        StateSnapshot(
+            bot_state=bot_state
+            or {
+                "config_hash": "h",
+                "trading_pair": "ETH/USDT",
+                "strategy_type": "simple_grid",
+                "initial_purchase_done": False,
+                "grid_orders_initialized": False,
+            },
+            balance_state=balance
+            or {
+                "fiat_balance": "0",
+                "crypto_balance": "0",
+                "total_fees": "0",
+                "reserved_fiat": "0",
+                "reserved_crypto": "0",
+            },
+            orders=list(orders),
+            grid_levels=list(grid_levels),
+        )
+    )
 
 
 @pytest.fixture
@@ -109,7 +135,7 @@ class TestInitialize:
 
 class TestBotState:
     def test_bot_state_round_trip(self, repo, sample_bot_state):
-        repo.save_bot_state(sample_bot_state)
+        _save(repo, bot_state=sample_bot_state)
         loaded = repo.load_bot_state()
 
         assert loaded is not None
@@ -125,7 +151,7 @@ class TestBotState:
         assert result is None
 
     def test_bot_state_upsert(self, repo, sample_bot_state):
-        repo.save_bot_state(sample_bot_state)
+        _save(repo, bot_state=sample_bot_state)
 
         updated_state = {
             "config_hash": "def456",
@@ -134,7 +160,7 @@ class TestBotState:
             "initial_purchase_done": False,
             "grid_orders_initialized": True,
         }
-        repo.save_bot_state(updated_state)
+        _save(repo, bot_state=updated_state)
 
         loaded = repo.load_bot_state()
         assert loaded is not None
@@ -147,7 +173,7 @@ class TestBotState:
 
 class TestBalanceState:
     def test_balance_state_round_trip(self, repo, sample_balance_state):
-        repo.save_balance_state(sample_balance_state)
+        _save(repo, balance=sample_balance_state)
         loaded = repo.load_balance_state()
 
         assert loaded is not None
@@ -163,8 +189,14 @@ class TestBalanceState:
         assert result is None
 
     def test_accounting_fields_round_trip(self, repo, sample_balance_state):
-        repo.save_balance_state(
-            {**sample_balance_state, "avg_cost": "2950.123456789012", "realized_pnl": "-3.25", "peak_value": None}
+        _save(
+            repo,
+            balance={
+                **sample_balance_state,
+                "avg_cost": "2950.123456789012",
+                "realized_pnl": "-3.25",
+                "peak_value": None,
+            },
         )
 
         loaded = repo.load_balance_state()
@@ -176,7 +208,7 @@ class TestBalanceState:
 
 class TestOrders:
     def test_order_round_trip(self, repo, sample_order):
-        repo.save_order(sample_order)
+        _save(repo, orders=[sample_order])
         orders = repo.load_all_orders()
 
         assert len(orders) == 1
@@ -212,7 +244,7 @@ class TestOrders:
         order_3["identifier"] = "order-3"
         order_3["price"] = 90.0
 
-        repo.save_orders([sample_order, order_2, order_3])
+        _save(repo, orders=[sample_order, order_2, order_3])
         orders = repo.load_all_orders()
 
         assert len(orders) == 3
@@ -220,13 +252,13 @@ class TestOrders:
         assert identifiers == {"order-1", "order-2", "order-3"}
 
     def test_order_upsert(self, repo, sample_order):
-        repo.save_order(sample_order)
+        _save(repo, orders=[sample_order])
 
         updated_order = sample_order.copy()
         updated_order["status"] = "closed"
         updated_order["filled"] = 1.0
         updated_order["remaining"] = 0.0
-        repo.save_order(updated_order)
+        _save(repo, orders=[updated_order])
 
         orders = repo.load_all_orders()
         assert len(orders) == 1
@@ -237,7 +269,7 @@ class TestOrders:
 
 class TestGridLevels:
     def test_grid_level_round_trip(self, repo, sample_grid_level):
-        repo.save_grid_level(sample_grid_level)
+        _save(repo, grid_levels=[sample_grid_level])
         levels = repo.load_grid_levels()
 
         assert len(levels) == 1
@@ -269,7 +301,7 @@ class TestGridLevels:
                 "paired_sell_level_price": 3100.0,
             },
         ]
-        repo.save_grid_levels(levels)
+        _save(repo, grid_levels=levels)
         loaded = repo.load_grid_levels()
 
         assert len(loaded) == 3
@@ -277,11 +309,11 @@ class TestGridLevels:
         assert prices == {2900.0, 2950.0, 3000.0}
 
     def test_grid_level_upsert(self, repo, sample_grid_level):
-        repo.save_grid_level(sample_grid_level)
+        _save(repo, grid_levels=[sample_grid_level])
 
         updated_level = sample_grid_level.copy()
         updated_level["state"] = "WAITING_FOR_BUY_FILL"
-        repo.save_grid_level(updated_level)
+        _save(repo, grid_levels=[updated_level])
 
         levels = repo.load_grid_levels()
         assert len(levels) == 1
@@ -290,10 +322,13 @@ class TestGridLevels:
 
 class TestClearAll:
     def test_clear_all(self, repo, sample_bot_state, sample_balance_state, sample_order, sample_grid_level):
-        repo.save_bot_state(sample_bot_state)
-        repo.save_balance_state(sample_balance_state)
-        repo.save_order(sample_order)
-        repo.save_grid_level(sample_grid_level)
+        _save(
+            repo,
+            bot_state=sample_bot_state,
+            balance=sample_balance_state,
+            orders=[sample_order],
+            grid_levels=[sample_grid_level],
+        )
 
         # Verify data exists before clearing
         assert repo.load_bot_state() is not None
@@ -315,14 +350,14 @@ class TestStrategyStatePersistence:
             **sample_bot_state,
             "strategy_state": '{"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": 3.1}',
         }
-        repo.save_bot_state(state)
+        _save(repo, bot_state=state)
         loaded = repo.load_bot_state()
         assert loaded["strategy_state"] == (
             '{"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": 3.1}'
         )
 
     def test_bot_state_without_strategy_state_loads_none(self, repo, sample_bot_state):
-        repo.save_bot_state(sample_bot_state)
+        _save(repo, bot_state=sample_bot_state)
         loaded = repo.load_bot_state()
         assert loaded.get("strategy_state") is None
 
@@ -416,7 +451,7 @@ class TestSchemaMigrationV2ToV3:
             assert loaded["fiat_balance"] == "4500"
             assert (loaded["avg_cost"], loaded["realized_pnl"], loaded["peak_value"]) == (None, None, None)
 
-            repository.save_balance_state({**loaded, "avg_cost": "2900", "realized_pnl": "1.5", "peak_value": "6000"})
+            _save(repository, balance={**loaded, "avg_cost": "2900", "realized_pnl": "1.5", "peak_value": "6000"})
             reloaded = repository.load_balance_state()
             assert (reloaded["avg_cost"], reloaded["realized_pnl"], reloaded["peak_value"]) == ("2900", "1.5", "6000")
         finally:
@@ -436,7 +471,7 @@ class TestDecimalPrecision:
             "reserved_fiat": "0.00000000",
             "reserved_crypto": "123456789.12345678",
         }
-        repo.save_balance_state(balance_state)
+        _save(repo, balance=balance_state)
         loaded = repo.load_balance_state()
 
         assert loaded is not None
@@ -445,3 +480,29 @@ class TestDecimalPrecision:
         assert loaded["total_fees"] == "99999999.99999999"
         assert loaded["reserved_fiat"] == "0.00000000"
         assert loaded["reserved_crypto"] == "123456789.12345678"
+
+
+class TestSaveState:
+    def test_a_save_replaces_every_table(self, repo, sample_order, sample_grid_level):
+        _save(repo, orders=[sample_order], grid_levels=[sample_grid_level])
+        second_order = {**sample_order, "identifier": "order-2"}
+        second_level = {**sample_grid_level, "price": 3050.0}
+
+        _save(repo, orders=[second_order], grid_levels=[second_level])
+
+        assert [row["identifier"] for row in repo.load_all_orders()] == ["order-2"]
+        assert [row["price"] for row in repo.load_grid_levels()] == [3050.0]
+
+    def test_a_failed_save_leaves_the_previous_state_untouched(
+        self, repo, sample_order, sample_grid_level, monkeypatch
+    ):
+        _save(repo, orders=[sample_order])
+
+        def failing_upsert(_grid_level):
+            raise sqlite3.OperationalError("disk I/O error")
+
+        monkeypatch.setattr(repo, "_upsert_grid_level", failing_upsert)
+        with pytest.raises(sqlite3.OperationalError):
+            _save(repo, orders=[{**sample_order, "identifier": "order-2"}], grid_levels=[sample_grid_level])
+
+        assert [row["identifier"] for row in repo.load_all_orders()] == ["order-1"]

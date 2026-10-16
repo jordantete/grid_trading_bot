@@ -5,20 +5,27 @@ import logging
 from typing import Any
 
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
+from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order import Order
 from grid_trading_bot.core.order_handling.order_book import OrderBook
+from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 
 from .serializers import balance_to_dict, compute_config_hash, grid_level_to_dict, order_to_dict
-from .state_repository_interface import StateRepositoryInterface
+from .state_repository_interface import StateRepositoryInterface, StateSnapshot
 
 
 class StatePersistenceService:
+    MAX_CONSECUTIVE_FAILURES = 3
+
     def __init__(
         self,
         repository: StateRepositoryInterface,
         event_bus: EventBus,
+        notification_handler: NotificationHandler,
         order_book: OrderBook,
         grid_manager: GridManager,
         balance_tracker: BalanceTracker,
@@ -30,6 +37,7 @@ class StatePersistenceService:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.repository = repository
         self.event_bus = event_bus
+        self.notification_handler = notification_handler
         self.order_book = order_book
         self.grid_manager = grid_manager
         self.balance_tracker = balance_tracker
@@ -40,6 +48,8 @@ class StatePersistenceService:
         self._config_hash = compute_config_hash(config_manager)
         self._initial_purchase_done = False
         self._grid_orders_initialized = False
+        self._consecutive_failures = 0
+        self._halt_task: asyncio.Task | None = None
         self._periodic_task: asyncio.Task | None = None
 
         self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
@@ -48,62 +58,81 @@ class StatePersistenceService:
         self.event_bus.subscribe(Events.GRID_ORDERS_INITIALIZED, self._on_grid_orders_initialized)
 
     async def _on_order_filled(self, order: Order) -> None:
-        await self._checkpoint()
+        await self.checkpoint_now()
 
     async def _on_order_cancelled(self, order: Order) -> None:
-        await self._checkpoint()
+        await self.checkpoint_now()
 
     async def _on_initial_purchase_done(self, data: Any) -> None:
         self._initial_purchase_done = True
-        await self._checkpoint()
+        await self.checkpoint_now()
 
     async def _on_grid_orders_initialized(self, data: Any) -> None:
         self._grid_orders_initialized = True
-        await self._checkpoint()
-
-    async def _checkpoint(self) -> None:
-        try:
-            await asyncio.to_thread(self._write_checkpoint)
-        except Exception as e:
-            self.logger.error(f"Failed to write checkpoint: {e}", exc_info=True)
-
-    def _write_checkpoint(self) -> None:
-        self.repository.save_bot_state(
-            {
-                "config_hash": self._config_hash,
-                "trading_pair": self.trading_pair,
-                "strategy_type": self.strategy_type,
-                "initial_purchase_done": self._initial_purchase_done,
-                "grid_orders_initialized": self._grid_orders_initialized,
-                "strategy_state": json.dumps(self.strategy_state_provider()) if self.strategy_state_provider else None,
-            }
-        )
-
-        self.repository.save_balance_state(balance_to_dict(self.balance_tracker))
-
-        order_dicts = []
-        for order, grid_level in self.order_book.get_buy_orders_with_grid():
-            is_non_grid = grid_level is None
-            gl_price = grid_level.price if grid_level else None
-            order_dicts.append(order_to_dict(order, gl_price, is_non_grid))
-        for order, grid_level in self.order_book.get_sell_orders_with_grid():
-            is_non_grid = grid_level is None
-            gl_price = grid_level.price if grid_level else None
-            order_dicts.append(order_to_dict(order, gl_price, is_non_grid))
-        self.repository.save_orders(order_dicts)
-
-        grid_level_dicts = [grid_level_to_dict(gl) for gl in self.grid_manager.grid_levels.values()]
-        self.repository.save_grid_levels(grid_level_dicts)
-
-        self.logger.debug("Checkpoint written successfully.")
+        await self.checkpoint_now()
 
     def set_flags(self, initial_purchase_done: bool, grid_orders_initialized: bool) -> None:
         self._initial_purchase_done = initial_purchase_done
         self._grid_orders_initialized = grid_orders_initialized
 
     async def checkpoint_now(self) -> None:
-        """Writes a checkpoint immediately (shutdown, ad-hoc callers)."""
-        await self._checkpoint()
+        await self.save(ArmingFlags(self._initial_purchase_done, self._grid_orders_initialized))
+
+    def snapshot(self, arming: ArmingFlags) -> StateSnapshot:
+        """The state of every component at this instant, as the repository stores it."""
+        orders = [
+            order_to_dict(order, grid_level.price if grid_level else None, grid_level is None)
+            for order, grid_level in (
+                self.order_book.get_buy_orders_with_grid() + self.order_book.get_sell_orders_with_grid()
+            )
+        ]
+        strategy_state = self.strategy_state_provider() if self.strategy_state_provider else None
+        return StateSnapshot(
+            bot_state={
+                "config_hash": self._config_hash,
+                "trading_pair": self.trading_pair,
+                "strategy_type": self.strategy_type,
+                "initial_purchase_done": arming.initial_purchase_done,
+                "grid_orders_initialized": arming.grid_orders_initialized,
+                "strategy_state": json.dumps(strategy_state) if strategy_state is not None else None,
+            },
+            balance_state=balance_to_dict(self.balance_tracker),
+            orders=orders,
+            grid_levels=[grid_level_to_dict(level) for level in self.grid_manager.grid_levels.values()],
+        )
+
+    async def save(self, arming: ArmingFlags) -> None:
+        """Writes the current state in one transaction. A failure is alerted and counted, never raised."""
+        try:
+            snapshot = self.snapshot(arming)
+            await asyncio.to_thread(self.repository.save_state, snapshot)
+        except Exception as error:
+            await self._record_failure(error)
+            return
+        await self._record_success()
+
+    async def _record_failure(self, error: Exception) -> None:
+        self._consecutive_failures += 1
+        self.logger.error(f"Checkpoint failed ({self._consecutive_failures} in a row): {error}", exc_info=error)
+        if self._consecutive_failures == 1:
+            await self.notification_handler.async_send_notification(
+                NotificationType.CHECKPOINT_FAILED, error_details=str(error)
+            )
+        if self._consecutive_failures == self.MAX_CONSECUTIVE_FAILURES:
+            request = StopRequest(
+                StopKind.PERSISTENCE,
+                f"{self._consecutive_failures} checkpoints failed in a row; last error: {error}",
+            )
+            # Published from its own task: the failed save runs under the OrderManager lock, which the halt needs.
+            self._halt_task = asyncio.create_task(self.event_bus.publish(Events.STOP_BOT, request))
+
+    async def _record_success(self) -> None:
+        if self._consecutive_failures:
+            failures, self._consecutive_failures = self._consecutive_failures, 0
+            await self.notification_handler.async_send_notification(
+                NotificationType.CHECKPOINT_RESTORED, failures=failures
+            )
+        self.logger.debug("Checkpoint written.")
 
     def start_periodic_checkpoints(self, interval_seconds: float) -> None:
         """Starts the periodic checkpoint loop (captures state that changes between order events,
@@ -116,7 +145,7 @@ class StatePersistenceService:
         try:
             while True:
                 await asyncio.sleep(interval_seconds)
-                await self._checkpoint()
+                await self.checkpoint_now()
         except asyncio.CancelledError:
             pass
 

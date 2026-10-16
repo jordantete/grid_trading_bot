@@ -12,6 +12,7 @@ class StopKind(Enum):
     MANUAL = "manual"
     RISK = "risk"
     INFEASIBLE = "infeasible"
+    PERSISTENCE = "persistence"
     SIGNAL = "signal"
     FEED_LOST = "feed_lost"
     CRASH = "crash"
@@ -19,7 +20,7 @@ class StopKind(Enum):
     @property
     def halts(self) -> bool:
         """Whether the stop is deliberate: open orders are cancelled and no relaunch trades again."""
-        return self in {StopKind.MANUAL, StopKind.RISK, StopKind.INFEASIBLE}
+        return self in {StopKind.MANUAL, StopKind.RISK, StopKind.INFEASIBLE, StopKind.PERSISTENCE}
 
 
 @dataclass(frozen=True)

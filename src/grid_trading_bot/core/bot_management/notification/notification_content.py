@@ -53,6 +53,17 @@ class NotificationType(Enum):
         title="State Recovery Complete",
         message="Bot recovered from previous state:\n{recovery_details}",
     )
+    CHECKPOINT_FAILED = NotificationContent(
+        title="Checkpoint Failed",
+        message=(
+            "Writing the state database failed: {error_details}\n"
+            "Trading continues; the bot halts if 3 checkpoints in a row fail."
+        ),
+    )
+    CHECKPOINT_RESTORED = NotificationContent(
+        title="Checkpoint Restored",
+        message="The state database is written again after {failures} failed checkpoint(s).",
+    )
     BOT_HALTED = NotificationContent(
         title="Bot Halted",
         message=(
