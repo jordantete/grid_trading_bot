@@ -58,7 +58,10 @@ class BotController:
     def _read_lines(loop: asyncio.AbstractEventLoop, lines: "asyncio.Queue[str | None]") -> None:
         # A daemon thread, because a pending readline() must never keep the process alive after the bot stops.
         while True:
-            line = sys.stdin.readline()
+            try:
+                line = sys.stdin.readline()
+            except (OSError, ValueError, UnicodeDecodeError, AttributeError):
+                line = ""
             try:
                 loop.call_soon_threadsafe(lines.put_nowait, line or None)
             except RuntimeError:

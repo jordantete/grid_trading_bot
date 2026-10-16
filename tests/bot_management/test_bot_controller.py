@@ -86,21 +86,49 @@ class TestBotController:
         assert bot.get_balances.call_count == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error", [UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad"), ValueError("closed"), OSError()]
+    )
+    async def test_an_unreadable_stdin_ends_the_listener(self, error, setup_bot_controller, monkeypatch):
+        bot_controller, _, _ = setup_bot_controller
+        stdin = Mock()
+        stdin.readline.side_effect = error
+        monkeypatch.setattr(sys, "stdin", stdin)
+
+        await asyncio.wait_for(bot_controller.command_listener(), timeout=2)
+
+        bot_controller.logger.info.assert_any_call("Command input closed; command listener stopped.")
+
+    @pytest.mark.asyncio
+    async def test_a_missing_stdin_ends_the_listener(self, setup_bot_controller, monkeypatch):
+        bot_controller, _, _ = setup_bot_controller
+        monkeypatch.setattr(sys, "stdin", None)
+
+        await asyncio.wait_for(bot_controller.command_listener(), timeout=2)
+
+        bot_controller.logger.info.assert_any_call("Command input closed; command listener stopped.")
+
+    @pytest.mark.asyncio
     async def test_the_reader_thread_never_holds_the_process(self, setup_bot_controller, monkeypatch):
         bot_controller, _, _ = setup_bot_controller
         read_fd, write_fd = os.pipe()
-        monkeypatch.setattr(sys, "stdin", os.fdopen(read_fd))
+        stdin = os.fdopen(read_fd)
+        monkeypatch.setattr(sys, "stdin", stdin)
         listener = asyncio.create_task(bot_controller.command_listener())
-        await asyncio.sleep(0.05)
-
-        reader = next(thread for thread in threading.enumerate() if thread.name == "CommandReader")
-        assert reader.daemon is True
-
-        listener.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await listener
-        os.close(write_fd)
-        reader.join(timeout=2)
+        reader = None
+        try:
+            await asyncio.sleep(0.05)
+            reader = next(thread for thread in threading.enumerate() if thread.name == "CommandReader")
+            assert reader.daemon is True
+        finally:
+            listener.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await listener
+            os.close(write_fd)
+            if reader is not None:
+                reader.join(timeout=2)
+            stdin.close()
+        assert not reader.is_alive()
 
     @pytest.mark.asyncio
     async def test_handle_stop_event(self, setup_bot_controller):
