@@ -226,7 +226,7 @@ class BalanceTracker:
 
         if self._reserved_crypto < 0:
             overflow = -self._reserved_crypto
-            self._crypto_balance = (self._crypto_balance + overflow).quantize(_QUANTIZE_EXP)
+            self._crypto_balance = (self._crypto_balance - overflow).quantize(_QUANTIZE_EXP)
             self._reserved_crypto = Decimal("0")
 
         self._balance = (self._balance + sale_proceeds).quantize(_QUANTIZE_EXP)
@@ -251,7 +251,7 @@ class BalanceTracker:
             total_cost = (d_filled * d_average).quantize(_QUANTIZE_EXP)
             fee = self._to_decimal(
                 self.fee_calculator.calculate_fee(
-                    initial_order.amount * initial_order.average, initial_order.liquidity
+                    initial_order.filled * initial_order.average, initial_order.liquidity
                 ),
             )
             self._ledger.record_buy(self._position(), d_filled, d_average, fee)

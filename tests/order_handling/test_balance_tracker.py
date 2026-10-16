@@ -678,3 +678,39 @@ class TestRecoveryAccounting:
 
         assert bt._ledger.realized_pnl == Decimal("0")
         assert bt._ledger.avg_cost == Decimal("100")
+
+
+class TestFillAccountingFixes:
+    async def test_a_sell_beyond_its_reservation_takes_the_excess_from_the_free_crypto(self, balance_tracker):
+        bt = balance_tracker
+        bt._crypto_balance = Decimal("2")
+        await bt.reserve_funds_for_sell(1.0)
+        value_before = bt.get_total_balance_value(100.0)
+        sell = _make_order(
+            OrderSide.SELL, price=100.0, average=100.0, amount=1.5, filled=1.5, status=OrderStatus.CLOSED
+        )
+
+        await bt._update_balance_on_order_completion(sell)
+
+        assert bt.reserved_crypto == 0.0
+        assert bt.get_adjusted_crypto_balance() == pytest.approx(0.5)
+        assert bt.get_total_balance_value(100.0) == pytest.approx(value_before - 0.15)
+
+    async def test_a_partly_filled_initial_purchase_pays_the_fee_on_its_filled_quantity(self, balance_tracker):
+        bt = balance_tracker
+        purchase = _make_order(
+            OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.CLOSED,
+            price=100.0,
+            average=100.0,
+            amount=2.0,
+            filled=1.0,
+            remaining=1.0,
+        )
+
+        await bt.update_after_initial_purchase(purchase)
+
+        assert bt.total_fees == pytest.approx(0.1)
+        assert bt.balance == pytest.approx(1000.0 - 100.0 - 0.1)
+        assert bt.crypto_balance == pytest.approx(1.0)
