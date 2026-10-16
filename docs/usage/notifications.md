@@ -17,6 +17,8 @@ APPRISE_NOTIFICATION_URLS=tgram://bot_token/chat_id
 APPRISE_NOTIFICATION_URLS=tgram://bot_token/chat_id,discord://webhook_id/webhook_token
 ```
 
+In live and paper trading the bot logs a WARNING at start when the variable is empty, and an ERROR when a notification is not delivered.
+
 See the [Environment Variables](../configuration/environment-variables.md) page for more details on `.env` configuration.
 
 ## Notification Types
@@ -47,6 +49,9 @@ See the [Environment Variables](../configuration/environment-variables.md) page 
 | `ERROR_OCCURRED` | Error Occurred | When an unexpected error occurs in the bot |
 | `HEALTH_CHECK_ALERT` | Health Check Alert | When the health check detects an issue |
 | `STATE_RECOVERY_COMPLETE` | State Recovery Complete | After a successful state recovery on restart |
+| `BOT_HALTED` | Bot Halted | When the bot halts. The text asks you to check the exchange for orders left open before running `resume` |
+| `BOT_SUSPENDED` | Bot Suspended | When the bot stops with its open orders kept; the next start resumes them |
+| `START_REFUSED_HALTED` | Start Refused | Once, when a start is refused because the config is halted |
 
 ### Reconciliation Notifications
 

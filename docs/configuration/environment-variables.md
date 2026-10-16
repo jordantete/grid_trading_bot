@@ -26,7 +26,7 @@ GRAFANA_ADMIN_PASSWORD=YourGrafanaPasswordHere
 |----------|----------|-------------|
 | `EXCHANGE_API_KEY` | Live/Paper only | Your API key for the exchange. Not needed for backtesting. |
 | `EXCHANGE_SECRET_KEY` | Live/Paper only | Your secret key for the exchange. Not needed for backtesting. |
-| `APPRISE_NOTIFICATION_URLS` | No | Comma-separated notification URLs (Telegram, Discord, Slack, etc.). See [Apprise documentation](https://github.com/caronc/apprise) for supported services. |
+| `APPRISE_NOTIFICATION_URLS` | No | Comma-separated notification URLs (Telegram, Discord, Slack, etc.). See [Apprise documentation](https://github.com/caronc/apprise) for supported services. `docker-compose.yml` passes it to the bot container. |
 | `GRAFANA_ADMIN_USER` | No | Admin username for the Grafana monitoring stack. Default: `admin`. |
 | `GRAFANA_ADMIN_PASSWORD` | No | Admin password for the Grafana monitoring stack. |
 

@@ -27,9 +27,11 @@ This starts three services:
 
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
-| **Loki** | `grafana/loki:3.6.7` | 3100 | Log aggregation and storage |
-| **Grafana** | `grafana/grafana:12.4.0` | 3000 | Visualization and dashboards |
-| **Alloy** | `grafana/alloy:v1.13.2` | 12345 | Log collection agent |
+| **Loki** | `grafana/loki:3.6.7` | none published | Log aggregation and storage |
+| **Grafana** | `grafana/grafana:12.4.0` | `127.0.0.1:3000` | Visualization and dashboards |
+| **Alloy** | `grafana/alloy:v1.13.2` | `127.0.0.1:12345` | Log collection agent |
+
+Loki is reachable only on the compose network. Grafana and Alloy listen on `127.0.0.1`, so they are not reachable from another machine.
 
 ## Run the Bot with Docker Compose
 
@@ -42,12 +44,12 @@ docker-compose --profile bot up -d --build
 
 The service is defined for 24/7 operation on a VPS:
 
-- **`restart: unless-stopped`** — auto-restart on crash and on reboot
+- **`restart: on-failure`**: a halted bot exits with 0 and stays down; a crash, a lost feed or a reboot relaunches it. See [Going Live](../usage/going-live.md#running-unattended-docker)
 - **`./data` volume** — the SQLite state survives restarts, and the recovery service reconciles it with the exchange on startup
 - **`./logs` volume** — the bot writes its logs where Alloy tails them, so they show up in Grafana automatically
-- **`stdin_open: true`** — keeps the live-mode command listener idle instead of spinning on EOF in a detached container
+- **Default SIGTERM and a 30 second grace period**: `docker compose stop` keeps the open orders, writes a final checkpoint and exits with 143
 
-By default the bot runs with `config/config.json`, which is a **backtest** configuration: it runs once, exits, and the restart policy would run it again. For a long-running deployment, point the service at a live configuration via the `BOT_CONFIG` variable in your `.env` file:
+By default the bot runs with `config/config.json`, which is a **backtest** configuration: it runs once and exits with 0, so the restart policy does not run it again. For a long-running deployment, point the service at a live configuration via the `BOT_CONFIG` variable in your `.env` file:
 
 ```bash
 # .env
@@ -63,7 +65,7 @@ To follow the bot output, stop it, or deploy a new version:
 ```bash
 docker-compose logs -f bot
 
-# Graceful stop (sends SIGINT so the bot shuts down cleanly)
+# Suspend: SIGTERM, open orders kept, final checkpoint written
 docker-compose --profile bot stop bot
 
 # Rebuild and restart after a git pull
@@ -71,7 +73,7 @@ docker-compose --profile bot up -d --build bot
 ```
 
 !!! warning "Protect Grafana on a public VPS"
-    Port 3000 on a public IP gets scanned constantly. Bind it to localhost and reach it through an SSH tunnel (`ssh -L 3000:127.0.0.1:3000 user@vps`), or put it behind a reverse proxy with authentication.
+    Grafana is bound to `127.0.0.1`. Reach it through an SSH tunnel (`ssh -L 3000:127.0.0.1:3000 user@vps`), or publish it through a reverse proxy such as Caddy with its own password.
 
 ## Access Grafana
 

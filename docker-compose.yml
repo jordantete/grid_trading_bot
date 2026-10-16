@@ -3,18 +3,14 @@ services:
     build: .
     container_name: grid_trading_bot
     profiles: ["bot"]
-    restart: unless-stopped
-    # Keep stdin open: the live-mode command listener blocks on input();
-    # without this it would spin on EOFError in a detached container
-    stdin_open: true
-    # SIGINT triggers the asyncio cancellation path for a clean shutdown;
-    # the default SIGTERM would terminate the process abruptly
-    stop_signal: SIGINT
+    # on-failure: a halted bot exits 0 and stays down; a crash, a lost feed or a reboot relaunches it
+    restart: on-failure
     stop_grace_period: 30s
     command: ["run", "--config", "${BOT_CONFIG:-config/config.json}", "--no-plot"]
     environment:
       - EXCHANGE_API_KEY=${EXCHANGE_API_KEY:-}
       - EXCHANGE_SECRET_KEY=${EXCHANGE_SECRET_KEY:-}
+      - APPRISE_NOTIFICATION_URLS=${APPRISE_NOTIFICATION_URLS:-}
     volumes:
       - ./config:/app/config:ro
       - ./data:/app/data
@@ -29,8 +25,6 @@ services:
     container_name: loki
     restart: unless-stopped
     user: root
-    ports:
-      - "3100:3100"
     command: -config.file=/etc/loki/loki.yaml
     volumes:
       - ./monitoring/configs/loki/loki.yaml:/etc/loki/loki.yaml
@@ -45,7 +39,7 @@ services:
     container_name: grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
@@ -72,7 +66,7 @@ services:
     container_name: alloy
     restart: unless-stopped
     ports:
-      - "12345:12345"
+      - "127.0.0.1:12345:12345"
     volumes:
       - ./monitoring/configs/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - ./logs:/logs:ro

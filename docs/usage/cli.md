@@ -97,36 +97,53 @@ Generate a `.prof` file for performance analysis:
 uv run grid_trading_bot run --config config/config.json --profile
 ```
 
+### `resume`
+
+Clear the halt recorded for a config, so the next start is a fresh grid.
+
+```bash
+uv run grid_trading_bot resume --config config/config.live.json
+```
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `--config` | string | Yes | Path to the configuration file of the halted bot. |
+
+The command has three outcomes:
+
+- **Halt cleared**: the state database (and its `-wal` and `-shm` files) is moved aside as `<name>.halted-<UTC timestamp>` and the halt marker is deleted.
+- **Nothing to resume**: no halt is recorded, nothing changes, and the command says the next start resumes the saved state.
+- **Refused**: a bot holds the config's lock, so the command exits with code 1.
+
+See [Going Live](going-live.md#4-stopping) for what causes a halt.
+
 ## Runtime Commands
 
-In **live** and **paper trading** modes, the bot starts an interactive command listener (BotController) that accepts commands while the bot is running.
+In **live** and **paper trading** modes, the bot starts a command listener (BotController) that accepts commands while the bot is running. The listener runs only in an interactive terminal: in a detached container or under a service manager it does not start.
 
 ```
-Enter command (quit, orders, balance, stop, restart, pause):
+Enter command (quit, orders, balance, stop):
 ```
 
 ### Command Reference
 
 | Command | Description |
 |---------|-------------|
-| `quit` | Gracefully shuts down the bot and exits the process. |
-| `stop` | Stops the bot's trading activity. The process remains alive. |
-| `restart` | Stops the bot's trading activity. **Does not resume trading in-process** — restart the process instead; state recovery will resume from the last checkpoint. |
-| `pause <seconds>` | Stops the bot's trading activity for the specified duration. **Does not automatically resume in-process** — restart the process to resume trading. |
+| `stop` | Halts the bot: open orders are cancelled, the position is kept, and the process exits with code 0. |
+| `quit` | Same as `stop`. |
 | `orders` | Displays all active orders in a formatted table. |
 | `balance` | Displays current fiat and crypto balances. |
 
 Commands are case-insensitive. Invalid commands are logged as warnings.
 
-!!! warning "In-process restart is not supported in live/paper trading"
-    `restart` and `pause` both stop the bot's trading activity, but in-process resumption is not supported in live/paper trading mode — an ERROR_OCCURRED notification is sent and the bot stays stopped. Restart the bot process to resume; state recovery picks up where it left off.
+After `stop` or `quit`, no relaunch trades until [`resume`](#resume) is run.
 
 ### Examples
 
-Stop trading and exit:
+Halt the bot:
 
 ```
-Enter command: quit
+Enter command: stop
 ```
 
 View active orders:
@@ -147,12 +164,6 @@ The `orders` command outputs a table with the following columns:
 | Timestamp | When the order was placed |
 | Grid Level | Associated grid level index |
 | Slippage | Price slippage from expected fill |
-
-Pause the bot for 5 minutes:
-
-```
-Enter command: pause 300
-```
 
 !!! note
     The runtime command listener is **not available** in backtest mode, since backtests run to completion without user interaction.

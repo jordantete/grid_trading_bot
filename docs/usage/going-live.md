@@ -5,7 +5,7 @@ This page walks through moving a strategy from backtesting to real (or paper) mo
 A ready-to-use starting point is provided at [`config/config.live.example.json`](https://github.com/jordantete/grid_trading_bot/blob/master/config/config.live.example.json). It targets `paper_trading` mode with persistence, dynamic ATR-based grid spacing, and an ATR trailing stop already enabled.
 
 !!! warning "Validate the strategy in paper trading first"
-    Both `simple_grid` and `hedged_grid` share the same order handling, but neither has been validated with real capital yet. Run the chosen strategy in paper trading, then live with a small amount, before scaling up.
+    Live trading stays on `simple_grid` until the fills of one poll are ordered like the backtest (tracked separately). Validate `hedged_grid` in paper trading first. Neither strategy has run with real capital yet, so go live with a small amount before scaling up.
 
 ## 1. Prerequisites
 
@@ -45,23 +45,71 @@ uv run grid_trading_bot run --config config/config.live.example.json
 ## 3. What the bot does at startup (live)
 
 1. **Loads exchange markets** for the configured pair via `load_exchange_markets`, then reads back the exchange's minimum order amount/cost constraints.
-2. **Validates grid feasibility** against those constraints as soon as price first enters the grid range. If any grid level would produce an order below the exchange's minimum amount or minimum notional, the bot logs a clear error and stops itself (`STOP_BOT`) rather than placing an order the exchange would reject. Fix this by increasing `initial_balance`/capital or reducing `num_grids`.
+2. **Validates grid feasibility** against those constraints as soon as price first enters the grid range. If any grid level would produce an order below the exchange's minimum amount or minimum notional, the bot logs a clear error, places nothing and halts (see [Stopping](#4-stopping)). Fix this by increasing `initial_balance`/capital or reducing `num_grids`.
 3. **Attempts state recovery** (live mode with persistence enabled) from `data/{BASE}_{QUOTE}/state_{hash}.db` — see [Crash / restart behavior](#5-crash-restart-behavior) below.
 4. If recovery is disabled, finds no prior state, or fails, the bot **falls back to a clean fresh start**: the grid and order book are reset, and the crypto/fiat balances currently held on the exchange account are treated as the starting capital.
 
 ## 4. Stopping
 
-The bot distinguishes between a manual stop and a risk-triggered stop:
+Every way the bot ends has a fixed effect on the open orders, the position and the exit code:
 
-| Trigger | Behavior |
-|---------|----------|
-| Manual stop — `stop` command in the BotController, or SIGINT (Ctrl+C) | Cancels every open order on the exchange and releases their reserved funds. **The position is kept.** |
-| Take-profit, stop-loss, or trailing stop (`on_trigger: "stop"`) | Cancels every open order, then **liquidates the full crypto position at market**. |
+| Trigger | Open orders | Position | Halt recorded | Exit code |
+|---------|-------------|----------|---------------|-----------|
+| `stop` or `quit` command, or SIGUSR1 | Cancelled | Kept | Yes | 0 |
+| Take-profit, stop-loss or trailing stop | Cancelled | Liquidated at market | Yes | 0 |
+| Grid infeasible (order below the exchange minimum) | Nothing placed | None | Yes | 0 |
+| SIGINT or SIGTERM (`docker stop`, reboot) | Kept | Kept | No | 130 (SIGINT) or 143 (SIGTERM) |
+| Ticker feed lost after its retries | Kept | Kept | No | 75 |
+| Unexpected exception | Kept | Kept | No | 1 |
 
-Both paths go through the same shutdown routine and are idempotent — a stop command received after a TP/SL liquidation has already run is a no-op.
+A config error at start exits with 78 and nothing starts. Starting a config that another process already runs exits with 1.
 
-!!! note "Restart vs. quit"
-    The `restart`/`pause` commands are **not supported in-process** in live/paper trading — they stop trading but do not resume it; an error notification is sent and the bot stays stopped. To resume, restart the process instead; state recovery will pick up where it left off. `quit` stops the bot and exits the process entirely. See the [CLI reference](cli.md#runtime-commands) for the full command list.
+Every path writes a final checkpoint of the state, once the saved state was loaded. A stop requested while the bot is still starting runs as soon as startup ends.
+
+### Halts and `resume`
+
+A halt means the bot decided to stop trading, so a relaunch must not start trading again by itself. The bot writes a marker file `halted_<hash8>.json` next to the state database. While the marker exists, starting the same config logs a WARNING, sends one "Start Refused" notification, makes no call to the exchange and exits with 0.
+
+To trade again, check the exchange for orders left open (the halt notification asks for this check), then run:
+
+```bash
+uv run grid_trading_bot resume --config config/config.live.json
+```
+
+`resume` moves the state database (and its `-wal` and `-shm` files) aside as `<name>.halted-<UTC timestamp>` and deletes the marker. The next start is a fresh grid on the balances currently held on the exchange. Without a halt, `resume` changes nothing and says the next start resumes the saved state. It refuses with exit code 1 while a bot holds the config's lock.
+
+A config change gives a new hash, so a new state database and no marker.
+
+!!! note "Stop, quit and the old commands"
+    `stop` and `quit` both halt the bot. `restart` and `pause` no longer exist. See the [CLI reference](cli.md#runtime-commands) for the command list.
+
+### Running unattended (Docker)
+
+```bash
+# Start the bot (add --build after a code change)
+docker compose --profile bot up -d bot
+
+# Suspend: orders kept, exit 143, relaunched after a reboot
+docker compose stop bot
+
+# Halt: orders cancelled, exit 0, stays down
+docker compose kill -s SIGUSR1 bot
+
+# After a halt: clear it, then start a new grid
+docker compose run --rm bot resume --config config/config.json
+docker compose --profile bot up -d bot
+```
+
+The compose file sets `restart: on-failure`. A halted bot exits with 0 and stays down, while a crash, a lost feed or a reboot relaunches it. The container gets the default SIGTERM and a 30 second grace period, and has no `stdin_open`: the command listener only runs in an interactive terminal.
+
+| Exit code | Meaning | Relaunched by `on-failure` |
+|-----------|---------|----------------------------|
+| 0 | Halt (or a refused start) | No |
+| 1 | Unexpected exception, or the config is already running | Yes |
+| 75 | Ticker feed lost | Yes |
+| 78 | Config error | Yes, and fails again until the config is fixed |
+| 130 | SIGINT | Yes |
+| 143 | SIGTERM (`docker compose stop`, reboot) | After a reboot, not after `docker compose stop` |
 
 ## 5. Crash / restart behavior
 
@@ -71,6 +119,8 @@ When `persistence.enabled` is `true` (the default) and `trading_mode` is `live`,
 - On every regrid (volatility-triggered or trailing-stop-triggered).
 - On shutdown.
 - Every `persistence.checkpoint_interval_seconds` (default `60`) via a periodic timer.
+
+A halted config refuses to start until [`resume`](#halts-and-resume) is run, and two processes cannot run the same config: the lock file `bot_<hash8>.lock` sits next to the state database.
 
 On restart, the bot loads the saved state, reconciles it against the exchange (open orders, fills that happened while it was down, balances), and resumes from there — re-placing paired orders for any grid level that filled while the process was offline.
 
@@ -88,18 +138,18 @@ A background health check runs every `execution.health_check_interval` seconds (
 - **Exchange status** — the exchange's own status endpoint.
 - **Ticker feed freshness** (live/paper only) — alerts if no accepted price update has been received for over 120 seconds.
 
-If the WebSocket ticker feed dies and exhausts `execution.websocket_max_retries` reconnect attempts, the bot treats this as fatal: it cancels all open orders and stops cleanly rather than trading blind on a stale price.
+If the WebSocket ticker feed dies and exhausts `execution.websocket_max_retries` reconnect attempts, the bot treats this as fatal: the bot keeps its open orders, writes a checkpoint, sends a notification and exits with code 75 so the supervisor relaunches it. Recovery reconciles the state with the exchange on restart.
 
 ### Notifications
 
-Configure `APPRISE_NOTIFICATION_URLS` to receive alerts (order fills, errors, health check issues, TP/SL triggers) on Telegram, Discord, Slack, and more. See the [Notifications](notifications.md) page.
+Configure `APPRISE_NOTIFICATION_URLS` to receive alerts (order fills, errors, health check issues, TP/SL triggers, halts) on Telegram, Discord, Slack, and more. A WARNING is logged at start when the variable is empty, and an ERROR when a notification is not delivered. The compose file passes the variable to the bot container. See the [Notifications](notifications.md) page.
 
 ### Grafana / Loki
 
 For log-based dashboards, start the monitoring stack:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 The dashboard charts the account value, its peak, the drawdown and realized/unrealized PnL from a line the health check logs every interval, so the curve keeps moving when no order fills. Realized PnL uses the weighted average cost of the crypto held. A manual deposit or withdrawal on the exchange account changes the position without changing that cost, so after one the realized plus unrealized PnL no longer adds up to the change in account value. They also move the drawdown: a withdrawal shows as a lasting drawdown because the peak is persisted, and a deposit raises the peak. The peak only starts over on a fresh start (a config change or a new state database).
