@@ -600,7 +600,7 @@ def _run_files(tmp_path):
 
 class TestShutdownSequence(BotFixtures):
     @pytest.mark.asyncio
-    async def test_a_halt_cancels_checkpoints_marks_notifies_and_closes_last(self, bot, tmp_path):
+    async def test_a_halt_marks_cancels_checkpoints_notifies_and_closes_last(self, bot, tmp_path):
         calls = []
         files = _run_files(tmp_path)
         _record_shutdown(bot, calls, files)
@@ -613,6 +613,20 @@ class TestShutdownSequence(BotFixtures):
         assert marker["kind"] == "manual"
         assert marker["reason"] == "User issued stop command"
         assert bot.notification_handler.async_send_notification.await_args.args[0] == NotificationType.BOT_HALTED
+
+    @pytest.mark.asyncio
+    async def test_the_halt_marker_exists_before_the_orders_are_cancelled(self, bot, tmp_path):
+        calls = []
+        files = _run_files(tmp_path)
+        _record_shutdown(bot, calls, files)
+        marker_present_at_cancel = []
+        bot.order_manager.close_positions = AsyncMock(
+            side_effect=lambda **_kw: marker_present_at_cancel.append(os.path.exists(files.halt_path))
+        )
+
+        await bot._stop(StopRequest(StopKind.MANUAL, "User issued stop command"))
+
+        assert marker_present_at_cancel == [True]
 
     @pytest.mark.asyncio
     async def test_a_stop_waits_for_the_ticker_update_once_the_strategy_is_stopped(self, bot, tmp_path):
@@ -780,17 +794,25 @@ class TestShutdownSequence(BotFixtures):
         bot.state_persistence_service.checkpoint_now.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_failed_halt_marker_still_notifies_and_closes(self, bot, tmp_path):
+    async def test_a_failed_halt_marker_alerts_then_still_cancels_checkpoints_and_closes(self, bot, tmp_path):
         calls = []
-        _record_shutdown(bot, calls, _run_files(tmp_path))
+        files = _run_files(tmp_path)
+        _record_shutdown(bot, calls, files)
 
         with patch(
             "grid_trading_bot.core.bot_management.grid_trading_bot.write_halt_marker",
-            side_effect=ValueError("bad record"),
+            side_effect=OSError("read-only file system"),
         ):
             await bot._stop(StopRequest(StopKind.MANUAL, "User issued stop command"))
 
-        assert calls == ["tracking", "strategy", "cancel", "checkpoint", "notify", "close"]
+        assert calls == ["tracking", "strategy", "notify", "cancel", "checkpoint", "notify", "close"]
+        sent = bot.notification_handler.async_send_notification.await_args_list
+        assert sent[0].args[0] == NotificationType.ERROR_OCCURRED
+        details = sent[0].kwargs["error_details"]
+        assert files.halt_path in details
+        assert "relaunch would trade again" in details
+        assert "docker compose down" in details
+        assert sent[1].args[0] == NotificationType.BOT_HALTED
 
     @pytest.mark.asyncio
     async def test_the_halt_notification_asks_to_check_the_exchange_before_resuming(self, bot):

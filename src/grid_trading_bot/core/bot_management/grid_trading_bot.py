@@ -354,8 +354,8 @@ class GridTradingBot:
     async def _shutdown(self, request: StopRequest) -> None:
         """
         Runs the shutdown sequence at most once: stops tracking and the strategy, waits for the ticker update in
-        progress, cancels the open orders only for a halt, writes the final checkpoint once the state was loaded and
-        the halt marker, notifies, then closes the exchange last.
+        progress, writes the halt marker then cancels the open orders only for a halt, writes the final checkpoint
+        once the state was loaded, notifies, then closes the exchange last.
         """
         if self._shutdown_started:
             return
@@ -369,6 +369,9 @@ class GridTradingBot:
             await self._attempt("strategy", self.strategy.stop)
             await self._attempt("ticker update", lambda: self.strategy.wait_for_tick_to_finish(self.TICK_DRAIN_TIMEOUT))
             if request.kind.halts and self._is_live_or_paper():
+                # Marked first, so a SIGKILL during a slow cancellation cannot leave a halted bot without its marker.
+                if self.run_files is not None:
+                    await self._record_halt(request)
                 await self._attempt("order cancellation", lambda: self.order_manager.close_positions(liquidate=False))
             if self.state_persistence_service:
                 if self._state_ready:
@@ -377,8 +380,6 @@ class GridTradingBot:
                     self.logger.info("No state was loaded yet; skipping the final checkpoint to keep the saved state.")
                 await self._attempt("persistence cleanup", self.state_persistence_service.cleanup)
             if self._is_live_or_paper():
-                if request.kind.halts and self.run_files is not None:
-                    await self._attempt("halt marker", lambda: self._write_halt_marker(request))
                 await self._attempt("stop notification", lambda: self._notify_stop(request))
             await self._attempt("subscription cleanup", self._cleanup_subscriptions)
         finally:
@@ -387,13 +388,31 @@ class GridTradingBot:
             self._stopped.set()
             self.logger.info("Grid Trading Bot has been stopped.")
 
-    async def _attempt(self, step: str, action: Callable[[], Awaitable[Any] | None]) -> None:
+    async def _attempt(self, step: str, action: Callable[[], Awaitable[Any] | None]) -> bool:
+        """Runs one stop step, logging its failure instead of raising it. Returns whether it succeeded."""
         try:
             outcome = action()
             if inspect.isawaitable(outcome):
                 await outcome
         except Exception as e:
             self.logger.error(f"Stop step '{step}' failed: {e}", exc_info=True)
+            return False
+        return True
+
+    async def _record_halt(self, request: StopRequest) -> None:
+        """Writes the halt marker, and alerts when it cannot be written since a relaunch would then trade again."""
+        if await self._attempt("halt marker", lambda: self._write_halt_marker(request)):
+            return
+        await self._attempt(
+            "halt marker alert",
+            lambda: self.notification_handler.async_send_notification(
+                NotificationType.ERROR_OCCURRED,
+                error_details=(
+                    f"The halt marker could not be written to {self.run_files.halt_path}. A supervisor relaunch "
+                    "would trade again, so stop the container with `docker compose down bot`."
+                ),
+            ),
+        )
 
     def _write_halt_marker(self, request: StopRequest) -> None:
         record = HaltRecord(
