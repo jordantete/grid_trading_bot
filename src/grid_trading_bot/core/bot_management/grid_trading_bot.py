@@ -218,9 +218,10 @@ class GridTradingBot:
 
             if self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}:
                 await self.exchange_service.load_exchange_markets(self.trading_pair)
-                self.order_manager.set_market_constraints(
-                    self.exchange_service.get_market_constraints(self.trading_pair)
-                )
+                constraints = self.exchange_service.get_market_constraints(self.trading_pair)
+                self.order_manager.set_market_constraints(constraints)
+                if self.reconciliation_service:
+                    self.reconciliation_service.set_market_constraints(constraints)
             else:
                 min_amount = self.config_manager.get_backtest_min_amount()
                 min_cost = self.config_manager.get_backtest_min_cost()

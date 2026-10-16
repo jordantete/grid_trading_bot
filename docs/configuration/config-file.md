@@ -176,7 +176,7 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 | `circuit_breaker_recovery_timeout` | float | `60.0` | 1.0–600.0 | Seconds to wait before recovery attempt after circuit breaker opens. |
 | `circuit_breaker_half_open_max_calls` | int | `1` | 1–10 | Maximum test calls allowed in half-open state. |
 | `reconciliation_interval` | float | `300.0` | 60.0–3600.0 | Seconds between reconciliation cycles that audit local state vs exchange (live mode only). |
-| `reconciliation_balance_tolerance` | float | `0.01` | 0.0–100.0 | Minimum absolute difference to report a balance drift. Avoids alerts for rounding noise. |
+| `reconciliation_balance_tolerance` | float | `0.01` | 0.0–100.0 | Balance drift tolerated before an alert, as a value in the quote currency. The crypto check converts it at the last price and never goes below the exchange's minimum order amount. |
 
 ### `logging`
 

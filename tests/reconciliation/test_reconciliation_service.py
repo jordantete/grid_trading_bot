@@ -9,6 +9,7 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.reconciliation.reconciliation_service import ReconciliationService
 from grid_trading_bot.core.services.exceptions import DataFetchError
+from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 
 @pytest.fixture
@@ -22,6 +23,7 @@ def setup_reconciliation_service():
     exchange_service.get_balance = AsyncMock(
         return_value={"free": {"USDT": 5000.0, "BTC": 1.5}, "used": {}, "total": {}}
     )
+    exchange_service.last_price = 50000.0
     notification_handler = Mock()
     notification_handler.async_send_notification = AsyncMock()
     event_bus = Mock(spec=EventBus)
@@ -176,18 +178,17 @@ class TestBalanceReconciliation:
         assert "Crypto drift" in call_args[1]["alert_details"]
 
     @pytest.mark.asyncio
-    async def test_drift_within_tolerance_no_alert(self, setup_reconciliation_service):
+    async def test_small_crypto_drift_worth_more_than_the_tolerance_alerts(self, setup_reconciliation_service):
         service, _, balance_tracker, exchange_service, notification_handler, _ = setup_reconciliation_service
 
         balance_tracker.balance = 5000.0
         balance_tracker.crypto_balance = 1.5
         exchange_service.get_balance = AsyncMock(return_value={"free": {"USDT": 5000.005, "BTC": 1.5003}})
 
-        with patch.object(service.logger, "info") as mock_info:
-            await service._reconcile_balances()
-            mock_info.assert_any_call("Balance reconciliation OK: local matches exchange within tolerance.")
+        await service._reconcile_balances()
 
-        notification_handler.async_send_notification.assert_not_awaited()
+        notification_handler.async_send_notification.assert_awaited_once()
+        assert "Crypto drift" in notification_handler.async_send_notification.call_args[1]["alert_details"]
 
     @pytest.mark.asyncio
     async def test_both_fiat_and_crypto_drift(self, setup_reconciliation_service):
@@ -342,3 +343,42 @@ class TestRunReconciliation:
 
         service._reconcile_orders.assert_awaited_once()
         service._reconcile_balances.assert_awaited_once()
+
+
+class TestCryptoToleranceInQuoteValue:
+    @pytest.mark.asyncio
+    async def test_crypto_drift_worth_more_than_the_tolerance_alerts(self, setup_reconciliation_service):
+        service, _, balance_tracker, exchange_service, notification_handler, _ = setup_reconciliation_service
+        balance_tracker.crypto_balance = 1.5
+        exchange_service.get_balance = AsyncMock(
+            return_value={"free": {"USDT": 5000.0, "BTC": 1.5000005}, "used": {}, "total": {}}
+        )
+
+        await service._reconcile_balances()
+
+        notification_handler.async_send_notification.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_crypto_drift_below_the_minimum_amount_is_tolerated(self, setup_reconciliation_service):
+        service, _, balance_tracker, exchange_service, notification_handler, _ = setup_reconciliation_service
+        service.set_market_constraints(MarketConstraints(min_amount=0.00001, min_cost=5.0))
+        balance_tracker.crypto_balance = 1.5
+        exchange_service.get_balance = AsyncMock(
+            return_value={"free": {"USDT": 5000.0, "BTC": 1.500005}, "used": {}, "total": {}}
+        )
+
+        await service._reconcile_balances()
+
+        notification_handler.async_send_notification.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_crypto_check_is_skipped_without_a_price(self, setup_reconciliation_service):
+        service, _, _, exchange_service, notification_handler, _ = setup_reconciliation_service
+        exchange_service.last_price = None
+        exchange_service.get_balance = AsyncMock(
+            return_value={"free": {"USDT": 5000.0, "BTC": 9.0}, "used": {}, "total": {}}
+        )
+
+        await service._reconcile_balances()
+
+        notification_handler.async_send_notification.assert_not_awaited()

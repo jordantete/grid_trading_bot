@@ -11,6 +11,7 @@ from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
+from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 
 class ReconciliationService:
@@ -48,11 +49,15 @@ class ReconciliationService:
         self.balance_tolerance = balance_tolerance
         self.alert_cooldown = alert_cooldown
 
+        self._min_amount: float | None = None
         self._monitoring_task = None
         self._last_alert_times: dict[str, datetime] = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop)
+
+    def set_market_constraints(self, constraints: MarketConstraints) -> None:
+        self._min_amount = constraints.min_amount
 
     def start(self) -> None:
         if self._monitoring_task and not self._monitoring_task.done():
@@ -135,6 +140,13 @@ class ReconciliationService:
 
     # ── Balance Reconciliation ───────────────────────────────────────────
 
+    def _crypto_tolerance(self) -> float | None:
+        """The quote-value tolerance in base units at the last price, never below the exchange minimum amount."""
+        price = self.exchange_service.last_price
+        if price is None or price <= 0:
+            return None
+        return max(self.balance_tolerance / price, self._min_amount or 0.0)
+
     async def _reconcile_balances(self) -> None:
         try:
             exchange_balance = await self.exchange_service.get_balance()
@@ -162,7 +174,10 @@ class ReconciliationService:
             alerts.append(msg)
 
         crypto_delta = exchange_crypto - local_crypto
-        if abs(crypto_delta) > self.balance_tolerance:
+        crypto_tolerance = self._crypto_tolerance()
+        if crypto_tolerance is None:
+            self.logger.debug("Crypto balance check skipped: no price yet.")
+        elif abs(crypto_delta) > crypto_tolerance:
             crypto_pct = (crypto_delta / exchange_crypto * 100) if exchange_crypto != 0 else float("inf")
             msg = (
                 f"Crypto drift: Local={local_crypto:.8f} {self.base_currency} / "

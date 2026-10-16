@@ -181,6 +181,7 @@ class TestGridTradingBot(BotFixtures):
         constraints = MarketConstraints(min_amount=0.001, min_cost=10.0)
         bot.exchange_service.get_market_constraints = Mock(return_value=constraints)
         bot.order_manager.set_market_constraints = Mock()
+        bot.reconciliation_service = Mock()
         bot.exchange_service.close = AsyncMock()
         bot.order_status_tracker.stop_tracking = AsyncMock()
 
@@ -189,6 +190,7 @@ class TestGridTradingBot(BotFixtures):
         bot.exchange_service.load_exchange_markets.assert_awaited_once_with(bot.trading_pair)
         bot.exchange_service.get_market_constraints.assert_called_once_with(bot.trading_pair)
         bot.order_manager.set_market_constraints.assert_called_once_with(constraints)
+        bot.reconciliation_service.set_market_constraints.assert_called_once_with(constraints)
 
     @pytest.mark.asyncio
     async def test_get_bot_health_status(self, bot):
