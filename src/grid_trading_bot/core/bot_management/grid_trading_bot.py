@@ -1,3 +1,7 @@
+import asyncio
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+import inspect
 import logging
 import os
 import time
@@ -7,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
-from grid_trading_bot.core.bot_management.stop_request import StopRequest
+from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_factory import (
@@ -18,9 +22,10 @@ from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
+from grid_trading_bot.core.persistence.run_files import HaltRecord, RunFiles, write_halt_marker
 from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
 from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
-from grid_trading_bot.core.persistence.state_recovery_service import StateRecoveryService
+from grid_trading_bot.core.persistence.state_recovery_service import RecoveryResult, StateRecoveryService
 from grid_trading_bot.core.reconciliation.reconciliation_service import ReconciliationService
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
@@ -37,6 +42,7 @@ from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerf
 if TYPE_CHECKING:
     from grid_trading_bot.core.domain.strategy_type import StrategyType
 
+from .notification.notification_content import NotificationType
 from .notification.notification_handler import NotificationHandler
 
 
@@ -51,7 +57,11 @@ class GridTradingBot:
         event_bus: EventBus,
         save_performance_results_path: str | None = None,
         no_plot: bool = False,
+        run_files: RunFiles | None = None,
     ):
+        self.run_files = run_files
+        self.stop_request: StopRequest | None = None
+        self._stopped = asyncio.Event()
         try:
             self.logger = logging.getLogger(self.__class__.__name__)
             self.config_path = config_path
@@ -245,27 +255,12 @@ class GridTradingBot:
                     exchange_service=self.exchange_service,
                 )
 
-            # Place paired orders for any orders that filled while the bot was down
-            if self.state_recovery_service and recovery_result and recovery_result.orders_filled_while_down:
-                self.logger.info(
-                    f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
-                    f"orders filled while bot was down."
-                )
-                await self.order_manager.place_paired_orders_for_recovered_fills(
-                    recovery_result.orders_filled_while_down
-                )
-
-            self.order_status_tracker.start_tracking()
-            if self.state_persistence_service:
-                self.state_persistence_service.start_periodic_checkpoints(
-                    self.config_manager.get_checkpoint_interval_seconds()
-                )
-            if self.reconciliation_service:
-                self.reconciliation_service.start()
-            await self.strategy.run(
-                skip_initial_purchase=skip_initial_purchase,
-                skip_grid_init=skip_grid_init,
-            )
+            if self.stop_request is None:
+                await self._start_trading(recovery_result, skip_initial_purchase, skip_grid_init)
+            if self.stop_request is None and self._is_live_or_paper():
+                await self._stop(StopRequest(StopKind.CRASH, "Trading loop ended without a stop request"))
+            if self.stop_request is not None:
+                await self._stopped.wait()
 
             if not self.no_plot:
                 self.strategy.plot_results()
@@ -275,37 +270,119 @@ class GridTradingBot:
         except Exception as e:
             self.logger.error(f"An unexpected error occurred {e}")
             self.logger.error(traceback.format_exc())
+            if self._is_live_or_paper():
+                await self._stop(StopRequest(StopKind.CRASH, f"{type(e).__name__}: {e}"))
+                await self._stopped.wait()
             raise
 
         finally:
             self.is_running = False
 
+    async def _start_trading(
+        self,
+        recovery_result: RecoveryResult | None,
+        skip_initial_purchase: bool,
+        skip_grid_init: bool,
+    ) -> None:
+        if recovery_result and recovery_result.orders_filled_while_down:
+            self.logger.info(
+                f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
+                f"orders filled while bot was down."
+            )
+            await self.order_manager.place_paired_orders_for_recovered_fills(recovery_result.orders_filled_while_down)
+
+        self.order_status_tracker.start_tracking()
+        if self.state_persistence_service:
+            self.state_persistence_service.start_periodic_checkpoints(
+                self.config_manager.get_checkpoint_interval_seconds()
+            )
+        if self.reconciliation_service:
+            self.reconciliation_service.start()
+        await self.strategy.run(
+            skip_initial_purchase=skip_initial_purchase,
+            skip_grid_init=skip_grid_init,
+        )
+
+    def _is_live_or_paper(self) -> bool:
+        return self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
+
+    async def request_stop(self, request: StopRequest) -> None:
+        """Asks the bot to stop through STOP_BOT, so every component sees the same request."""
+        await self.event_bus.publish(Events.STOP_BOT, request)
+
     async def _handle_stop_bot_event(self, request: StopRequest) -> None:
         self.logger.info(f"Handling STOP_BOT event: {request.kind.value} ({request.reason})")
-        await self._stop()
+        await self._stop(request)
 
-    async def _stop(self) -> None:
-        if not self.is_running:
-            self.logger.info("Bot is not running. Nothing to stop.")
+    async def _stop(self, request: StopRequest) -> None:
+        """
+        Runs the shutdown once: stops tracking, cancels the open orders only for a halt, writes the final
+        checkpoint and the halt marker, notifies, then closes the exchange last. Later requests are ignored.
+        """
+        if self.stop_request is not None:
+            self.logger.info(
+                f"Stop already in progress ({self.stop_request.kind.value}); "
+                f"ignoring {request.kind.value}: {request.reason}",
+            )
             return
-
-        self.logger.info("Stopping Grid Trading Bot...")
+        self.stop_request = request
+        self.logger.info(f"Stopping Grid Trading Bot ({request.kind.value}): {request.reason}")
 
         try:
             if self.reconciliation_service:
-                await self.reconciliation_service.stop()
-            await self.order_status_tracker.stop_tracking()
-            await self.strategy.stop()
+                await self._attempt("reconciliation", self.reconciliation_service.stop)
+            await self._attempt("order tracking", self.order_status_tracker.stop_tracking)
+            await self._attempt("strategy", self.strategy.stop)
+            if request.kind.halts and self._is_live_or_paper():
+                await self._attempt("order cancellation", lambda: self.order_manager.close_positions(liquidate=False))
             if self.state_persistence_service:
-                await self.state_persistence_service.checkpoint_now()
-                self.state_persistence_service.cleanup()
-            self._cleanup_subscriptions()
+                await self._attempt("final checkpoint", self.state_persistence_service.checkpoint_now)
+                await self._attempt("persistence cleanup", self.state_persistence_service.cleanup)
+            if self._is_live_or_paper():
+                if request.kind.halts and self.run_files is not None:
+                    self._write_halt_marker(request)
+                await self._attempt("stop notification", lambda: self._notify_stop(request))
+            await self._attempt("subscription cleanup", self._cleanup_subscriptions)
+        finally:
+            await self._attempt("exchange close", self.exchange_service.close)
             self.is_running = False
+            self._stopped.set()
+            self.logger.info("Grid Trading Bot has been stopped.")
 
+    async def _attempt(self, step: str, action: Callable[[], Awaitable[Any] | None]) -> None:
+        try:
+            outcome = action()
+            if inspect.isawaitable(outcome):
+                await outcome
         except Exception as e:
-            self.logger.error(f"Error while stopping components: {e}", exc_info=True)
+            self.logger.error(f"Stop step '{step}' failed: {e}", exc_info=True)
 
-        self.logger.info("Grid Trading Bot has been stopped.")
+    def _write_halt_marker(self, request: StopRequest) -> None:
+        record = HaltRecord(
+            kind=request.kind.value,
+            reason=request.reason,
+            pair=self.trading_pair,
+            halted_at=datetime.now(UTC).isoformat(),
+        )
+        try:
+            write_halt_marker(self.run_files.halt_path, record)
+        except OSError as e:
+            self.logger.error(f"Could not write the halt marker {self.run_files.halt_path}: {e}", exc_info=True)
+
+    async def _notify_stop(self, request: StopRequest) -> None:
+        if request.kind.halts:
+            await self.notification_handler.async_send_notification(
+                NotificationType.BOT_HALTED,
+                kind=request.kind.value,
+                reason=request.reason,
+                config_path=self.config_path,
+            )
+        else:
+            await self.notification_handler.async_send_notification(
+                NotificationType.BOT_SUSPENDED,
+                kind=request.kind.value,
+                reason=request.reason,
+            )
 
     def _cleanup_subscriptions(self) -> None:
         """Unsubscribes all components from EventBus events."""

@@ -53,3 +53,22 @@ class NotificationType(Enum):
         title="State Recovery Complete",
         message="Bot recovered from previous state:\n{recovery_details}",
     )
+    BOT_HALTED = NotificationContent(
+        title="Bot Halted",
+        message=(
+            "Trading halted ({kind}): {reason}\n"
+            "Open orders were cancelled. The bot will not trade again until "
+            "`grid_trading_bot resume --config {config_path}` is run."
+        ),
+    )
+    BOT_SUSPENDED = NotificationContent(
+        title="Bot Suspended",
+        message="Bot stopped ({kind}): {reason}\nOpen orders were left on the exchange; the next start resumes them.",
+    )
+    START_REFUSED_HALTED = NotificationContent(
+        title="Start Refused",
+        message=(
+            "Trading was halted on {halted_at} ({kind}): {reason}\n"
+            "Run `grid_trading_bot resume --config {config_path}` to start a new grid."
+        ),
+    )

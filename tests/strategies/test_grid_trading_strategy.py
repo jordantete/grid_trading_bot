@@ -135,59 +135,20 @@ class TestGridTradingStrategy:
         exchange_service.close_connection.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_stop_cancels_open_orders_live(self, setup_strategy):
+    @pytest.mark.parametrize("mode", [TradingMode.LIVE, TradingMode.PAPER_TRADING, TradingMode.BACKTEST])
+    async def test_stop_leaves_orders_and_the_exchange_to_the_bot(self, mode, setup_strategy):
         create_strategy, _, exchange_service, _, order_manager, *_ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
+        strategy = create_strategy(mode)
         exchange_service.close_connection = AsyncMock()
+        exchange_service.close = AsyncMock()
         order_manager.close_positions = AsyncMock()
 
         await strategy.stop()
 
-        order_manager.close_positions.assert_awaited_once_with(liquidate=False)
-        exchange_service.close_connection.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_stop_cancels_open_orders_paper(self, setup_strategy):
-        create_strategy, _, exchange_service, _, order_manager, *_ = setup_strategy
-        strategy = create_strategy(TradingMode.PAPER_TRADING)
-        exchange_service.close_connection = AsyncMock()
-        order_manager.close_positions = AsyncMock()
-
-        await strategy.stop()
-
-        order_manager.close_positions.assert_awaited_once_with(liquidate=False)
-        exchange_service.close_connection.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_stop_backtest_does_not_touch_order_manager(self, setup_strategy):
-        create_strategy, _, exchange_service, _, order_manager, *_ = setup_strategy
-        strategy = create_strategy(TradingMode.BACKTEST)
-        exchange_service.close_connection = AsyncMock()
-        order_manager.close_positions = AsyncMock()
-
-        await strategy.stop()
-
-        order_manager.close_positions.assert_not_awaited()
-        exchange_service.close_connection.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_stop_closes_connection_even_when_close_positions_fails(self, setup_strategy):
-        """
-        Resilience test: close_connection must run even if close_positions raises.
-        Validates the exception-swallowing try/except in stop() prevents order cancellation
-        failures from blocking graceful shutdown.
-        """
-        create_strategy, _, exchange_service, _, order_manager, *_ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-        exchange_service.close_connection = AsyncMock()
-        order_manager.close_positions = AsyncMock(side_effect=Exception("Order cancellation failed"))
-
-        # Should not raise; exception must be swallowed
-        await strategy.stop()
-
-        # Verify connection still closes despite close_positions failure
-        exchange_service.close_connection.assert_awaited_once()
         assert strategy._running is False
+        exchange_service.close_connection.assert_awaited_once()
+        exchange_service.close.assert_not_awaited()
+        order_manager.close_positions.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_run_backtest(self, setup_strategy):
