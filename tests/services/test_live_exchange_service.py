@@ -1166,11 +1166,12 @@ class TestWebSocketFailureHandling:
         await asyncio.wait_for(exchange_service.listen_to_ticker_updates("SOL/USDT", AsyncMock(), 0.0), timeout=1)
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(5)
     async def test_a_feed_stopped_before_it_starts_never_listens(self, exchange_service):
         exchange_service.exchange.watch_ticker = AsyncMock()
 
         await exchange_service.close_connection()
-        await exchange_service.listen_to_ticker_updates("SOL/USDT", AsyncMock(), 0.0)
+        await asyncio.wait_for(exchange_service.listen_to_ticker_updates("SOL/USDT", AsyncMock(), 0.0), timeout=1)
 
         exchange_service.exchange.watch_ticker.assert_not_awaited()
 
