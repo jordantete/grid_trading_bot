@@ -1,7 +1,9 @@
 import asyncio
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 import logging
 import os
+import sys
 from typing import Any
 
 import click
@@ -15,10 +17,26 @@ from grid_trading_bot.core.bot_management.bot_controller.bot_controller import B
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.health_check import HealthCheck
+from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.bot_management.process_lifecycle import ProcessLifecycle
+from grid_trading_bot.core.bot_management.stop_request import EXIT_CONFIG, EXIT_FAILURE, EXIT_OK, aggregate_exit_codes
+from grid_trading_bot.core.persistence.run_files import (
+    RunFiles,
+    RunLock,
+    archive_state_db,
+    read_halt_marker,
+    remove_halt_marker,
+)
 from grid_trading_bot.utils.config_name_generator import generate_config_name
 from grid_trading_bot.utils.logging_config import setup_logging
 from grid_trading_bot.utils.performance_results_saver import save_or_append_performance_results
+
+
+@dataclass(frozen=True)
+class BotOutcome:
+    exit_code: int
+    result: dict[str, Any] | None = None
 
 
 @dataclass
@@ -74,7 +92,7 @@ def initialize_config(config_path: str) -> ConfigManager:
 
     except ConfigError as e:
         logging.error(f"An error occurred during the initialization of ConfigManager {e}")
-        exit(1)
+        sys.exit(EXIT_CONFIG)
 
 
 def initialize_notification_handler(config_manager: ConfigManager, event_bus: EventBus) -> NotificationHandler:
@@ -86,15 +104,66 @@ def initialize_notification_handler(config_manager: ConfigManager, event_bus: Ev
 
 async def run_bot(
     config_path: str,
+    config_manager: ConfigManager,
+    lifecycle: ProcessLifecycle,
     profile: bool = False,
     save_performance_results_path: str | None = None,
     no_plot: bool = False,
-) -> dict[str, Any] | None:
-    config_manager = initialize_config(config_path)
+) -> BotOutcome:
     config_name = generate_config_name(config_manager)
     setup_logging(config_manager.get_logging_level(), config_manager.should_log_to_file(), config_name)
     event_bus = EventBus()
     notification_handler = initialize_notification_handler(config_manager, event_bus)
+    live_or_paper = config_manager.get_trading_mode() in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
+    run_files = RunFiles.for_config(config_manager) if live_or_paper else None
+    run_lock = RunLock(run_files.lock_path) if run_files is not None else None
+
+    if run_lock is not None and not run_lock.acquire():
+        logging.error(f"Another process is already running {config_path} (lock file {run_files.lock_path}).")
+        return BotOutcome(EXIT_FAILURE)
+    try:
+        if run_files is not None:
+            halt = read_halt_marker(run_files.halt_path)
+            if halt is not None:
+                logging.warning(
+                    f"Trading on {config_path} was halted on {halt.halted_at} ({halt.kind}): {halt.reason}. "
+                    f"Run `grid_trading_bot resume --config {config_path}` to start a new grid.",
+                )
+                await notification_handler.async_send_notification(
+                    NotificationType.START_REFUSED_HALTED,
+                    halted_at=halt.halted_at,
+                    kind=halt.kind,
+                    reason=halt.reason,
+                    config_path=config_path,
+                )
+                return BotOutcome(EXIT_OK)
+        return await _run_bot(
+            config_path,
+            config_manager,
+            lifecycle,
+            event_bus,
+            notification_handler,
+            run_files,
+            profile,
+            save_performance_results_path,
+            no_plot,
+        )
+    finally:
+        if run_lock is not None:
+            run_lock.release()
+
+
+async def _run_bot(
+    config_path: str,
+    config_manager: ConfigManager,
+    lifecycle: ProcessLifecycle,
+    event_bus: EventBus,
+    notification_handler: NotificationHandler,
+    run_files: RunFiles | None,
+    profile: bool,
+    save_performance_results_path: str | None,
+    no_plot: bool,
+) -> BotOutcome:
     bot = GridTradingBot(
         config_path,
         config_manager,
@@ -102,6 +171,7 @@ async def run_bot(
         event_bus,
         save_performance_results_path,
         no_plot,
+        run_files=run_files,
     )
     bot_controller = BotController(bot, event_bus)
     health_check = HealthCheck(
@@ -112,26 +182,33 @@ async def run_bot(
         import cProfile
 
         cProfile.runctx("asyncio.run(bot.run())", globals(), locals(), "profile_results.prof")
-        return None
+        return BotOutcome(EXIT_OK)
 
+    result = None
+    crashed = False
     try:
-        if bot.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}:
-            bot_task = asyncio.create_task(bot.run(), name="BotTask")
-            bot_controller_task = asyncio.create_task(bot_controller.command_listener(), name="BotControllerTask")
-            health_check_task = asyncio.create_task(health_check.start(), name="HealthCheckTask")
+        if run_files is not None:
+            lifecycle.register(bot)
+            background = [asyncio.create_task(health_check.start(), name="HealthCheckTask")]
+            if sys.stdin.isatty():
+                background.append(asyncio.create_task(bot_controller.command_listener(), name="BotControllerTask"))
+            else:
+                logging.info(
+                    "No terminal attached: command listener disabled. "
+                    "SIGTERM suspends the bot (orders kept), SIGUSR1 halts it (orders cancelled).",
+                )
             try:
-                await bot_task
+                result = await bot.run()
             finally:
-                for task in (bot_controller_task, health_check_task):
+                lifecycle.unregister(bot)
+                for task in background:
                     task.cancel()
-                await asyncio.gather(bot_controller_task, health_check_task, return_exceptions=True)
+                await asyncio.gather(*background, return_exceptions=True)
         else:
-            await bot.run()
-
-    except asyncio.CancelledError:
-        logging.info("Cancellation received. Shutting down gracefully.")
+            result = await bot.run()
 
     except Exception as e:
+        crashed = True
         logging.error(f"An unexpected error occurred: {e}", exc_info=True)
 
     finally:
@@ -142,6 +219,10 @@ async def run_bot(
 
         except Exception as e:
             logging.error(f"Error during shutdown: {e}", exc_info=True)
+
+    if bot.stop_request is not None:
+        return BotOutcome(bot.stop_request.exit_code, result)
+    return BotOutcome(EXIT_FAILURE if crashed else EXIT_OK, result)
 
 
 async def cleanup_tasks():
@@ -204,31 +285,72 @@ def main():
 )
 def run(config, save_performance_results, no_plot, profile):
     """Run the trading bot with the specified configuration."""
+    config_managers = [initialize_config(config_path) for config_path in config]
+    live_or_paper = any(
+        config_manager.get_trading_mode() in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
+        for config_manager in config_managers
+    )
 
-    async def _main():
+    async def _main() -> int:
+        lifecycle = ProcessLifecycle()
+        if live_or_paper:
+            lifecycle.install(asyncio.get_running_loop())
         try:
-            tasks = [run_bot(config_path, profile, save_performance_results, no_plot) for config_path in config]
-
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for index, result in enumerate(results):
-                if isinstance(result, Exception):
+            outcomes = await asyncio.gather(
+                *(
+                    run_bot(config_path, config_manager, lifecycle, profile, save_performance_results, no_plot)
+                    for config_path, config_manager in zip(config, config_managers, strict=True)
+                ),
+                return_exceptions=True,
+            )
+            exit_codes = []
+            for config_path, outcome in zip(config, outcomes, strict=True):
+                if isinstance(outcome, BaseException):
                     logging.error(
-                        f"Error occurred while running bot for config {config[index]}: {result}",
-                        exc_info=True,
+                        f"Error occurred while running bot for config {config_path}: {outcome}", exc_info=outcome
                     )
-                else:
-                    if save_performance_results:
-                        save_or_append_performance_results(result, save_performance_results)
-
-        except Exception as e:
-            logging.error(f"Critical error in main: {e}", exc_info=True)
+                    exit_codes.append(EXIT_FAILURE)
+                    continue
+                exit_codes.append(outcome.exit_code)
+                if save_performance_results and outcome.result is not None:
+                    save_or_append_performance_results(outcome.result, save_performance_results)
+            return aggregate_exit_codes(exit_codes)
 
         finally:
+            lifecycle.uninstall()
             await cleanup_tasks()
             logging.info("All tasks have completed.")
 
-    asyncio.run(_main())
+    sys.exit(asyncio.run(_main()))
+
+
+@main.command()
+@click.option(
+    "--config",
+    required=True,
+    type=click.STRING,
+    callback=lambda ctx, param, value: validate_config_paths(ctx, param, [value])[0],
+    help="Path to the configuration file of the halted bot.",
+)
+def resume(config):
+    """Clear a recorded halt: the next start is a fresh grid on the current exchange balances."""
+    run_files = RunFiles.for_config(initialize_config(config))
+    run_lock = RunLock(run_files.lock_path)
+    if not run_lock.acquire():
+        click.echo(f"A bot is running {config} (lock file {run_files.lock_path}); stop it first.", err=True)
+        sys.exit(EXIT_FAILURE)
+    try:
+        halt = read_halt_marker(run_files.halt_path)
+        if halt is None:
+            click.echo(f"No halt recorded for {config}: the next start resumes the saved state.")
+            return
+        moved = archive_state_db(run_files.db_path, datetime.now(UTC))
+        remove_halt_marker(run_files.halt_path)
+        click.echo(f"Halt cleared for {config} (was {halt.kind}: {halt.reason}).")
+        for path in moved:
+            click.echo(f"State moved to {path}")
+    finally:
+        run_lock.release()
 
 
 # Keep backward-compatible internal function used by arg_parser tests
