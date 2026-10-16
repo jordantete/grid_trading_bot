@@ -94,6 +94,9 @@ class OrderManager:
         """
         async with self._lock:
             for grid_level, side in self.grid_manager.get_initial_order_plan(current_price):
+                if self._positions_closed:
+                    self.logger.info("Positions are closed; skipping the remaining initial grid orders.")
+                    return
                 await self._initialize_order(grid_level, side, current_price)
 
     async def cancel_open_grid_orders(self) -> bool:
@@ -284,6 +287,10 @@ class OrderManager:
                 order_details=str(order),
             )
 
+            if self._positions_closed:
+                self.logger.info(f"Positions are closed; not re-placing cancelled order {order.identifier}.")
+                return
+
             try:
                 quantity = order.remaining if order.remaining and order.remaining > 0 else order.amount
                 adjusted_quantity = self._validate_order_quantity(order.side, quantity, grid_level.price)
@@ -408,6 +415,12 @@ class OrderManager:
             target_grid_level: The grid level to place the order on.
             quantity: The quantity of the order.
         """
+        if self._positions_closed:
+            self.logger.info(
+                f"Positions are closed; not placing {order_side.value} order at {target_grid_level.price}."
+            )
+            return
+
         adjusted_quantity = self._validate_order_quantity(order_side, quantity, target_grid_level.price)
 
         if self.market_constraints is not None:
@@ -496,6 +509,10 @@ class OrderManager:
             current_price: The current price of the trading pair.
         """
         async with self._lock:
+            if self._positions_closed:
+                self.logger.info("Positions are closed; skipping the initial purchase.")
+                return
+
             initial_quantity = self.grid_manager.get_initial_order_quantity(
                 current_fiat_balance=self.balance_tracker.balance,
                 current_crypto_balance=self.balance_tracker.crypto_balance,

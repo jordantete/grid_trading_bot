@@ -925,6 +925,24 @@ class TestOnOrderCancelled:
         order_book.add_order.assert_called_once_with(new_order, grid_level)
 
     @pytest.mark.asyncio
+    async def test_settles_but_does_not_replace_after_positions_are_closed(self, setup_order_manager):
+        manager, grid_manager, order_validator, balance_tracker, order_book, _, order_execution_strategy, _ = (
+            setup_order_manager
+        )
+        grid_level = GridLevel(price=105.0, state=GridCycleState.WAITING_FOR_SELL_FILL)
+        order = _mock_order(side=OrderSide.SELL, amount=1.0, filled=0.0, remaining=1.0, price=105.0)
+        order_book.get_grid_level_for_order.return_value = grid_level
+        order_validator.adjust_and_validate_sell_quantity.return_value = 1.0
+        order_execution_strategy.execute_limit_order = AsyncMock()
+        manager._positions_closed = True
+
+        await manager._on_order_cancelled(order)
+
+        balance_tracker.settle_cancelled_order.assert_awaited_once_with(order)
+        grid_manager.rollback_order_placement.assert_called_once_with(grid_level, OrderSide.SELL, False)
+        order_execution_strategy.execute_limit_order.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_skips_an_order_already_settled_by_bulk_cancel(self, setup_order_manager):
         manager, _, _, balance_tracker, order_book, _, order_execution_strategy, _ = setup_order_manager
         order = _mock_order(side=OrderSide.BUY, identifier="b1")
@@ -1310,3 +1328,72 @@ class TestPlacePairedOrdersForRecoveredFills:
         assert manager._place_order.await_count == 2
         sent = [c.args[0] for c in notification_handler.async_send_notification.await_args_list]
         assert NotificationType.ERROR_OCCURRED in sent
+
+
+class TestNoNewOrderOnceClosed:
+    @pytest.mark.asyncio
+    async def test_initial_purchase_sends_nothing(self, setup_order_manager):
+        manager, grid_manager, _, _, _, _, order_execution_strategy, _ = setup_order_manager
+        grid_manager.get_initial_order_quantity.return_value = 0.01
+        order_execution_strategy.execute_market_order = AsyncMock()
+        manager._positions_closed = True
+
+        await manager.perform_initial_purchase(50000)
+
+        order_execution_strategy.execute_market_order.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_initialize_grid_orders_sends_nothing(self, setup_order_manager):
+        manager, grid_manager, order_validator, _, _, _, order_execution_strategy, _ = setup_order_manager
+        grid_manager.get_initial_order_plan.return_value = [(Mock(price=49000), OrderSide.BUY)]
+        grid_manager.can_place_order.return_value = True
+        order_validator.adjust_and_validate_buy_quantity.return_value = 0.01
+        order_execution_strategy.execute_limit_order = AsyncMock()
+        manager._positions_closed = True
+
+        await manager.initialize_grid_orders(49500)
+
+        order_execution_strategy.execute_limit_order.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_initialize_grid_orders_stops_when_a_close_lands_mid_loop(self, setup_order_manager):
+        manager, grid_manager, order_validator, _, _, _, order_execution_strategy, _ = setup_order_manager
+        grid_manager.get_initial_order_plan.return_value = [
+            (Mock(price=49000), OrderSide.BUY),
+            (Mock(price=48000), OrderSide.BUY),
+            (Mock(price=47000), OrderSide.BUY),
+        ]
+        grid_manager.can_place_order.return_value = True
+        order_validator.adjust_and_validate_buy_quantity.return_value = 0.01
+
+        async def place_then_close(*args, **kwargs):
+            manager._positions_closed = True
+            return Mock()
+
+        order_execution_strategy.execute_limit_order = AsyncMock(side_effect=place_then_close)
+
+        await manager.initialize_grid_orders(49500)
+
+        assert order_execution_strategy.execute_limit_order.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_place_order_sends_nothing(self, setup_order_manager):
+        manager, _, _, _, _, _, order_execution_strategy, _ = setup_order_manager
+        order_execution_strategy.execute_limit_order = AsyncMock()
+        manager._positions_closed = True
+
+        await manager._place_order(OrderSide.SELL, Mock(price=95.0), Mock(price=105.0), 1.0)
+
+        order_execution_strategy.execute_limit_order.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_recovered_fill_pairing_sends_nothing(self, setup_order_manager):
+        manager, grid_manager, _, _, _, _, order_execution_strategy, _ = setup_order_manager
+        grid_manager.get_sell_target.return_value = Mock(price=105.0)
+        order_execution_strategy.execute_limit_order = AsyncMock()
+        manager._positions_closed = True
+        fill = Mock(side=OrderSide.BUY, filled=1.0, identifier="b")
+
+        await manager.place_paired_orders_for_recovered_fills([(fill, Mock(price=95.0))])
+
+        order_execution_strategy.execute_limit_order.assert_not_awaited()
