@@ -25,6 +25,7 @@ from .exceptions import (
     DataFetchError,
     MissingEnvironmentVariableError,
     OrderCancellationError,
+    OrderNotFoundError,
     PostOnlyRejectedError,
     UnsupportedExchangeError,
 )
@@ -377,6 +378,9 @@ class LiveExchangeService(ExchangeInterface):
 
         except CircuitBreakerOpenError as e:
             raise DataFetchError(f"Circuit breaker open: {e!s}") from e
+
+        except OrderNotFound as e:
+            raise OrderNotFoundError(f"Order {order_id} not found on {pair}: {e!s}") from e
 
         except NetworkError as e:
             raise DataFetchError(f"Network issue occurred while fetching order status: {e!s}") from e

@@ -10,6 +10,12 @@ class DataFetchError(Exception):
     pass
 
 
+class OrderNotFoundError(DataFetchError):
+    """Raised when the exchange no longer knows an order, for instance one it archived after a cancellation."""
+
+    pass
+
+
 class HistoricalMarketDataFileNotFoundError(Exception):
     """Raised when historical market data has not been found in repository."""
 
