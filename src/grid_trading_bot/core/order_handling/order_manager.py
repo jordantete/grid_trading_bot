@@ -250,6 +250,7 @@ class OrderManager:
                 await self._release_funds(side, adjusted_quantity, price)
                 raise
 
+            order = self._rest(order)
             self.grid_manager.mark_order_pending(grid_level, order)
             self.order_book.add_order(order, grid_level)
 
@@ -407,11 +408,21 @@ class OrderManager:
                 await self._release_funds(order.side, adjusted_quantity, grid_level.price)
                 self.logger.error(f"Re-placement at grid level {grid_level.price} returned None.")
                 return
+            new_order = self._rest(new_order)
             self.grid_manager.mark_order_pending(grid_level, new_order)
             self.order_book.add_order(new_order, grid_level)
             self.logger.info(f"Re-placed ended {order.side.value} order at grid level {grid_level.price}.")
         except Exception as e:
             await self._handle_order_error(e, f"Failed to re-place ended order at grid level {grid_level.price}")
+
+    @staticmethod
+    def _rest(order: Order) -> Order:
+        """A placed limit order enters the book open with nothing booked; any fill it already has reaches the
+        pipeline through the tracker."""
+        order.status = OrderStatus.OPEN
+        order.filled = 0.0
+        order.remaining = order.amount
+        return order
 
     async def _settle_fill(self, local: Order, update: Order) -> None:
         newly_filled = local.apply_update(update)
@@ -537,6 +548,7 @@ class OrderManager:
             raise
 
         if order:
+            self._rest(order)
             pairing_type = "buy" if order_side == OrderSide.BUY else "sell"
             self.grid_manager.pair_grid_levels(source_grid_level, target_grid_level, pairing_type=pairing_type)
             self.grid_manager.mark_order_pending(target_grid_level, order)

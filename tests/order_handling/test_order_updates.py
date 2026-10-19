@@ -359,3 +359,21 @@ class TestBulkCancellation:
 
         assert len(stack.book.get_open_orders()) == 3
         assert reserved_matches_open_orders(stack)
+
+
+class TestPlacementEntryState:
+    async def test_an_order_filled_at_creation_rests_until_the_tracker_reports_it(self):
+        stack = build_stack()
+        stack.execution.fill_limit_orders_on_placement = True
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+        stack.execution.fill_limit_orders_on_placement = False
+        placed = next(o for o in stack.execution.orders.values() if o.price == 100.0)
+        local = stack.book.get_order(placed.identifier)
+        assert (local.is_open(), local.filled, local.remaining) == (True, 0.0, placed.amount)
+        assert reserved_matches_open_orders(stack)
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+
+        await stack.manager.apply_order_update(await stack.execution.get_order(placed.identifier, "BTC/USDT"))
+
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + placed.amount)
+        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(placed.amount)
