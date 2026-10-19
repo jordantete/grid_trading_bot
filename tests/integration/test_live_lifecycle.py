@@ -7,8 +7,11 @@ import sqlite3
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
+
+from tests.fakes.fake_exchange import ExchangeState
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
@@ -61,21 +64,19 @@ def _config(tmp_path):
 
 
 class Run:
-    def __init__(self, tmp_path, name, scenario, args, stdin=None):
+    def __init__(self, tmp_path, name, args, stdin=None):
         self.calls = tmp_path / f"{name}_calls.jsonl"
         self.log = tmp_path / f"{name}.log"
-        scenario_path = tmp_path / f"{name}_scenario.json"
-        scenario_path.write_text(json.dumps(scenario))
         env = {
             **os.environ,
-            "PYTHONPATH": str(REPO_ROOT / "src"),
+            "PYTHONPATH": os.pathsep.join([str(REPO_ROOT / "src"), str(REPO_ROOT)]),
             "EXCHANGE_API_KEY": "test",
             "EXCHANGE_SECRET_KEY": "test",
             "APPRISE_NOTIFICATION_URLS": "",
         }
         with self.log.open("w") as log:
             self.process = subprocess.Popen(  # noqa: S603
-                [sys.executable, str(HARNESS), str(scenario_path), str(self.calls), *args],
+                [sys.executable, str(HARNESS), str(_exchange_path(tmp_path)), str(self.calls), *args],
                 cwd=tmp_path,
                 env=env,
                 stdin=stdin if stdin is not None else subprocess.DEVNULL,
@@ -111,15 +112,32 @@ class Run:
         """Waits until every grid level holds a limit order."""
         self.wait_for_limit_orders(NUM_GRIDS, timeout)
 
+    def wait_for(self, condition, timeout=30.0):
+        """Waits until `condition()` holds while the bot runs."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if condition():
+                return
+            if self.process.poll() is not None:
+                raise AssertionError(f"bot exited early:\n{self.log.read_text()}")
+            time.sleep(0.02)
+        raise AssertionError(f"condition never held:\n{self.log.read_text()}")
+
     def finish(self, timeout=30.0):
         return self.process.wait(timeout=timeout)
 
 
+def _exchange_path(tmp_path):
+    return tmp_path / "exchange.json"
+
+
 def _start(tmp_path, name, scenario=None, stdin=None):
+    if not _exchange_path(tmp_path).exists():
+        ExchangeState.create(_exchange_path(tmp_path), **(scenario or {}))
     config_path = tmp_path / "config.json"
     if not config_path.exists():
         config_path.write_text(json.dumps(_config(tmp_path)))
-    return Run(tmp_path, name, scenario or {}, ["run", "--config", str(config_path), "--no-plot"], stdin=stdin)
+    return Run(tmp_path, name, ["run", "--config", str(config_path), "--no-plot"], stdin=stdin)
 
 
 def _methods(run):
@@ -134,6 +152,20 @@ def _saved_open_order_ids(tmp_path):
     database_uri = f"{(tmp_path / 'data' / 'state.db').as_uri()}?mode=ro"
     with closing(sqlite3.connect(database_uri, uri=True)) as database:
         return {row[0] for row in database.execute("SELECT identifier FROM orders WHERE status = 'open'")}
+
+
+def _saved_state(tmp_path):
+    database_uri = f"{(tmp_path / 'data' / 'state.db').as_uri()}?mode=ro"
+    with closing(sqlite3.connect(database_uri, uri=True)) as database:
+        fiat, reserved_fiat, crypto, reserved_crypto = database.execute(
+            "SELECT fiat_balance, reserved_fiat, crypto_balance, reserved_crypto FROM balance_state"
+        ).fetchone()
+        filled = dict(database.execute("SELECT identifier, filled FROM orders"))
+    return SimpleNamespace(
+        fiat_total=float(fiat) + float(reserved_fiat),
+        crypto_total=float(crypto) + float(reserved_crypto),
+        filled=filled,
+    )
 
 
 def test_sigterm_keeps_the_orders_and_exits_143(tmp_path):
@@ -191,7 +223,7 @@ def test_halted_config_refuses_and_resume_restarts_it(tmp_path):
     assert refused.entries() == []
 
     config_path = tmp_path / "config.json"
-    resume = Run(tmp_path, "resume", {}, ["resume", "--config", str(config_path)])
+    resume = Run(tmp_path, "resume", ["resume", "--config", str(config_path)])
     assert resume.finish() == 0, resume.log.read_text()
     assert _halt_markers(tmp_path) == []
 
@@ -209,3 +241,44 @@ def test_stdin_on_dev_null_neither_spins_nor_blocks_the_exit(tmp_path):
 
     assert run.finish() == 143, run.log.read_text()
     assert len(run.log.read_text().splitlines()) < 1500
+
+
+def test_a_restart_after_sigterm_resumes_the_kept_orders(tmp_path):
+    first = _start(tmp_path, "first")
+    first.wait_for_grid()
+    first.process.send_signal(signal.SIGTERM)
+    assert first.finish() == 143, first.log.read_text()
+
+    exchange = ExchangeState(_exchange_path(tmp_path))
+    buys = sorted(exchange.open_orders("buy"), key=lambda order: order["price"])
+    exchange.fill(buys[-1]["id"])
+    exchange.fill(buys[0]["id"], buys[0]["amount"] * 0.4)
+
+    second = _start(tmp_path, "second")
+    second.wait_for(lambda: len(exchange.open_orders("sell")) == 3)
+    second.process.send_signal(signal.SIGTERM)
+    assert second.finish() == 143, second.log.read_text()
+
+    created = [entry for entry in second.entries() if entry["method"] == "create_order"]
+    assert [(entry["type"], entry["side"]) for entry in created] == [("limit", "sell")]
+    assert _saved_open_order_ids(tmp_path) == {order["id"] for order in exchange.open_orders()}
+    saved = _saved_state(tmp_path)
+    assert saved.filled[buys[0]["id"]] == pytest.approx(buys[0]["amount"] * 0.4)
+    totals = exchange.totals()
+    assert saved.fiat_total == pytest.approx(totals["USDT"], abs=1e-6)
+    assert saved.crypto_total == pytest.approx(totals["BTC"], abs=1e-6)
+
+
+def test_a_fresh_start_over_the_kept_orders_is_refused(tmp_path):
+    first = _start(tmp_path, "first")
+    first.wait_for_grid()
+    first.process.send_signal(signal.SIGTERM)
+    assert first.finish() == 143, first.log.read_text()
+    for database_file in (tmp_path / "data").glob("state.db*"):
+        database_file.unlink()
+
+    second = _start(tmp_path, "second")
+
+    assert second.finish() == 0, second.log.read_text()
+    assert "create_order" not in _methods(second)
+    assert "still open" in second.log.read_text()
