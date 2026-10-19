@@ -24,6 +24,7 @@ from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import HaltRecord, RunFiles, write_halt_marker
+from grid_trading_bot.core.persistence.serializers import compute_config_hash
 from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
 from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
 from grid_trading_bot.core.persistence.state_recovery_service import (
@@ -167,6 +168,7 @@ class GridTradingBot:
                 self.trading_mode,
                 trading_pair,
                 state_store=self.state_persistence_service,
+                config_hash=compute_config_hash(self.config_manager),
             )
 
             self.order_status_tracker = OrderStatusTracker(

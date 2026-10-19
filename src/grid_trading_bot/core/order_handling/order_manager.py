@@ -6,6 +6,7 @@ import logging
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from grid_trading_bot.core.exceptions import OrderRefusedError
 from grid_trading_bot.core.services.exceptions import DataFetchError, PostOnlyRejectedError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
@@ -16,7 +17,6 @@ from ..order_handling.order_book import OrderBook
 from ..validation.exceptions import (
     InsufficientBalanceError,
     InsufficientCryptoBalanceError,
-    InvalidOrderQuantityError,
 )
 from ..validation.order_validator import OrderValidator
 from .exceptions import GridFeasibilityError, OrderExecutionFailedError
@@ -24,6 +24,7 @@ from .execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
 from .order import ENDED_UNFILLED_STATUSES, Order, OrderSide, OrderStatus
+from .placement_journal import new_client_order_id
 from .state_store import ArmingFlags, StateStore
 
 
@@ -39,6 +40,7 @@ class OrderManager:
         trading_mode: TradingMode,
         trading_pair: str,
         state_store: StateStore | None = None,
+        config_hash: str = "",
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.grid_manager = grid_manager
@@ -50,6 +52,7 @@ class OrderManager:
         self.trading_mode: TradingMode = trading_mode
         self.trading_pair = trading_pair
         self.state_store = state_store
+        self.config_hash = config_hash
         self.arming = ArmingFlags()
         self.market_constraints: MarketConstraints | None = None
         self._lock = asyncio.Lock()
@@ -233,6 +236,7 @@ class OrderManager:
                     self.trading_pair,
                     adjusted_quantity,
                     price,
+                    client_order_id=new_client_order_id(self.config_hash),
                 )
 
                 if order is None:
@@ -243,7 +247,7 @@ class OrderManager:
             except PostOnlyRejectedError as e:
                 await self._skip_post_only_rejection(side, adjusted_quantity, price, e, "Initial grid placement")
                 return
-            except OrderExecutionFailedError:
+            except Exception:
                 await self._release_funds(side, adjusted_quantity, price)
                 raise
 
@@ -301,7 +305,7 @@ class OrderManager:
         )
 
     async def _handle_order_error(self, error: Exception, context: str) -> None:
-        if isinstance(error, OrderExecutionFailedError):
+        if isinstance(error, OrderExecutionFailedError | DataFetchError | OrderRefusedError):
             self.logger.error(f"{context} - {error!s}", exc_info=True)
             await self.notification_handler.async_send_notification(
                 NotificationType.ORDER_FAILED,
@@ -389,6 +393,7 @@ class OrderManager:
                     self.trading_pair,
                     adjusted_quantity,
                     grid_level.price,
+                    client_order_id=new_client_order_id(self.config_hash),
                 )
             except PostOnlyRejectedError as e:
                 await self._skip_post_only_rejection(
@@ -443,7 +448,7 @@ class OrderManager:
                 NotificationType.ORDER_FAILED,
                 error_details=f"Failed handling filled order. {e}",
             )
-        except (InsufficientBalanceError, InsufficientCryptoBalanceError, InvalidOrderQuantityError) as e:
+        except OrderRefusedError as e:
             self.logger.error(f"Paired order for filled order {local.identifier} refused: {e}")
             await self.notification_handler.async_send_notification(
                 NotificationType.ORDER_FAILED,
@@ -531,6 +536,7 @@ class OrderManager:
                 self.trading_pair,
                 adjusted_quantity,
                 target_grid_level.price,
+                client_order_id=new_client_order_id(self.config_hash),
             )
         except PostOnlyRejectedError as e:
             await self._skip_post_only_rejection(
@@ -636,6 +642,7 @@ class OrderManager:
                 self.trading_pair,
                 initial_quantity,
                 current_price,
+                client_order_id=new_client_order_id(self.config_hash),
             )
             self.logger.info(f"Initial crypto purchase completed. Order details: {buy_order}")
             self.order_book.add_order(buy_order)
@@ -653,7 +660,7 @@ class OrderManager:
                 error_details=f"Error while performing initial purchase. {e}",
             )
 
-        except (DataFetchError, ValueError) as e:
+        except (DataFetchError, OrderRefusedError, ValueError) as e:
             self.logger.error(
                 f"Failed to perform initial purchase at current_price: {current_price} - error: {e}",
                 exc_info=True,
@@ -709,6 +716,7 @@ class OrderManager:
                         self.trading_pair,
                         quantity,
                         current_price,
+                        client_order_id=new_client_order_id(self.config_hash),
                     )
                     if not order:
                         raise OrderExecutionFailedError(f"Liquidation order returned None at price {current_price}")
@@ -728,7 +736,7 @@ class OrderManager:
                         NotificationType.ORDER_FAILED,
                         error_details=f"Failed to liquidate position: {e}",
                     )
-                except (DataFetchError, ValueError) as e:
+                except (DataFetchError, OrderRefusedError, ValueError) as e:
                     self.logger.error(f"Failed to liquidate at {current_price}: {e}")
                     await self.notification_handler.async_send_notification(
                         NotificationType.ERROR_OCCURRED,

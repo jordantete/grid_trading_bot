@@ -16,7 +16,8 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
         pair: str,
         quantity: float,
         price: float,
-    ) -> Order | None:
+        client_order_id: str,
+    ) -> Order:
         order_id = f"backtest-{next(self._id_counter)}"
         timestamp = int(time.time() * 1000)
         if self.slippage:
@@ -46,7 +47,8 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
         pair: str,
         quantity: float,
         price: float,
-    ) -> Order | None:
+        client_order_id: str,
+    ) -> Order:
         order_id = f"backtest-{next(self._id_counter)}"
         return Order(
             identifier=order_id,
@@ -86,6 +88,16 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
             symbol=pair,
             time_in_force="GTC",
         )
+
+    async def find_order(self, client_order_id: str, pair: str) -> Order | None:
+        """A backtest order never loses its answer, so there is nothing to find."""
+        return None
+
+    def round_amount(self, pair: str, amount: float) -> float:
+        return amount
+
+    def round_price(self, pair: str, price: float) -> float:
+        return price
 
     async def cancel_order(self, order_id: str, pair: str) -> bool:
         return True

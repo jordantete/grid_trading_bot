@@ -16,6 +16,7 @@ from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequ
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import RunFiles
+from grid_trading_bot.core.persistence.serializers import compute_config_hash
 from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
 from grid_trading_bot.core.persistence.state_recovery_service import RecoveryOutcome, RecoveryResult
 from grid_trading_bot.core.services.exceptions import (
@@ -314,6 +315,9 @@ class TestGridTradingBot(BotFixtures):
         bot.balance_tracker = Mock()
 
         assert bot.get_account_snapshot() is None
+
+    def test_the_order_manager_signs_its_orders_with_the_config_hash(self, bot, config_manager):
+        assert bot.order_manager.config_hash == compute_config_hash(config_manager)
 
     @patch("grid_trading_bot.core.bot_management.grid_trading_bot.GridTradingStrategy")
     @pytest.mark.asyncio

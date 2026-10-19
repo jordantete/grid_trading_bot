@@ -20,7 +20,6 @@ class OrderExecutionStrategyFactory:
                 exchange_service=exchange_service,
                 max_retries=config_manager.get_max_retries(),
                 retry_delay=config_manager.get_retry_delay(),
-                max_slippage=config_manager.get_max_slippage(),
             )
         elif trading_mode == TradingMode.BACKTEST:
             return BacktestOrderExecutionStrategy(

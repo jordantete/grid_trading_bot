@@ -1,26 +1,33 @@
 import asyncio
 import logging
 
-from grid_trading_bot.core.services.exceptions import DataFetchError, OrderCancellationError
+from grid_trading_bot.core.services.exceptions import (
+    DataFetchError,
+    OrderCancellationError,
+    OrderNotFoundError,
+    OrderNotPlacedError,
+    OrderOutcomeUnknownError,
+    OrderRejectedError,
+)
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
-from ..exceptions import OrderExecutionFailedError
 from ..order import Order, OrderSide, OrderStatus, OrderType
 from .order_execution_strategy_interface import OrderExecutionStrategyInterface
 
 
 class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
+    LOOKUP_ATTEMPTS = 3
+    LOOKUP_DELAY = 1.0  # seconds
+
     def __init__(
         self,
         exchange_service: ExchangeInterface,
         max_retries: int = 3,
         retry_delay: int = 1,
-        max_slippage: float = 0.01,
     ) -> None:
         self.exchange_service = exchange_service
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self.max_slippage = max_slippage
         self.logger = logging.getLogger(self.__class__.__name__)
 
     async def execute_market_order(
@@ -29,121 +36,67 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         pair: str,
         quantity: float,
         price: float,
-    ) -> Order | None:
-        remaining_quantity = quantity
-        filled_total = 0.0
-        cost_total = 0.0
-        last_order: Order | None = None
-
-        for attempt in range(self.max_retries):
-            try:
-                raw_order = await self.exchange_service.place_order(
-                    pair,
-                    OrderType.MARKET.value.lower(),
-                    order_side.name.lower(),
-                    remaining_quantity,
-                    price,
-                )
-                order_result = await self._parse_order_result(raw_order)
-                last_order = order_result
-                leg_filled = order_result.filled or 0.0
-                if order_result.average is not None:
-                    leg_price = order_result.average
-                elif order_result.price is not None:
-                    leg_price = order_result.price
-                else:
-                    leg_price = price
-
-                if order_result.status == OrderStatus.CLOSED:
-                    filled_total += leg_filled
-                    cost_total += leg_filled * leg_price
-                    return self._aggregate_market_order(order_result, quantity, filled_total, cost_total)
-
-                elif order_result.status == OrderStatus.OPEN:
-                    final_leg = await self._handle_partial_fill(order_result, pair)
-                    if final_leg is None:
-                        # Cannot cancel — account only the placement-response fill to avoid double-spend
-                        filled_total += leg_filled
-                        cost_total += leg_filled * leg_price
-                        return self._aggregate_market_order(order_result, quantity, filled_total, cost_total)
-
-                    final_leg_filled = final_leg.filled or 0.0
-                    if final_leg.average is not None:
-                        final_leg_price = final_leg.average
-                    elif final_leg.price is not None:
-                        final_leg_price = final_leg.price
-                    else:
-                        final_leg_price = price
-                    filled_total += final_leg_filled
-                    cost_total += final_leg_filled * final_leg_price
-                    remaining_quantity -= final_leg_filled
-
-                else:
-                    if leg_filled > 0:
-                        filled_total += leg_filled
-                        cost_total += leg_filled * leg_price
-                        remaining_quantity -= leg_filled
-                        self.logger.warning(
-                            f"Market order leg returned status {order_result.status} with partial fill "
-                            f"{leg_filled}; retrying remaining {remaining_quantity}.",
-                        )
-                    else:
-                        self.logger.warning(
-                            f"Market order leg returned status {order_result.status}; retrying full remaining.",
-                        )
-
-                await asyncio.sleep(self.retry_delay)
-                self.logger.info(f"Retrying order. Attempt {attempt + 1}/{self.max_retries}.")
-                price = await self._adjust_price(order_side, price, attempt + 1)
-
-            except DataFetchError as e:
-                self.logger.error(f"Attempt {attempt + 1} failed with error: {e!s}")
-                await asyncio.sleep(self.retry_delay)
-
-        if filled_total > 0 and last_order is not None:
-            self.logger.error(
-                f"Market order exhausted retries with partial fill {filled_total}/{quantity}. "
-                f"Returning aggregate so fills stay accounted.",
-            )
-            return self._aggregate_market_order(last_order, quantity, filled_total, cost_total)
-
-        raise OrderExecutionFailedError(
-            "Failed to execute Market order after maximum retries.",
-            order_side,
-            OrderType.MARKET,
-            pair,
-            quantity,
-            price,
-        )
-
-    def _aggregate_market_order(
-        self,
-        last_order: Order,
-        requested_quantity: float,
-        filled_total: float,
-        cost_total: float,
+        client_order_id: str,
     ) -> Order:
-        """Synthesizes one Order covering every executed leg of a retried market order."""
-        average = cost_total / filled_total if filled_total > 0 else last_order.average
+        """
+        Sends one market leg and returns it closed with what it executed. A leg the exchange leaves open with a
+        partial fill is cancelled first; a leg that executed nothing raises.
+        """
+        leg = await self._send(OrderType.MARKET, order_side, pair, quantity, price, client_order_id)
+        if leg.status == OrderStatus.OPEN:
+            settled = await self._handle_partial_fill(leg, pair)
+            if settled is not None:
+                leg = settled
+
+        if leg.filled is not None:
+            filled = leg.filled
+        elif leg.status == OrderStatus.CLOSED:
+            filled = leg.amount
+        else:
+            filled = 0.0
+        if filled <= 0 and leg.status == OrderStatus.REJECTED:
+            raise OrderRejectedError(f"The exchange rejected market {order_side.value} order {leg.identifier}.")
+        if filled <= 0 and leg.status != OrderStatus.CLOSED:
+            raise OrderNotPlacedError(
+                f"Market {order_side.value} order {leg.identifier} ended {leg.status.value} without a fill."
+            )
+
+        if leg.average is not None:
+            leg_price = leg.average
+        elif leg.price is not None:
+            leg_price = leg.price
+        else:
+            leg_price = price
+        return self._closed_leg(leg, quantity, filled, filled * leg_price)
+
+    def _closed_leg(
+        self,
+        leg: Order,
+        requested_quantity: float,
+        filled: float,
+        cost: float,
+    ) -> Order:
+        """The closed view of one market leg: `filled` executed, the rest of `requested_quantity` did not."""
+        average = cost / filled if filled > 0 else leg.average
         return Order(
-            identifier=last_order.identifier,
+            identifier=leg.identifier,
             status=OrderStatus.CLOSED,
             order_type=OrderType.MARKET,
-            side=last_order.side,
-            price=last_order.price,
+            side=leg.side,
+            price=leg.price,
             average=average,
             amount=requested_quantity,
-            filled=filled_total,
-            remaining=max(requested_quantity - filled_total, 0.0),
-            timestamp=last_order.timestamp,
-            datetime=last_order.datetime,
-            last_trade_timestamp=last_order.last_trade_timestamp,
-            symbol=last_order.symbol,
-            time_in_force=last_order.time_in_force,
-            trades=last_order.trades,
-            fee=last_order.fee,
-            cost=cost_total,
-            info=last_order.info,
+            filled=filled,
+            remaining=max(requested_quantity - filled, 0.0),
+            timestamp=leg.timestamp,
+            datetime=leg.datetime,
+            last_trade_timestamp=leg.last_trade_timestamp,
+            symbol=leg.symbol,
+            time_in_force=leg.time_in_force,
+            trades=leg.trades,
+            fee=leg.fee,
+            cost=cost,
+            info=leg.info,
         )
 
     async def execute_limit_order(
@@ -152,28 +105,70 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         pair: str,
         quantity: float,
         price: float,
-    ) -> Order | None:
+        client_order_id: str,
+    ) -> Order:
+        return await self._send(OrderType.LIMIT, order_side, pair, quantity, price, client_order_id)
+
+    async def _send(
+        self,
+        order_type: OrderType,
+        order_side: OrderSide,
+        pair: str,
+        quantity: float,
+        price: float,
+        client_order_id: str,
+    ) -> Order:
+        """
+        Places one order under `client_order_id`. When the answer is lost or unreadable, the order is looked up by
+        that id before anything is reported.
+        """
         try:
             raw_order = await self.exchange_service.place_order(
                 pair,
-                OrderType.LIMIT.value.lower(),
-                order_side.name.lower(),
+                order_type.value,
+                order_side.value,
                 quantity,
                 price,
+                client_order_id=client_order_id,
             )
-            order_result = await self._parse_order_result(raw_order)
-            return order_result
+        except OrderOutcomeUnknownError as error:
+            self.logger.warning(f"No answer for {order_type.value} order {client_order_id} ({error}); looking it up.")
+            return await self._find_after_lost_answer(client_order_id, pair)
+        try:
+            return await self._parse_order_result(raw_order)
+        except DataFetchError as error:
+            self.logger.warning(f"Unreadable answer for order {client_order_id} ({error}); looking it up.")
+            return await self._find_after_lost_answer(client_order_id, pair)
 
-        except DataFetchError as e:
-            self.logger.error(f"DataFetchError during order execution for {pair} - {e}")
-            raise OrderExecutionFailedError(
-                f"Failed to execute Limit order on {pair}: {e}",
-                order_side,
-                OrderType.LIMIT,
-                pair,
-                quantity,
-                price,
-            ) from e
+    async def _find_after_lost_answer(self, client_order_id: str, pair: str) -> Order:
+        """
+        Looks the order up by `client_order_id` up to LOOKUP_ATTEMPTS times. Raises OrderNotPlacedError when every
+        lookup says it does not exist, OrderOutcomeUnknownError when a lookup failed and none found it.
+        """
+        lookup_failed = False
+        for _ in range(self.LOOKUP_ATTEMPTS):
+            await asyncio.sleep(self.LOOKUP_DELAY)
+            try:
+                order = await self.find_order(client_order_id, pair)
+            except DataFetchError as error:
+                self.logger.warning(f"Lookup of order {client_order_id} failed: {error}")
+                lookup_failed = True
+                continue
+            if order is not None:
+                self.logger.info(f"Order {client_order_id} found on the exchange as {order.identifier}.")
+                return order
+        if lookup_failed:
+            raise OrderOutcomeUnknownError(f"Order {client_order_id} could not be confirmed or ruled out.")
+        raise OrderNotPlacedError(
+            f"Order {client_order_id} is not on the exchange after {self.LOOKUP_ATTEMPTS} lookups."
+        )
+
+    async def find_order(self, client_order_id: str, pair: str) -> Order | None:
+        try:
+            raw_order = await self.exchange_service.fetch_order_by_client_id(client_order_id, pair)
+        except OrderNotFoundError:
+            return None
+        return await self._parse_order_result(raw_order)
 
     async def get_order(
         self,
@@ -190,6 +185,12 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
 
     async def cancel_order(self, order_id: str, pair: str) -> bool:
         return await self._retry_cancel_order(order_id, pair)
+
+    def round_amount(self, pair: str, amount: float) -> float:
+        return self.exchange_service.round_amount(pair, amount)
+
+    def round_price(self, pair: str, price: float) -> float:
+        return self.exchange_service.round_price(pair, price)
 
     async def _parse_order_result(
         self,
@@ -233,15 +234,6 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
             info=raw_order_result.get("info", raw_order_result),
         )
 
-    async def _adjust_price(
-        self,
-        order_side: OrderSide,
-        price: float,
-        attempt: int,
-    ) -> float:
-        adjustment = self.max_slippage / self.max_retries * attempt
-        return price * (1 + adjustment) if order_side == OrderSide.BUY else price * (1 - adjustment)
-
     async def _handle_partial_fill(
         self,
         order: Order,
@@ -255,7 +247,7 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
             The authoritative Order to use for accounting (refetched, or the placement-response
             order if the refetch itself fails), or None if the cancel could not be completed.
         """
-        self.logger.info(f"Order partially filled with {order.filled}. Attempting to cancel and retry remaining.")
+        self.logger.info(f"Order partially filled with {order.filled}. Attempting to cancel the rest.")
 
         if not await self._retry_cancel_order(order.identifier, pair):
             self.logger.error(f"Unable to cancel partially filled order {order.identifier} after retries.")
@@ -286,14 +278,11 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
 
                 self.logger.warning(f"Cancel attempt {cancel_attempt + 1} for order {order_id} failed.")
 
+            except OrderNotFoundError:
+                self.logger.info(f"Order {order_id} already gone from the exchange; treating as cancelled.")
+                return True
+
             except OrderCancellationError as e:
-                # live_exchange_service.cancel_order wraps ccxt's OrderNotFound in an
-                # OrderCancellationError whose message says "not found for cancellation" —
-                # that means the order is already gone from the exchange, which is the
-                # outcome we wanted, so treat it as a successful cancellation.
-                if "not found for cancellation" in str(e):
-                    self.logger.info(f"Order {order_id} already gone from the exchange; treating as cancelled.")
-                    return True
                 self.logger.warning(f"Error during cancel attempt {cancel_attempt + 1} for order {order_id}: {e!s}")
 
             await asyncio.sleep(self.retry_delay)

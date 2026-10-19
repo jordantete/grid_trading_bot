@@ -1,4 +1,5 @@
 import asyncio
+import re
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -9,7 +10,12 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
-from grid_trading_bot.core.services.exceptions import DataFetchError, PostOnlyRejectedError
+from grid_trading_bot.core.services.exceptions import (
+    DataFetchError,
+    OrderNotPlacedError,
+    OrderRejectedError,
+    PostOnlyRejectedError,
+)
 from grid_trading_bot.core.validation.exceptions import InsufficientCryptoBalanceError
 
 
@@ -107,7 +113,7 @@ class TestFills:
         assert len(stack.execution.open_orders(OrderSide.SELL)) == 2
 
     async def test_an_update_for_an_unknown_order_is_ignored(self, stack):
-        stranger = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0)
+        stranger = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0, "gstranger")
         balances_before = (stack.balances.balance, stack.balances.crypto_balance)
 
         await stack.manager.apply_order_update(stack.execution.fill(stranger.identifier))
@@ -135,7 +141,7 @@ class TestFills:
         assert stack.execution.open_orders(OrderSide.SELL) == [stack.execution.order_at(120.0, OrderSide.SELL)]
 
     async def test_a_fill_without_a_grid_level_is_booked_and_places_nothing(self, stack):
-        loose = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0)
+        loose = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0, "gloose")
         stack.book.add_order(loose)
         crypto_before = stack.balances.get_adjusted_crypto_balance()
         orders_before = len(stack.execution.orders)
@@ -150,6 +156,8 @@ class TestFills:
         [
             OrderExecutionFailedError("network down", OrderSide.SELL, OrderType.LIMIT, "BTC/USDT", 1.0, 110.0),
             DataFetchError("exchange unavailable"),
+            OrderNotPlacedError("exchange unavailable"),
+            OrderRejectedError("insufficient funds"),
         ],
     )
     async def test_a_failed_paired_placement_keeps_the_fill_booked_and_saves(self, stack, error):
@@ -305,7 +313,7 @@ class TestEndedOrders:
 
     async def test_an_ended_order_without_a_grid_level_is_settled_and_notified(self, stack):
         await stack.balances.reserve_funds_for_buy(95.0)
-        loose = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0)
+        loose = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0, "gloose")
         stack.book.add_order(loose)
         orders_before = len(stack.execution.orders)
 
@@ -318,7 +326,7 @@ class TestEndedOrders:
 
     async def test_a_rejected_order_without_a_grid_level_reports_the_rejection(self, stack):
         await stack.balances.reserve_funds_for_buy(95.0)
-        loose = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0)
+        loose = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0, "gloose")
         stack.book.add_order(loose)
         orders_before = len(stack.execution.orders)
 
@@ -330,11 +338,17 @@ class TestEndedOrders:
         assert NotificationType.ORDER_CANCELLED in _sent(stack)
         assert NotificationType.ERROR_OCCURRED in _sent(stack)
 
-    async def test_a_failed_replacement_releases_its_reservation(self, stack):
+    @pytest.mark.parametrize(
+        "error",
+        [
+            OrderExecutionFailedError("network down", OrderSide.BUY, OrderType.LIMIT, "BTC/USDT", 1.0, 90.0),
+            OrderNotPlacedError("exchange unavailable"),
+            OrderRejectedError("insufficient funds"),
+        ],
+    )
+    async def test_a_failed_replacement_releases_its_reservation(self, stack, error):
         buy = stack.execution.order_at(90.0, OrderSide.BUY)
-        stack.execution.fail_next_limit_order = OrderExecutionFailedError(
-            "network down", OrderSide.BUY, OrderType.LIMIT, "BTC/USDT", 1.0, 90.0
-        )
+        stack.execution.fail_next_limit_order = error
 
         await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.CANCELED))
 
@@ -417,3 +431,51 @@ class TestPlacementEntryState:
 
         assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + placed.amount)
         assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(placed.amount)
+
+
+class TestClientOrderIds:
+    async def test_every_grid_order_is_sent_with_a_client_order_id_of_this_config(self):
+        stack = build_stack()
+        stack.manager.config_hash = "3f2a9c1d8e7b6a5f"
+
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+
+        assert len(stack.execution.client_ids) == 4
+        assert all(re.fullmatch(r"g3f2a9c1d[0-9a-f]{16}", cid) for cid in stack.execution.client_ids)
+
+    async def test_a_paired_order_gets_a_client_order_id_of_its_own(self, stack):
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+
+        await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
+
+        sell = stack.execution.order_at(110.0, OrderSide.SELL)
+        assert sell.identifier in stack.execution.client_ids.values()
+        assert len(stack.execution.client_ids) == 5
+
+    async def test_a_grid_order_that_was_not_placed_releases_its_reservation(self):
+        stack = build_stack()
+        stack.execution.fail_next_limit_order = OrderNotPlacedError("exchange unavailable")
+
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+
+        assert len(stack.execution.open_orders()) == 3
+        assert reserved_matches_open_orders(stack)
+        assert NotificationType.ORDER_FAILED in _sent(stack)
+
+    async def test_an_initial_purchase_the_exchange_refuses_is_reported(self):
+        stack = build_stack(crypto=0.0)
+        stack.execution.market_order_failures = [OrderRejectedError("insufficient funds")]
+        balances_before = (stack.balances.balance, stack.balances.crypto_balance)
+
+        await stack.manager.perform_initial_purchase(ARMING_PRICE)
+
+        assert (stack.balances.balance, stack.balances.crypto_balance) == balances_before
+        assert NotificationType.ORDER_FAILED in _sent(stack)
+
+    async def test_a_liquidation_the_exchange_refuses_is_reported(self, stack):
+        stack.execution.market_order_failures = [OrderRejectedError("insufficient funds")]
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert stack.balances.crypto_balance == pytest.approx(20.0)
+        assert NotificationType.ERROR_OCCURRED in _sent(stack)

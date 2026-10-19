@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 
@@ -37,6 +37,7 @@ class TestBuyFillSellPlacement:
             "BTC/USDT",
             0.01,
             52000,
+            client_order_id=ANY,
         )
         order_book.add_order.assert_called_once_with(mock_sell_order, sell_grid_level)
 
@@ -93,7 +94,9 @@ class TestBuyFillSellPlacement:
 
         await manager._handle_order_completion(buy_order, buy_grid_level)
 
-        order_execution_strategy.execute_limit_order.assert_awaited_once_with(OrderSide.SELL, "BTC/USDT", 0.01, 52000)
+        order_execution_strategy.execute_limit_order.assert_awaited_once_with(
+            OrderSide.SELL, "BTC/USDT", 0.01, 52000, client_order_id=ANY
+        )
 
 
 class TestCcxtResponseHandling:
@@ -290,4 +293,5 @@ class TestTrackerToOrderManagerFlow:
             "BTC/USDT",
             0.01,
             52000,
+            client_order_id=ANY,
         )

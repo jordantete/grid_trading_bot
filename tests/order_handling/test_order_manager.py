@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import ANY, AsyncMock, Mock, call
 
 import pytest
 
@@ -192,7 +192,7 @@ class TestOrderManager:
         await manager.initialize_grid_orders(49500)
 
         order_execution_strategy.execute_limit_order.assert_awaited_once_with(
-            OrderSide.BUY, manager.trading_pair, 0.01, 48000
+            OrderSide.BUY, manager.trading_pair, 0.01, 48000, client_order_id=ANY
         )
 
     # ── _handle_order_completion ────────────────────────────────────────
@@ -698,6 +698,7 @@ class TestClosePositions:
             manager.trading_pair,
             2.5,
             100.0,
+            client_order_id=ANY,
         )
         balance_tracker.update_after_liquidation.assert_awaited_once_with(closed_order)
         order_book.add_order.assert_called_once_with(closed_order)

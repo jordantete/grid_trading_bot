@@ -22,7 +22,7 @@ class TestBacktestOrderExecutionStrategy:
         quantity = 0.5
         price = 30000
 
-        order = await strategy.execute_market_order(order_side, pair, quantity, price)
+        order = await strategy.execute_market_order(order_side, pair, quantity, price, "g1")
 
         assert order is not None
         assert order.identifier == "backtest-0"
@@ -45,7 +45,7 @@ class TestBacktestOrderExecutionStrategy:
         quantity = 1
         price = 2000
 
-        order = await strategy.execute_limit_order(order_side, pair, quantity, price)
+        order = await strategy.execute_limit_order(order_side, pair, quantity, price, "g1")
 
         assert order is not None
         assert order.identifier == "backtest-0"
@@ -63,7 +63,7 @@ class TestBacktestOrderExecutionStrategy:
     @patch("time.time", return_value=1680000000)
     async def test_execute_market_buy_order_with_slippage(self, mock_time):
         strategy = BacktestOrderExecutionStrategy(slippage=0.001)
-        order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000)
+        order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000, "g1")
 
         assert order is not None
         assert order.price == 30000
@@ -73,7 +73,7 @@ class TestBacktestOrderExecutionStrategy:
     @patch("time.time", return_value=1680000000)
     async def test_execute_market_sell_order_with_slippage(self, mock_time):
         strategy = BacktestOrderExecutionStrategy(slippage=0.001)
-        order = await strategy.execute_market_order(OrderSide.SELL, "BTC/USDT", 0.5, 30000)
+        order = await strategy.execute_market_order(OrderSide.SELL, "BTC/USDT", 0.5, 30000, "g1")
 
         assert order is not None
         assert order.price == 30000
@@ -83,7 +83,7 @@ class TestBacktestOrderExecutionStrategy:
     @patch("time.time", return_value=1680000000)
     async def test_execute_market_order_no_slippage_by_default(self, mock_time):
         strategy = BacktestOrderExecutionStrategy()
-        order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000)
+        order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000, "g1")
 
         assert order.price == 30000
         assert order.average == 30000
@@ -93,9 +93,9 @@ class TestBacktestOrderExecutionStrategy:
         """Orders placed within the same wall-clock second must not collide on identifier."""
         strategy = setup_strategy
 
-        market_order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000)
-        limit_order = await strategy.execute_limit_order(OrderSide.SELL, "BTC/USDT", 0.5, 30000)
-        another_market_order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000)
+        market_order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000, "g1")
+        limit_order = await strategy.execute_limit_order(OrderSide.SELL, "BTC/USDT", 0.5, 30000, "g2")
+        another_market_order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 0.5, 30000, "g3")
 
         ids = {market_order.identifier, limit_order.identifier, another_market_order.identifier}
         assert len(ids) == 3
@@ -120,3 +120,10 @@ class TestBacktestOrderExecutionStrategy:
         assert order.symbol == order_symbol
         assert order.time_in_force == "GTC"
         assert order.timestamp == 0
+
+    async def test_find_order_finds_nothing(self, setup_strategy):
+        assert await setup_strategy.find_order("g1", "BTC/USDT") is None
+
+    async def test_rounding_keeps_the_values(self, setup_strategy):
+        assert setup_strategy.round_amount("BTC/USDT", 0.123456789) == 0.123456789
+        assert setup_strategy.round_price("BTC/USDT", 100.4567) == 100.4567
