@@ -170,7 +170,6 @@ class GridTradingBot:
             self.order_status_tracker = OrderStatusTracker(
                 order_book=order_book,
                 order_execution_strategy=order_execution_strategy,
-                event_bus=self.event_bus,
                 order_update_handler=self.order_manager,
                 polling_interval=self.config_manager.get_order_polling_interval(),
             )
@@ -445,7 +444,6 @@ class GridTradingBot:
     def _cleanup_subscriptions(self) -> None:
         """Unsubscribes all components from EventBus events."""
         self.event_bus.unsubscribe(Events.STOP_BOT, self._handle_stop_bot_event)
-        self.order_manager.cleanup()
         if self.reconciliation_service:
             self.reconciliation_service.cleanup()
 

@@ -22,7 +22,6 @@ def setup_order_manager():
     balance_tracker.reserve_funds_for_sell = AsyncMock()
     balance_tracker.release_reserved_fiat = AsyncMock()
     balance_tracker.release_reserved_crypto = AsyncMock()
-    balance_tracker.settle_cancelled_order = AsyncMock()
     balance_tracker.update_after_initial_purchase = AsyncMock()
     balance_tracker.update_after_liquidation = AsyncMock()
     balance_tracker.record_execution = AsyncMock()
@@ -60,17 +59,15 @@ def setup_order_manager():
 def setup_tracker():
     order_book = Mock()
     order_execution_strategy = Mock()
-    event_bus = Mock()
     order_update_handler = Mock()
     order_update_handler.apply_order_update = AsyncMock()
     tracker = OrderStatusTracker(
         order_book=order_book,
         order_execution_strategy=order_execution_strategy,
-        event_bus=event_bus,
         order_update_handler=order_update_handler,
         polling_interval=1.0,
     )
-    return tracker, order_book, order_execution_strategy, event_bus
+    return tracker, order_book, order_execution_strategy, order_update_handler
 
 
 @pytest.fixture

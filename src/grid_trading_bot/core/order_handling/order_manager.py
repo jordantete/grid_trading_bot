@@ -4,7 +4,7 @@ from dataclasses import replace
 import logging
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.services.exceptions import DataFetchError, PostOnlyRejectedError
@@ -24,7 +24,7 @@ from .exceptions import GridFeasibilityError, OrderExecutionFailedError
 from .execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
-from .order import Order, OrderSide, OrderStatus
+from .order import ENDED_UNFILLED_STATUSES, Order, OrderSide, OrderStatus
 from .state_store import ArmingFlags, StateStore
 
 
@@ -57,12 +57,6 @@ class OrderManager:
         self.market_constraints: MarketConstraints | None = None
         self._lock = asyncio.Lock()
         self._positions_closed = False
-        self._settled_cancellation_ids: set[str] = set()
-        self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
-
-    def cleanup(self) -> None:
-        """Unsubscribes from all EventBus events."""
-        self.event_bus.unsubscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
 
     def set_market_constraints(self, constraints: MarketConstraints) -> None:
         self.market_constraints = constraints
@@ -188,20 +182,12 @@ class OrderManager:
                 self.logger.error(f"Failed to cancel order {order.identifier}; aborting bulk cancellation.")
                 return False
 
-            final_order = order
-            if self.trading_mode != TradingMode.BACKTEST:
-                try:
-                    fetched = await self.order_execution_strategy.get_order(order.identifier, self.trading_pair)
-                    if fetched is not None:
-                        final_order = fetched
-                except DataFetchError as e:
-                    self.logger.warning(
-                        f"Could not refetch cancelled order {order.identifier}; using local state: {e}",
-                    )
-
-            await self.balance_tracker.settle_cancelled_order(final_order)
-            self._settled_cancellation_ids.add(order.identifier)
+            fetched = await self._refetch_cancelled(order)
+            newly_filled = order.apply_update(fetched) if fetched is not None else 0.0
+            if not order.is_filled():
+                order.status = OrderStatus.CANCELED
             self.order_book.remove_open_order(order)
+            await self.balance_tracker.record_execution(order, newly_filled)
             if grid_level is not None:
                 self.grid_manager.rollback_order_placement(
                     grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
@@ -209,6 +195,16 @@ class OrderManager:
             self.logger.info(f"Cancelled {order.side.value} order {order.identifier} at {order.price}.")
 
         return True
+
+    async def _refetch_cancelled(self, order: Order) -> Order | None:
+        """The exchange's view of an order just cancelled; None in backtest or when it cannot be read."""
+        if self.trading_mode == TradingMode.BACKTEST:
+            return None
+        try:
+            return await self.order_execution_strategy.get_order(order.identifier, self.trading_pair)
+        except DataFetchError as e:
+            self.logger.warning(f"Could not refetch cancelled order {order.identifier}; using local state: {e}")
+            return None
 
     async def _initialize_order(self, grid_level: GridLevel, side: OrderSide, current_price: float) -> None:
         price = grid_level.price
@@ -320,81 +316,6 @@ class OrderManager:
                 error_details=f"{context}: {error!s}",
             )
 
-    async def _on_order_cancelled(self, order: Order) -> None:
-        """
-        Handles an externally-cancelled grid order: settles balances (incl. any partial
-        fill), rolls the grid level back, and re-places the order. Each cancellation is
-        settled once: orders already settled here or by a bulk cancellation are skipped.
-        """
-        async with self._lock:
-            try:
-                if order.identifier in self._settled_cancellation_ids:
-                    self.logger.info(f"Cancel event for {order.identifier} already handled; skipping.")
-                    return
-
-                grid_level = self.order_book.get_grid_level_for_order(order)
-
-                if grid_level is None:
-                    self.logger.warning(f"Cancelled order {order.identifier} has no grid level; skipping settlement.")
-                    await self.notification_handler.async_send_notification(
-                        NotificationType.ORDER_CANCELLED,
-                        order_details=str(order),
-                    )
-                    return
-
-                await self.balance_tracker.settle_cancelled_order(order)
-                self._settled_cancellation_ids.add(order.identifier)
-                self.order_book.remove_open_order(order)
-                self.grid_manager.rollback_order_placement(
-                    grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
-                )
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ORDER_CANCELLED,
-                    order_details=str(order),
-                )
-
-                if self._positions_closed:
-                    self.logger.info(f"Positions are closed; not re-placing cancelled order {order.identifier}.")
-                    return
-
-                try:
-                    quantity = order.remaining if order.remaining and order.remaining > 0 else order.amount
-                    adjusted_quantity = self._validate_order_quantity(order.side, quantity, grid_level.price)
-                    if self.market_constraints is not None:
-                        violation = self.market_constraints.violation(adjusted_quantity, grid_level.price)
-                        if violation:
-                            self.logger.warning(f"Not re-placing cancelled order at {grid_level.price}: {violation}")
-                            return
-                    await self._reserve_funds(order.side, adjusted_quantity, grid_level.price)
-                    try:
-                        new_order = await self.order_execution_strategy.execute_limit_order(
-                            order.side,
-                            self.trading_pair,
-                            adjusted_quantity,
-                            grid_level.price,
-                        )
-                    except PostOnlyRejectedError as e:
-                        await self._skip_post_only_rejection(
-                            order.side, adjusted_quantity, grid_level.price, e, "Cancelled-order re-placement"
-                        )
-                        return
-                    except Exception:
-                        await self._release_funds(order.side, adjusted_quantity, grid_level.price)
-                        raise
-                    if new_order is None:
-                        await self._release_funds(order.side, adjusted_quantity, grid_level.price)
-                        self.logger.error(f"Re-placement at grid level {grid_level.price} returned None.")
-                        return
-                    self.grid_manager.mark_order_pending(grid_level, new_order)
-                    self.order_book.add_order(new_order, grid_level)
-                    self.logger.info(f"Re-placed cancelled {order.side.value} order at grid level {grid_level.price}.")
-                except Exception as e:
-                    await self._handle_order_error(
-                        e, f"Failed to re-place cancelled order at grid level {grid_level.price}"
-                    )
-            finally:
-                await self._save_state()
-
     async def apply_order_update(self, update: Order) -> None:
         """
         Applies the exchange's view of one order under the lock: books what it filled, moves its grid level, places
@@ -410,6 +331,8 @@ class OrderManager:
                 if update.status == OrderStatus.CLOSED:
                     await self._settle_fill(local, update)
                     filled_order = local
+                elif update.status in ENDED_UNFILLED_STATUSES:
+                    await self._settle_end(local, update)
                 else:
                     self.logger.info(f"Order {update.identifier} reported as {update.status.value}; nothing to apply.")
             finally:
@@ -418,6 +341,77 @@ class OrderManager:
             await self.notification_handler.async_send_notification(
                 NotificationType.ORDER_FILLED, order_details=str(filled_order)
             )
+
+    async def _settle_end(self, local: Order, update: Order) -> None:
+        """
+        Books what an order filled before it ended unfilled, frees its level, then re-places it unless the exchange
+        rejected it or the positions are closed.
+        """
+        newly_filled = local.apply_update(update)
+        self.order_book.remove_open_order(local)
+        await self.balance_tracker.record_execution(local, newly_filled)
+        await self.notification_handler.async_send_notification(
+            NotificationType.ORDER_CANCELLED,
+            order_details=str(local),
+        )
+        grid_level = self.order_book.get_grid_level_for_order(local)
+        if grid_level is None:
+            self.logger.warning(f"Order {local.identifier} ended ({local.status.value}) without a grid level.")
+            return
+        self.grid_manager.rollback_order_placement(
+            grid_level, local.side, self.order_book.has_open_orders_at(grid_level)
+        )
+        if local.status == OrderStatus.REJECTED:
+            self.logger.error(
+                f"The exchange rejected order {local.identifier} at {grid_level.price}; not re-placing it."
+            )
+            await self.notification_handler.async_send_notification(
+                NotificationType.ERROR_OCCURRED,
+                error_details=(
+                    f"The exchange rejected order {local.identifier} at grid level {grid_level.price}; "
+                    "it is not re-placed."
+                ),
+            )
+            return
+        if self._positions_closed:
+            self.logger.info(f"Positions are closed; not re-placing ended order {local.identifier}.")
+            return
+        await self._replace_ended_order(local, grid_level)
+
+    async def _replace_ended_order(self, order: Order, grid_level: GridLevel) -> None:
+        try:
+            quantity = order.remaining if order.remaining and order.remaining > 0 else order.amount
+            adjusted_quantity = self._validate_order_quantity(order.side, quantity, grid_level.price)
+            if self.market_constraints is not None:
+                violation = self.market_constraints.violation(adjusted_quantity, grid_level.price)
+                if violation:
+                    self.logger.warning(f"Not re-placing ended order at {grid_level.price}: {violation}")
+                    return
+            await self._reserve_funds(order.side, adjusted_quantity, grid_level.price)
+            try:
+                new_order = await self.order_execution_strategy.execute_limit_order(
+                    order.side,
+                    self.trading_pair,
+                    adjusted_quantity,
+                    grid_level.price,
+                )
+            except PostOnlyRejectedError as e:
+                await self._skip_post_only_rejection(
+                    order.side, adjusted_quantity, grid_level.price, e, "Ended-order re-placement"
+                )
+                return
+            except Exception:
+                await self._release_funds(order.side, adjusted_quantity, grid_level.price)
+                raise
+            if new_order is None:
+                await self._release_funds(order.side, adjusted_quantity, grid_level.price)
+                self.logger.error(f"Re-placement at grid level {grid_level.price} returned None.")
+                return
+            self.grid_manager.mark_order_pending(grid_level, new_order)
+            self.order_book.add_order(new_order, grid_level)
+            self.logger.info(f"Re-placed ended {order.side.value} order at grid level {grid_level.price}.")
+        except Exception as e:
+            await self._handle_order_error(e, f"Failed to re-place ended order at grid level {grid_level.price}")
 
     async def _settle_fill(self, local: Order, update: Order) -> None:
         newly_filled = local.apply_update(update)

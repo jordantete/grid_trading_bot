@@ -10,7 +10,6 @@ class Events:
     Defines event types for the EventBus.
     """
 
-    ORDER_CANCELLED = "order_cancelled"
     STOP_BOT = "stop_bot"
 
 
@@ -83,7 +82,7 @@ class EventBus:
             self.logger.warning(f"No subscribers for event: {event_type}")
             return
 
-        self.logger.info(f"Publishing async event: {event_type} with data: {data}")
+        self.logger.info(f"Publishing event: {event_type} with data: {data}")
         tasks = []
         for callback in list(self.subscribers[event_type]):
             if inspect.iscoroutinefunction(callback):
@@ -94,7 +93,7 @@ class EventBus:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for result in results:
                 if isinstance(result, Exception):
-                    self.logger.error(f"Exception in async event callback: {result}", exc_info=True)
+                    self.logger.error(f"Exception in async event callback: {result}", exc_info=result)
 
     def publish_sync(
         self,

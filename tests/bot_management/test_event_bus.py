@@ -43,6 +43,8 @@ class TestEventBus:
 
         assert "Exception in async event callback" in caplog.text
         assert "Test Error" in caplog.text
+        assert "NoneType: None" not in caplog.text
+        assert "Traceback" in caplog.text
 
     @pytest.mark.asyncio
     async def test_publish_runs_sync_subscribers_on_the_loop_thread(self, event_bus):

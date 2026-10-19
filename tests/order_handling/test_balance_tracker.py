@@ -383,22 +383,32 @@ class TestRecordExecution:
         assert balance_tracker.reserved_fiat == pytest.approx(100.0 - 40.0 - 0.04)
 
 
-class TestSettleCancelledOrder:
+class TestRecordEndedOrder:
     async def test_zero_fill_buy_releases_full_reservation(self, balance_tracker):
         initial_balance = balance_tracker.balance
         await balance_tracker.reserve_funds_for_buy(100.0)
-        order = _make_order(side=OrderSide.BUY, price=100.0, amount=1.0, filled=0.0, remaining=1.0)
+        order = _make_order(
+            side=OrderSide.BUY, price=100.0, amount=1.0, filled=0.0, remaining=1.0, status=OrderStatus.CANCELED
+        )
 
-        await balance_tracker.settle_cancelled_order(order)
+        await balance_tracker.record_execution(order, order.filled)
 
         assert balance_tracker.reserved_fiat == 0.0
         assert balance_tracker.balance == pytest.approx(initial_balance)
 
     async def test_partial_fill_buy_credits_crypto_and_releases_remainder(self, balance_tracker):
         await balance_tracker.reserve_funds_for_buy(100.0)
-        order = _make_order(side=OrderSide.BUY, price=100.0, average=100.0, amount=1.0, filled=0.4, remaining=0.6)
+        order = _make_order(
+            side=OrderSide.BUY,
+            price=100.0,
+            average=100.0,
+            amount=1.0,
+            filled=0.4,
+            remaining=0.6,
+            status=OrderStatus.CANCELED,
+        )
 
-        await balance_tracker.settle_cancelled_order(order)
+        await balance_tracker.record_execution(order, order.filled)
 
         assert balance_tracker.crypto_balance == pytest.approx(0.4)
         # reserved consumed for the filled 40 (+fee) and released for the remaining 60
@@ -407,9 +417,17 @@ class TestSettleCancelledOrder:
     async def test_partial_fill_sell_credits_fiat_and_releases_remainder(self, balance_tracker_with_crypto):
         bt = balance_tracker_with_crypto  # 2.0 crypto, 0 fiat
         await bt.reserve_funds_for_sell(1.0)
-        order = _make_order(side=OrderSide.SELL, price=100.0, average=100.0, amount=1.0, filled=0.3, remaining=0.7)
+        order = _make_order(
+            side=OrderSide.SELL,
+            price=100.0,
+            average=100.0,
+            amount=1.0,
+            filled=0.3,
+            remaining=0.7,
+            status=OrderStatus.CANCELED,
+        )
 
-        await bt.settle_cancelled_order(order)
+        await bt.record_execution(order, order.filled)
 
         assert bt.reserved_crypto == pytest.approx(0.0, abs=1e-8)
         assert bt.crypto_balance == pytest.approx(1.7)
@@ -609,7 +627,8 @@ class TestAccountingIdentity:
                 if action == "buy":
                     await bt.record_execution(order, order.filled)
                 else:
-                    await bt.settle_cancelled_order(order)
+                    order.status = OrderStatus.CANCELED
+                    await bt.record_execution(order, order.filled)
             elif action in ("sell", "partial_sell") and bt.crypto_balance >= quantity:
                 await bt.reserve_funds_for_sell(quantity)
                 filled = quantity if action == "sell" else round(quantity * 0.4, 6)
@@ -624,7 +643,8 @@ class TestAccountingIdentity:
                 if action == "sell":
                     await bt.record_execution(order, order.filled)
                 else:
-                    await bt.settle_cancelled_order(order)
+                    order.status = OrderStatus.CANCELED
+                    await bt.record_execution(order, order.filled)
             snapshot = bt.snapshot(price)
             # Each balance move is quantized to 1e-8 while the ledger is not, so the gap can grow by that per fill.
             assert snapshot.value - value0 == pytest.approx(snapshot.realized_pnl + snapshot.unrealized_pnl, abs=1e-5)

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
@@ -102,7 +102,7 @@ class TestCcxtResponseHandling:
 
     @pytest.mark.asyncio
     async def test_partial_fill_no_event_published(self, setup_tracker):
-        tracker, _, _, event_bus = setup_tracker
+        tracker, _, _, order_update_handler = setup_tracker
         mock_remote_order = Mock(
             identifier="order_123",
             status=OrderStatus.OPEN,
@@ -113,35 +113,20 @@ class TestCcxtResponseHandling:
         with patch.object(tracker.logger, "info") as mock_logger_info:
             await tracker._handle_order_status_change(mock_remote_order)
 
-            event_bus.publish.assert_not_called()
+            order_update_handler.apply_order_update.assert_not_awaited()
             mock_logger_info.assert_called_once_with(
                 f"Order {mock_remote_order} partially filled. Filled: {mock_remote_order.filled}, "
                 f"Remaining: {mock_remote_order.remaining}.",
             )
 
     @pytest.mark.asyncio
-    async def test_canceled_order_publishes_cancelled_event(self, setup_tracker):
-        tracker, order_book, _, event_bus = setup_tracker
+    async def test_canceled_order_is_handed_to_the_update_handler(self, setup_tracker):
+        tracker, _, _, order_update_handler = setup_tracker
         mock_remote_order = Mock(identifier="order_123", status=OrderStatus.CANCELED)
-        event_bus.publish = AsyncMock()
 
         await tracker._handle_order_status_change(mock_remote_order)
 
-        order_book.update_order_status.assert_called_once_with("order_123", OrderStatus.CANCELED)
-        event_bus.publish.assert_awaited_once_with(Events.ORDER_CANCELLED, mock_remote_order)
-
-    @pytest.mark.asyncio
-    async def test_expired_order_falls_to_unhandled(self, setup_tracker):
-        tracker, _, _, event_bus = setup_tracker
-        mock_remote_order = Mock(identifier="order_123", status=OrderStatus.EXPIRED)
-
-        with patch.object(tracker.logger, "warning") as mock_logger_warning:
-            await tracker._handle_order_status_change(mock_remote_order)
-
-            event_bus.publish.assert_not_called()
-            mock_logger_warning.assert_called_once_with(
-                f"Unhandled order status '{OrderStatus.EXPIRED}' for order order_123.",
-            )
+        order_update_handler.apply_order_update.assert_awaited_once_with(mock_remote_order)
 
     @pytest.mark.parametrize("missing_field", ["id", "status", "type", "side"])
     @pytest.mark.asyncio
@@ -207,7 +192,6 @@ class TestEventDrivenBuySellFlow:
         tracker = OrderStatusTracker(
             order_book=order_book,
             order_execution_strategy=tracker_execution_strategy,
-            event_bus=event_bus,
             order_update_handler=update_handler,
             polling_interval=1.0,
         )

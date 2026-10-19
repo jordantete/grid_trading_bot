@@ -344,35 +344,11 @@ class BalanceTracker:
         async with self._lock:
             self._release_crypto_unlocked(quantity)
 
-    async def settle_cancelled_order(self, order: Order) -> None:
-        """
-        Settles a cancelled order: accounts the filled portion (credit crypto / fiat,
-        consume the matching reservation, track fees) and releases the reservation
-        still held for the unfilled remainder. A zero-fill cancel reduces to a pure release.
-
-        Args:
-            order: The cancelled Order, possibly partially filled.
-        """
-        async with self._lock:
-            filled = order.filled or 0.0
-            remaining = order.remaining or 0.0
-            fill_price = order.average if order.average is not None else order.price
-            if order.side == OrderSide.BUY:
-                if filled > 0:
-                    self._update_after_buy_order_filled(filled, fill_price, order.liquidity)
-                if remaining > 0:
-                    self._release_fiat_unlocked(remaining * order.price)
-            elif order.side == OrderSide.SELL:
-                if filled > 0:
-                    self._update_after_sell_order_filled(filled, fill_price, order.liquidity)
-                if remaining > 0:
-                    self._release_crypto_unlocked(remaining)
-
     async def update_after_liquidation(self, order: Order) -> None:
         """
         Updates balances after a liquidation market sell (TP/SL/trailing/shutdown).
         Mirror of update_after_initial_purchase: closed market orders never enter the
-        open-order tracking, so ORDER_FILLED is never published for them.
+        open-order tracking, so no fill update ever reaches the order pipeline for them.
 
         Args:
             order: The CLOSED market SELL order.

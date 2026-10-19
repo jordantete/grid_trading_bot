@@ -8,8 +8,8 @@ from tests.fakes.trading_stack import ARMING_PRICE, build_stack, reserved_matche
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
-from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
-from grid_trading_bot.core.services.exceptions import DataFetchError
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.services.exceptions import DataFetchError, PostOnlyRejectedError
 from grid_trading_bot.core.validation.exceptions import InsufficientCryptoBalanceError
 
 
@@ -207,3 +207,155 @@ class TestFills:
         await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
 
         assert held_when_sent == [False]
+
+
+class TestEndedOrders:
+    @pytest.mark.parametrize("status", [OrderStatus.CANCELED, OrderStatus.EXPIRED])
+    async def test_an_ended_order_releases_its_funds_frees_its_level_and_is_replaced(self, stack, status):
+        buy = stack.execution.order_at(90.0, OrderSide.BUY)
+
+        await stack.manager.apply_order_update(stack.execution.end(buy.identifier, status))
+
+        replacement = stack.execution.order_at(90.0, OrderSide.BUY)
+        assert replacement.identifier != buy.identifier
+        assert replacement.amount == pytest.approx(buy.amount)
+        assert stack.book.get_order(buy.identifier).status == status
+        assert stack.grid.grid_levels[90.0].state == GridCycleState.WAITING_FOR_BUY_FILL
+        assert reserved_matches_open_orders(stack)
+        assert NotificationType.ORDER_CANCELLED in _sent(stack)
+
+    async def test_a_rejected_order_is_released_and_not_replaced(self, stack):
+        buy = stack.execution.order_at(90.0, OrderSide.BUY)
+
+        await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.REJECTED))
+
+        assert sorted(o.price for o in stack.execution.open_orders(OrderSide.BUY)) == [80.0, 100.0]
+        assert stack.grid.grid_levels[90.0].state == GridCycleState.READY_TO_BUY
+        assert reserved_matches_open_orders(stack)
+        assert NotificationType.ERROR_OCCURRED in _sent(stack)
+
+    async def test_a_partly_filled_cancelled_order_books_its_fill_and_replaces_the_rest(self, stack):
+        buy = stack.execution.order_at(90.0, OrderSide.BUY)
+        stack.execution.fill(buy.identifier, buy.amount * 0.4)
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+
+        await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.CANCELED))
+
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.4)
+        assert stack.execution.order_at(90.0, OrderSide.BUY).amount == pytest.approx(buy.amount * 0.6)
+        assert reserved_matches_open_orders(stack)
+
+    async def test_an_ended_order_after_the_positions_closed_is_settled_not_replaced(self, stack):
+        buy = stack.execution.order_at(90.0, OrderSide.BUY)
+        stack.manager._positions_closed = True
+
+        await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.CANCELED))
+
+        assert sorted(o.price for o in stack.execution.open_orders(OrderSide.BUY)) == [80.0, 100.0]
+        assert reserved_matches_open_orders(stack)
+
+    async def test_an_ended_order_without_a_filled_quantity_books_nothing(self, stack):
+        buy = stack.execution.order_at(90.0, OrderSide.BUY)
+        view = stack.execution.end(buy.identifier, OrderStatus.CANCELED)
+        view.filled = None
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+
+        await stack.manager.apply_order_update(view)
+
+        assert stack.balances.get_adjusted_crypto_balance() == crypto_before
+        assert reserved_matches_open_orders(stack)
+
+    async def test_an_ended_order_on_a_stacked_level_keeps_the_level_waiting(self, stack):
+        await stack.manager.apply_order_update(
+            stack.execution.fill(stack.execution.order_at(100.0, OrderSide.BUY).identifier)
+        )
+        await stack.manager.apply_order_update(
+            stack.execution.fill(stack.execution.order_at(90.0, OrderSide.BUY).identifier)
+        )
+        first_sell = next(o for o in stack.execution.open_orders(OrderSide.SELL) if o.price == 110.0)
+
+        await stack.manager.apply_order_update(stack.execution.end(first_sell.identifier, OrderStatus.CANCELED))
+
+        assert stack.grid.grid_levels[110.0].state == GridCycleState.WAITING_FOR_SELL_FILL
+        assert sorted(o.price for o in stack.execution.open_orders(OrderSide.SELL)) == [110.0, 110.0, 120.0]
+
+    async def test_an_ended_order_without_a_grid_level_is_settled_and_notified(self, stack):
+        loose = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0)
+        stack.book.add_order(loose)
+        orders_before = len(stack.execution.orders)
+
+        await stack.manager.apply_order_update(stack.execution.end(loose.identifier, OrderStatus.CANCELED))
+
+        assert not stack.book.get_order(loose.identifier).is_open()
+        assert len(stack.execution.orders) == orders_before
+        assert NotificationType.ORDER_CANCELLED in _sent(stack)
+
+    async def test_a_failed_replacement_releases_its_reservation(self, stack):
+        buy = stack.execution.order_at(90.0, OrderSide.BUY)
+        stack.execution.fail_next_limit_order = OrderExecutionFailedError(
+            "network down", OrderSide.BUY, OrderType.LIMIT, "BTC/USDT", 1.0, 90.0
+        )
+
+        await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.CANCELED))
+
+        assert reserved_matches_open_orders(stack)
+        assert NotificationType.ORDER_FAILED in _sent(stack)
+
+    async def test_a_post_only_refused_replacement_releases_its_funds_without_an_error(self, stack):
+        buy = stack.execution.order_at(90.0, OrderSide.BUY)
+        stack.execution.fail_next_limit_order = PostOnlyRejectedError("would cross")
+
+        await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.CANCELED))
+
+        assert reserved_matches_open_orders(stack)
+        assert not {NotificationType.ORDER_FAILED, NotificationType.ERROR_OCCURRED} & set(_sent(stack))
+
+
+class TestBulkCancellation:
+    async def test_a_bulk_cancel_releases_every_reservation_and_frees_the_levels(self, stack):
+        fiat_total = stack.balances.get_adjusted_fiat_balance()
+
+        assert await stack.manager.cancel_open_grid_orders() is True
+
+        assert stack.book.get_open_orders() == []
+        assert stack.balances.reserved_fiat == pytest.approx(0.0, abs=1e-6)
+        assert stack.balances.reserved_crypto == pytest.approx(0.0, abs=1e-6)
+        assert stack.balances.get_adjusted_fiat_balance() == pytest.approx(fiat_total)
+        assert all(level.state == level.home_state for level in stack.grid.grid_levels.values())
+
+    async def test_a_partly_filled_order_cancelled_in_bulk_books_its_fill_once(self, stack):
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+        stack.execution.fill(buy.identifier, buy.amount * 0.4)
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+
+        assert await stack.manager.cancel_open_grid_orders() is True
+        await stack.manager.apply_order_update(await stack.execution.get_order(buy.identifier, "BTC/USDT"))
+
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.4)
+        assert stack.balances.reserved_fiat == pytest.approx(0.0, abs=1e-6)
+
+    async def test_an_unreadable_cancelled_order_releases_its_remainder_as_last_seen(self, stack):
+        async def unreadable(_order_id, _pair):
+            raise DataFetchError("exchange down")
+
+        stack.execution.get_order = unreadable
+
+        assert await stack.manager.cancel_open_grid_orders() is True
+
+        assert stack.balances.reserved_fiat == pytest.approx(0.0, abs=1e-6)
+        assert stack.balances.reserved_crypto == pytest.approx(0.0, abs=1e-6)
+
+    async def test_a_failed_cancellation_stops_the_bulk_and_keeps_the_rest_open(self, stack):
+        real_cancel = stack.execution.cancel_order
+        attempts = []
+
+        async def second_fails(order_id, pair):
+            attempts.append(order_id)
+            return False if len(attempts) == 2 else await real_cancel(order_id, pair)
+
+        stack.execution.cancel_order = second_fails
+
+        assert await stack.manager.cancel_open_grid_orders() is False
+
+        assert len(stack.book.get_open_orders()) == 3
+        assert reserved_matches_open_orders(stack)

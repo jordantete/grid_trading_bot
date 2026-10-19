@@ -777,7 +777,6 @@ class TestShutdownSequence(BotFixtures):
         calls = []
         _record_shutdown(bot, calls)
         bot._state_ready = False
-        bot.order_manager.cleanup = Mock(side_effect=lambda: calls.append("order manager"))
         recovery_started = asyncio.Event()
         recovery_may_return = asyncio.Event()
 
@@ -804,7 +803,7 @@ class TestShutdownSequence(BotFixtures):
         recovery_may_return.set()
         await asyncio.wait_for(run_task, timeout=1)
 
-        assert calls == ["recovered", "tracking", "strategy", "checkpoint", "notify", "order manager", "close"]
+        assert calls == ["recovered", "tracking", "strategy", "checkpoint", "notify", "close"]
         bot.strategy.run.assert_not_awaited()
         bot.order_status_tracker.start_tracking.assert_not_called()
 
