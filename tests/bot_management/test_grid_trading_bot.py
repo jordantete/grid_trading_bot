@@ -469,6 +469,21 @@ class TestStrategyStatePersistenceWiring:
         assert bot.state_persistence_service is not None
         assert bot.state_persistence_service.strategy_state_provider == bot.strategy.export_strategy_state
 
+    def test_paper_trading_persists_and_recovers(self, config_manager, notification_handler, mock_event_bus):
+        config_manager.get_trading_mode.return_value = TradingMode.PAPER_TRADING
+        with patch("grid_trading_bot.core.bot_management.grid_trading_bot.SQLiteStateRepository") as repo_cls:
+            repo_cls.return_value = MagicMock()
+            paper_bot = GridTradingBot(
+                config_path="config.json",
+                config_manager=config_manager,
+                notification_handler=notification_handler,
+                event_bus=mock_event_bus,
+                no_plot=True,
+            )
+
+        assert paper_bot.state_persistence_service is not None
+        assert paper_bot.state_recovery_service is not None
+
     @pytest.mark.asyncio
     async def test_run_restores_strategy_state_after_recovery(self, bot):
         bot.strategy.grid_manager = Mock()

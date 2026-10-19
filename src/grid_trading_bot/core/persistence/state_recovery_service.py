@@ -5,6 +5,7 @@ import json
 import logging
 
 from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
@@ -130,14 +131,15 @@ class StateRecoveryService:
         reconcile_stats, filled_while_down, executions = await self._reconcile_with_exchange()
 
         # Step 5: Restore balance (recalculates reserved from confirmed-still-open orders)
-        balance_source = await self._restore_balance()
+        balance_source = await self._restore_balance(executions)
 
         # Step 6: Restore cost basis, realized PnL and peak, then book the fills made while down
-        try:
-            self._restore_accounting(executions)
-        except Exception as e:
-            # Reporting-only state: losing it must not turn a good recovery into a fresh start.
-            self.logger.error(f"Failed to restore cost basis and PnL, starting them over: {e}", exc_info=True)
+        if balance_source == "exchange":
+            try:
+                self._restore_accounting(executions)
+            except Exception as e:
+                # Reporting-only state: losing it must not turn a good recovery into a fresh start.
+                self.logger.error(f"Failed to restore cost basis and PnL, starting them over: {e}", exc_info=True)
 
         result = RecoveryResult(
             RecoveryOutcome.RESUMED,
@@ -310,7 +312,34 @@ class StateRecoveryService:
                 grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
             )
 
-    async def _restore_balance(self) -> str:
+    async def _restore_balance(self, executions: list[tuple[Order, float]]) -> str:
+        if self.config_manager.get_trading_mode() == TradingMode.PAPER_TRADING:
+            await self._restore_balance_from_db(executions)
+            return "db"
+        await self._restore_balance_from_exchange()
+        return "exchange"
+
+    async def _restore_balance_from_db(self, executions: list[tuple[Order, float]]) -> None:
+        """
+        Paper trading keeps a virtual balance the testnet account does not reflect: it resumes from the database,
+        then books every execution seen at restart like a live fill.
+        """
+        saved_balance = self.repository.load_balance_state()
+        tracker = self.balance_tracker
+        tracker._balance = Decimal(saved_balance["fiat_balance"])
+        tracker._crypto_balance = Decimal(saved_balance["crypto_balance"])
+        tracker._reserved_fiat = Decimal(saved_balance["reserved_fiat"])
+        tracker._reserved_crypto = Decimal(saved_balance["reserved_crypto"])
+        tracker._total_fees = Decimal(saved_balance["total_fees"])
+        try:
+            self._restore_saved_accounting(saved_balance)
+        except Exception as e:
+            self.logger.error(f"Failed to restore cost basis and PnL, starting them over: {e}", exc_info=True)
+        for order, quantity in executions:
+            await tracker.record_execution(order, quantity)
+        self.logger.info(f"Balance restored from the database with {len(executions)} execution(s) booked.")
+
+    async def _restore_balance_from_exchange(self) -> None:
         saved_balance = self.repository.load_balance_state()
 
         exchange_balance = await self.exchange_service.get_balance()
@@ -350,18 +379,20 @@ class StateRecoveryService:
             f"reserved_fiat={self.balance_tracker.reserved_fiat}, "
             f"reserved_crypto={self.balance_tracker.reserved_crypto}"
         )
-        return "exchange"
+
+    def _restore_saved_accounting(self, saved_balance: dict) -> None:
+        self.balance_tracker.restore_accounting(
+            avg_cost=_optional_decimal(saved_balance.get("avg_cost")),
+            realized_pnl=Decimal(saved_balance.get("realized_pnl") or "0"),
+            peak_value=_optional_decimal(saved_balance.get("peak_value")),
+        )
 
     def _restore_accounting(self, executions: list[tuple[Order, float]]) -> None:
         saved_balance = self.repository.load_balance_state()
         if not saved_balance:
             return
 
-        self.balance_tracker.restore_accounting(
-            avg_cost=_optional_decimal(saved_balance.get("avg_cost")),
-            realized_pnl=Decimal(saved_balance.get("realized_pnl") or "0"),
-            peak_value=_optional_decimal(saved_balance.get("peak_value")),
-        )
+        self._restore_saved_accounting(saved_balance)
         if executions:
             starting_position = Decimal(saved_balance["crypto_balance"]) + Decimal(saved_balance["reserved_crypto"])
             self.balance_tracker.replay_fills_on_cost_basis(starting_position, executions)

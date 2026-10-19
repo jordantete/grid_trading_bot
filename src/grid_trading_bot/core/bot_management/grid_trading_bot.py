@@ -129,7 +129,7 @@ class GridTradingBot:
 
             self.state_persistence_service = None
             self.state_recovery_service = None
-            if self.trading_mode == TradingMode.LIVE and self.config_manager.is_persistence_enabled():
+            if self._is_live_or_paper() and self.config_manager.is_persistence_enabled():
                 db_path = self.config_manager.get_state_db_path()
                 os.makedirs(os.path.dirname(db_path), exist_ok=True)
                 state_repository = SQLiteStateRepository(db_path)

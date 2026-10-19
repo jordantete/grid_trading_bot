@@ -136,3 +136,32 @@ class TestLiveRecoveryBalances:
         assert result.ghost_orders_found == 1
         assert after.grid.grid_levels[120.0].state == GridCycleState.READY_TO_SELL
         assert reserved_matches_open_orders(after)
+
+
+class TestPaperRecoveryBalances:
+    async def test_paper_balances_resume_from_the_database_and_book_the_fills_once(self, repository):
+        before = await _armed_and_saved(repository, trading_mode="paper_trading")
+        fiat_total = before.balances.get_adjusted_fiat_balance()
+        crypto_total = before.balances.get_adjusted_crypto_balance()
+        filled = before.execution.order_at(100.0, OrderSide.BUY)
+        partial = before.execution.order_at(90.0, OrderSide.BUY)
+        cancelled = before.execution.order_at(80.0, OrderSide.BUY)
+        before.execution.fill(filled.identifier)
+        before.execution.fill(partial.identifier, partial.amount * 0.4)
+        before.execution.end(cancelled.identifier, OrderStatus.CANCELED)
+
+        after, result, exchange_service = await _restarted(repository, before, {"free": {}}, "paper_trading")
+
+        assert result.balance_source == "db"
+        exchange_service.get_balance.assert_not_awaited()
+        bought = filled.amount + partial.amount * 0.4
+        cost = (filled.amount * 100.0 + partial.amount * 0.4 * 90.0) * (1 + FEE)
+        assert after.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_total + bought)
+        assert after.balances.get_adjusted_fiat_balance() == pytest.approx(fiat_total - cost)
+        assert reserved_matches_open_orders(after)
+
+        await after.manager.apply_order_update(before.execution.fill(partial.identifier))
+
+        assert after.balances.get_adjusted_crypto_balance() == pytest.approx(
+            crypto_total + filled.amount + partial.amount
+        )
