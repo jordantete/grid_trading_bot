@@ -143,7 +143,7 @@ async def run_backtest_bot(make_config_file):
         config_path = make_config_file(strategy_type, spacing, risk_management_overrides, execution, **grid_overrides)
         config_manager = ConfigManager(config_path, ConfigValidator())
         event_bus = EventBus()
-        notification_handler = NotificationHandler(event_bus, [], TradingMode.BACKTEST)
+        notification_handler = NotificationHandler([], TradingMode.BACKTEST)
 
         bot = GridTradingBot(
             config_path=config_path,

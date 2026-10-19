@@ -4,7 +4,6 @@ from dataclasses import replace
 import logging
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.services.exceptions import DataFetchError, PostOnlyRejectedError
@@ -35,7 +34,6 @@ class OrderManager:
         order_validator: OrderValidator,
         balance_tracker: BalanceTracker,
         order_book: OrderBook,
-        event_bus: EventBus,
         order_execution_strategy: OrderExecutionStrategyInterface,
         notification_handler: NotificationHandler,
         trading_mode: TradingMode,
@@ -47,7 +45,6 @@ class OrderManager:
         self.order_validator = order_validator
         self.balance_tracker = balance_tracker
         self.order_book = order_book
-        self.event_bus = event_bus
         self.order_execution_strategy = order_execution_strategy
         self.notification_handler = notification_handler
         self.trading_mode: TradingMode = trading_mode

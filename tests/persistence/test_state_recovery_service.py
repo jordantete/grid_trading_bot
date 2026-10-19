@@ -148,7 +148,6 @@ def mock_order_book():
     ob = MagicMock()
     ob.get_open_orders.return_value = []
     ob.add_order.return_value = None
-    ob.update_order_status.return_value = None
     ob.remove_open_order.return_value = None
     ob.get_grid_level_for_order.return_value = None
     ob.has_open_orders_at.return_value = False

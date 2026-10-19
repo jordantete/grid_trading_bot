@@ -82,7 +82,7 @@ async def _run(config: dict, event_bus: EventBus | None = None):
     bot = GridTradingBot(
         config_path="<fidelity>",
         config_manager=ConfigManager.from_dict(config, ConfigValidator()),
-        notification_handler=NotificationHandler(event_bus, [], TradingMode.BACKTEST),
+        notification_handler=NotificationHandler([], TradingMode.BACKTEST),
         event_bus=event_bus,
         no_plot=True,
     )

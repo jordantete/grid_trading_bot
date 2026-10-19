@@ -130,7 +130,7 @@ def _config(tmp_path, trading_mode="live", num_grids=5):
 def _bot(config_path) -> GridTradingBot:
     config_manager = ConfigManager(str(config_path), ConfigValidator())
     event_bus = EventBus()
-    notification_handler = NotificationHandler(event_bus, None, config_manager.get_trading_mode())
+    notification_handler = NotificationHandler(None, config_manager.get_trading_mode())
     bot = GridTradingBot(
         str(config_path),
         config_manager,

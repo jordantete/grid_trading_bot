@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
@@ -16,7 +15,7 @@ class TestBuyFillSellPlacement:
     @pytest.mark.parametrize("strategy_label", ["simple_grid", "hedged_grid"])
     @pytest.mark.asyncio
     async def test_buy_fill_places_sell_order(self, setup_order_manager, strategy_label):
-        manager, grid_manager, order_validator, _balance_tracker, order_book, _, order_execution_strategy, _ = (
+        manager, grid_manager, order_validator, _balance_tracker, order_book, order_execution_strategy, _ = (
             setup_order_manager
         )
         buy_order = Mock(side=OrderSide.BUY, filled=0.01, price=50000)
@@ -44,7 +43,7 @@ class TestBuyFillSellPlacement:
     @pytest.mark.parametrize("strategy_label", ["simple_grid", "hedged_grid"])
     @pytest.mark.asyncio
     async def test_buy_fill_uses_filled_quantity_for_sell(self, setup_order_manager, strategy_label):
-        manager, grid_manager, order_validator, _, order_book, _, order_execution_strategy, _ = setup_order_manager
+        manager, grid_manager, order_validator, _, order_book, order_execution_strategy, _ = setup_order_manager
         buy_order = Mock(side=OrderSide.BUY, filled=0.0075, amount=0.01, price=50000)
         buy_grid_level = Mock(price=50000)
         sell_grid_level = Mock(price=52000)
@@ -65,7 +64,7 @@ class TestBuyFillSellPlacement:
     @pytest.mark.parametrize("strategy_label", ["simple_grid", "hedged_grid"])
     @pytest.mark.asyncio
     async def test_buy_fill_without_sell_target_places_nothing(self, setup_order_manager, strategy_label):
-        manager, grid_manager, _, _, order_book, _, order_execution_strategy, _ = setup_order_manager
+        manager, grid_manager, _, _, order_book, order_execution_strategy, _ = setup_order_manager
         buy_order = Mock(side=OrderSide.BUY, filled=0.01, price=50000)
         buy_grid_level = Mock(price=50000)
 
@@ -81,7 +80,7 @@ class TestBuyFillSellPlacement:
     @pytest.mark.parametrize("strategy_label", ["simple_grid", "hedged_grid"])
     @pytest.mark.asyncio
     async def test_buy_fill_trusts_the_sell_target(self, setup_order_manager, strategy_label):
-        manager, grid_manager, order_validator, _, order_book, _, order_execution_strategy, _ = setup_order_manager
+        manager, grid_manager, order_validator, _, order_book, order_execution_strategy, _ = setup_order_manager
         buy_order = Mock(side=OrderSide.BUY, filled=0.01, price=50000)
         buy_grid_level = Mock(price=50000)
         sell_grid_level = Mock(price=52000)
@@ -178,11 +177,10 @@ class TestCcxtResponseHandling:
 
 
 class TestEventDrivenBuySellFlow:
-    """Integration test using a real EventBus for the tracker → event → manager → sell chain."""
+    """Integration test of the tracker → manager → sell chain."""
 
     @pytest.fixture
     def setup_event_driven_flow(self):
-        event_bus = EventBus()
         order_book = Mock()
         order_book.has_open_orders_at.return_value = False
 
@@ -214,7 +212,6 @@ class TestEventDrivenBuySellFlow:
             order_validator=order_validator,
             balance_tracker=balance_tracker,
             order_book=order_book,
-            event_bus=event_bus,
             order_execution_strategy=manager_execution_strategy,
             notification_handler=notification_handler,
             trading_mode=TradingMode.LIVE,

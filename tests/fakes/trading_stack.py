@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, Mock
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
@@ -61,7 +60,6 @@ def build_stack(fiat: float = 2700.0, crypto: float = 20.0, trading_mode: str = 
     grid = GridManager(config, StrategyType.SIMPLE_GRID)
     grid.initialize_grids_and_levels()
     balances = BalanceTracker(
-        event_bus=EventBus(),
         fee_calculator=FeeCalculator(config),
         trading_mode=TradingMode(trading_mode),
         base_currency="BTC",
@@ -78,7 +76,6 @@ def build_stack(fiat: float = 2700.0, crypto: float = 20.0, trading_mode: str = 
         OrderValidator(),
         balances,
         book,
-        EventBus(),
         execution,
         notifications,
         TradingMode(trading_mode),

@@ -128,25 +128,6 @@ class TestOrderBook:
 
         assert result == grid_level
 
-    def test_update_order_status(self, setup_order_book):
-        order_book = setup_order_book
-        order = Mock(spec=Order, identifier="order_123", side=OrderSide.BUY, status=OrderStatus.OPEN)
-
-        order_book.add_order(order)
-        order_book.update_order_status("order_123", OrderStatus.CLOSED)
-
-        assert order.status == OrderStatus.CLOSED
-
-    def test_update_order_status_nonexistent_order(self, setup_order_book):
-        order_book = setup_order_book
-        order = Mock(spec=Order, identifier="order_123", status=OrderStatus.OPEN)
-        order.side = OrderSide.BUY
-
-        order_book.add_order(order)
-        order_book.update_order_status("nonexistent_order", OrderStatus.CLOSED)
-
-        assert order.status == OrderStatus.OPEN  # Ensure no changes for non-existent orders
-
 
 def _make_order(identifier="ord-1", side=OrderSide.BUY, status=OrderStatus.OPEN):
     return Order(
@@ -236,9 +217,11 @@ class TestHasOpenOrdersAt:
     def test_true_while_a_stacked_order_remains(self):
         book = OrderBook()
         level = GridLevel(price=100.0, state=GridCycleState.WAITING_FOR_SELL_FILL)
-        book.add_order(_make_order("a", side=OrderSide.SELL), level)
+        first = _make_order("a", side=OrderSide.SELL)
+        book.add_order(first, level)
         book.add_order(_make_order("b", side=OrderSide.SELL), level)
 
-        book.update_order_status("a", OrderStatus.CLOSED)
+        first.status = OrderStatus.CLOSED
+        book.remove_open_order(first)
 
         assert book.has_open_orders_at(level) is True

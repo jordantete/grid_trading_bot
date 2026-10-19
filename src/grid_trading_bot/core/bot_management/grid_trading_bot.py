@@ -103,7 +103,6 @@ class GridTradingBot:
             fee_calculator = FeeCalculator(self.config_manager)
 
             self.balance_tracker = BalanceTracker(
-                event_bus=self.event_bus,
                 fee_calculator=fee_calculator,
                 trading_mode=self.trading_mode,
                 base_currency=base_currency,
@@ -163,7 +162,6 @@ class GridTradingBot:
                 order_validator,
                 self.balance_tracker,
                 order_book,
-                self.event_bus,
                 order_execution_strategy,
                 self.notification_handler,
                 self.trading_mode,

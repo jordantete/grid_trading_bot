@@ -6,7 +6,6 @@ import string
 import apprise
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
 
 from .notification_content import NotificationType
 
@@ -21,12 +20,10 @@ class NotificationHandler:
 
     def __init__(
         self,
-        event_bus: EventBus,
         urls: list[str] | None,
         trading_mode: TradingMode,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.event_bus = event_bus
         self.enabled = bool(urls) and trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
         if trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING} and not urls:
             self.logger.warning("Notifications are disabled: APPRISE_NOTIFICATION_URLS is empty.")

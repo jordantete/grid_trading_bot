@@ -3,7 +3,6 @@ from unittest.mock import Mock, patch
 import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
@@ -11,23 +10,17 @@ from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderSt
 
 class TestNotificationHandler:
     @pytest.fixture
-    def event_bus(self):
-        return Mock(spec=EventBus)
-
-    @pytest.fixture
-    def notification_handler_enabled(self, event_bus):
+    def notification_handler_enabled(self):
         urls = ["json://localhost:8080/path"]
         handler = NotificationHandler(
-            event_bus=event_bus,
             urls=urls,
             trading_mode=TradingMode.LIVE,
         )
         return handler
 
     @pytest.fixture
-    def notification_handler_disabled(self, event_bus):
+    def notification_handler_disabled(self):
         return NotificationHandler(
-            event_bus=event_bus,
             urls=None,
             trading_mode=TradingMode.BACKTEST,
         )
@@ -52,26 +45,22 @@ class TestNotificationHandler:
         )
 
     @patch("apprise.Apprise")
-    def test_notification_handler_enabled_initialization(self, mock_apprise, event_bus):
+    def test_notification_handler_enabled_initialization(self, mock_apprise):
         handler = NotificationHandler(
-            event_bus=event_bus,
             urls=["mock://example.com"],
             trading_mode=TradingMode.LIVE,
         )
         assert handler.enabled is True
         mock_apprise.return_value.add.assert_called_once_with("mock://example.com")
-        event_bus.subscribe.assert_not_called()
 
     @patch("apprise.Apprise")
-    def test_notification_handler_disabled_initialization(self, mock_apprise, event_bus):
+    def test_notification_handler_disabled_initialization(self, mock_apprise):
         handler = NotificationHandler(
-            event_bus=event_bus,
             urls=None,
             trading_mode=TradingMode.BACKTEST,
         )
         assert handler.enabled is False
         mock_apprise.assert_not_called()
-        event_bus.subscribe.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_send_notification_with_predefined_content(self, notification_handler_enabled, mock_order):
@@ -152,13 +141,13 @@ class TestNotificationHandler:
 
     @pytest.mark.parametrize("urls", [None, []])
     @pytest.mark.parametrize("mode", [TradingMode.LIVE, TradingMode.PAPER_TRADING])
-    def test_warns_when_live_notifications_are_disabled(self, urls, mode, event_bus, caplog):
-        NotificationHandler(event_bus=event_bus, urls=urls, trading_mode=mode)
+    def test_warns_when_live_notifications_are_disabled(self, urls, mode, caplog):
+        NotificationHandler(urls=urls, trading_mode=mode)
 
         assert "Notifications are disabled: APPRISE_NOTIFICATION_URLS is empty." in caplog.text
 
-    def test_no_warning_in_backtest(self, event_bus, caplog):
-        NotificationHandler(event_bus=event_bus, urls=None, trading_mode=TradingMode.BACKTEST)
+    def test_no_warning_in_backtest(self, caplog):
+        NotificationHandler(urls=None, trading_mode=TradingMode.BACKTEST)
 
         assert "Notifications are disabled" not in caplog.text
 

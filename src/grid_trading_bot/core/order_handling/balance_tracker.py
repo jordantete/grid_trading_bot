@@ -4,7 +4,6 @@ from decimal import Decimal
 import logging
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
 from ..validation.exceptions import (
@@ -31,7 +30,6 @@ class AccountSnapshot:
 class BalanceTracker:
     def __init__(
         self,
-        event_bus: EventBus,
         fee_calculator: FeeCalculator,
         trading_mode: TradingMode,
         base_currency: str,
@@ -41,14 +39,12 @@ class BalanceTracker:
         Initializes the BalanceTracker.
 
         Args:
-            event_bus: The event bus instance for subscribing to events.
             fee_calculator: The fee calculator instance for calculating trading fees.
             trading_mode: "BACKTEST", "LIVE" or "PAPER_TRADING".
             base_currency: The base currency symbol.
             quote_currency: The quote currency symbol.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.event_bus: EventBus = event_bus
         self.fee_calculator: FeeCalculator = fee_calculator
         self.trading_mode: TradingMode = trading_mode
         self.base_currency: str = base_currency

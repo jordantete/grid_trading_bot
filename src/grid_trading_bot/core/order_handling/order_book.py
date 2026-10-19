@@ -1,7 +1,7 @@
 from itertools import chain
 
 from ..grid_management.grid_level import GridLevel
-from .order import Order, OrderSide, OrderStatus
+from .order import Order, OrderSide
 
 
 class OrderBook:
@@ -74,14 +74,3 @@ class OrderBook:
 
     def has_open_orders_at(self, grid_level: GridLevel) -> bool:
         return any(self.order_to_grid_map.get(order) is grid_level for order in self._open_orders)
-
-    def update_order_status(
-        self,
-        order_id: str,
-        new_status: OrderStatus,
-    ) -> None:
-        order = self._orders_by_id.get(order_id)
-        if order:
-            order.status = new_status
-            if not order.is_open():
-                self._open_orders.pop(order, None)

@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
 from grid_trading_bot.core.order_handling.order import Liquidity, Order, OrderSide, OrderStatus, OrderType
@@ -46,19 +45,17 @@ def _make_order(
 class TestBalanceTracker:
     @pytest.fixture
     def setup_balance_tracker(self):
-        event_bus = Mock(spec=EventBus)
         fee_calculator = Mock(spec=FeeCalculator)
         balance_tracker = BalanceTracker(
-            event_bus=event_bus,
             fee_calculator=fee_calculator,
             trading_mode=TradingMode.LIVE,
             base_currency="BTC",
             quote_currency="USDT",
         )
-        return balance_tracker, fee_calculator, event_bus
+        return balance_tracker, fee_calculator
 
     def test_initialization(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         assert balance_tracker.balance == 0
         assert balance_tracker.crypto_balance == 0
         assert balance_tracker.total_fees == 0
@@ -67,7 +64,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_setup_balances_clears_stale_reservations(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker.trading_mode = TradingMode.PAPER_TRADING
         balance_tracker._reserved_fiat = Decimal("50")
         balance_tracker._reserved_crypto = Decimal("1")
@@ -79,7 +76,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_reserve_funds_for_buy(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._balance = Decimal("1000")
 
         await balance_tracker.reserve_funds_for_buy(200)
@@ -89,13 +86,13 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_reserve_funds_for_buy_insufficient_balance(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         with pytest.raises(InsufficientBalanceError):
             await balance_tracker.reserve_funds_for_buy(1200)
 
     @pytest.mark.asyncio
     async def test_reserve_funds_for_sell(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._crypto_balance = Decimal("5")
 
         await balance_tracker.reserve_funds_for_sell(2)
@@ -105,13 +102,13 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_reserve_funds_for_sell_insufficient_balance(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         with pytest.raises(InsufficientCryptoBalanceError):
             await balance_tracker.reserve_funds_for_sell(10)
 
     @pytest.mark.asyncio
     async def test_get_adjusted_fiat_balance(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._balance = Decimal("1000")
 
         await balance_tracker.reserve_funds_for_buy(200)
@@ -120,7 +117,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_get_adjusted_crypto_balance(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._crypto_balance = Decimal("5")
 
         await balance_tracker.reserve_funds_for_sell(2)
@@ -128,7 +125,7 @@ class TestBalanceTracker:
         assert balance_tracker.get_adjusted_crypto_balance() == 5
 
     def test_update_after_buy_order_filled(self, setup_balance_tracker):
-        balance_tracker, fee_calculator, _ = setup_balance_tracker
+        balance_tracker, fee_calculator = setup_balance_tracker
         balance_tracker._crypto_balance = Decimal("5")
         fee_calculator.calculate_fee.return_value = 10
         balance_tracker._reserved_fiat = Decimal("500")
@@ -140,7 +137,7 @@ class TestBalanceTracker:
         assert balance_tracker.reserved_fiat == 390
 
     def test_update_after_sell_order_filled(self, setup_balance_tracker):
-        balance_tracker, fee_calculator, _ = setup_balance_tracker
+        balance_tracker, fee_calculator = setup_balance_tracker
         balance_tracker._balance = Decimal("1000")
         fee_calculator.calculate_fee.return_value = 10
         balance_tracker._reserved_crypto = Decimal("2")
@@ -153,7 +150,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_update_balance_on_order_completion(self, setup_balance_tracker):
-        balance_tracker, fee_calculator, _ = setup_balance_tracker
+        balance_tracker, fee_calculator = setup_balance_tracker
         balance_tracker._balance = Decimal("1000")
         balance_tracker._crypto_balance = Decimal("5")
         fee_calculator.calculate_fee.return_value = 5  # Mock fee calculation
@@ -176,7 +173,7 @@ class TestBalanceTracker:
     async def test_update_balance_on_order_completion_uses_average_fill_price(self, setup_balance_tracker):
         """Slipped fills must hit the balances at the actual fill price (order.average),
         not the requested price — otherwise backtest_slippage has zero P&L effect."""
-        balance_tracker, fee_calculator, _ = setup_balance_tracker
+        balance_tracker, fee_calculator = setup_balance_tracker
         balance_tracker._balance = Decimal("1000")
         balance_tracker._crypto_balance = Decimal("5")
         fee_calculator.calculate_fee.return_value = 0
@@ -194,19 +191,14 @@ class TestBalanceTracker:
         assert balance_tracker.reserved_crypto == 0
 
     def test_get_total_balance_value(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._balance = Decimal("1000")
         balance_tracker._crypto_balance = Decimal("5")
         assert balance_tracker.get_total_balance_value(price=200) == 2000
 
-    def test_the_tracker_subscribes_to_nothing(self, setup_balance_tracker):
-        _, _, event_bus = setup_balance_tracker
-
-        event_bus.subscribe.assert_not_called()
-
     @pytest.mark.asyncio
     async def test_setup_balances_backtest(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker.trading_mode = TradingMode.BACKTEST
 
         await balance_tracker.setup_balances(initial_balance=2000, initial_crypto_balance=10)
@@ -216,7 +208,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_setup_balances_live_mode(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         mock_exchange_service = AsyncMock()
         balance_tracker._fetch_live_balances = AsyncMock(
             return_value=(Decimal("1500"), Decimal("5")),
@@ -235,7 +227,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_setup_balances_paper_trading_mode(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
 
         balance_tracker.trading_mode = TradingMode.PAPER_TRADING
         await balance_tracker.setup_balances(
@@ -248,7 +240,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_fetch_live_balances_success(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         mock_exchange_service = AsyncMock()
         mock_exchange_service.get_balance.return_value = {
             "free": {
@@ -264,7 +256,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_fetch_live_balances_unexpected_structure(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         mock_exchange_service = AsyncMock()
         mock_exchange_service.get_balance.return_value = None
 
@@ -275,7 +267,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_release_reserved_fiat_full(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._balance = Decimal("800")
         balance_tracker._reserved_fiat = Decimal("200")
 
@@ -286,7 +278,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_release_reserved_fiat_partial(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._balance = Decimal("800")
         balance_tracker._reserved_fiat = Decimal("200")
 
@@ -297,7 +289,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_release_reserved_fiat_over_release(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._balance = Decimal("800")
         balance_tracker._reserved_fiat = Decimal("200")
 
@@ -310,7 +302,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_release_reserved_crypto_full(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._crypto_balance = Decimal("3")
         balance_tracker._reserved_crypto = Decimal("2")
 
@@ -321,7 +313,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_release_reserved_crypto_partial(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._crypto_balance = Decimal("3")
         balance_tracker._reserved_crypto = Decimal("2")
 
@@ -332,7 +324,7 @@ class TestBalanceTracker:
 
     @pytest.mark.asyncio
     async def test_release_reserved_crypto_over_release(self, setup_balance_tracker):
-        balance_tracker, _, _ = setup_balance_tracker
+        balance_tracker, _ = setup_balance_tracker
         balance_tracker._crypto_balance = Decimal("3")
         balance_tracker._reserved_crypto = Decimal("2")
 
@@ -344,11 +336,9 @@ class TestBalanceTracker:
 
 @pytest.fixture
 def balance_tracker():
-    event_bus = Mock(spec=EventBus)
     fee_calculator = Mock(spec=FeeCalculator)
     fee_calculator.calculate_fee.side_effect = lambda amount, liquidity: amount * 0.001
     bt = BalanceTracker(
-        event_bus=event_bus,
         fee_calculator=fee_calculator,
         trading_mode=TradingMode.LIVE,
         base_currency="BTC",
@@ -471,7 +461,6 @@ class TestBalanceTrackerLiquidityAwareFees:
         config.get_maker_fee.return_value = self.MAKER_RATE
         config.get_taker_fee.return_value = self.TAKER_RATE
         bt = BalanceTracker(
-            event_bus=Mock(spec=EventBus),
             fee_calculator=FeeCalculator(config),
             trading_mode=TradingMode.LIVE,
             base_currency="BTC",

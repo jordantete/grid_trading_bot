@@ -95,11 +95,11 @@ def initialize_config(config_path: str) -> ConfigManager:
         sys.exit(EXIT_CONFIG)
 
 
-def initialize_notification_handler(config_manager: ConfigManager, event_bus: EventBus) -> NotificationHandler:
+def initialize_notification_handler(config_manager: ConfigManager) -> NotificationHandler:
     notification_urls_str = os.getenv("APPRISE_NOTIFICATION_URLS", "")
     notification_urls = [url.strip() for url in notification_urls_str.split(",") if url.strip()]
     trading_mode = config_manager.get_trading_mode()
-    return NotificationHandler(event_bus, notification_urls, trading_mode)
+    return NotificationHandler(notification_urls, trading_mode)
 
 
 async def run_bot(
@@ -113,7 +113,7 @@ async def run_bot(
     config_name = generate_config_name(config_manager)
     setup_logging(config_manager.get_logging_level(), config_manager.should_log_to_file(), config_name)
     event_bus = EventBus()
-    notification_handler = initialize_notification_handler(config_manager, event_bus)
+    notification_handler = initialize_notification_handler(config_manager)
     live_or_paper = config_manager.get_trading_mode() in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
     run_files = RunFiles.for_config(config_manager) if live_or_paper else None
     run_lock = RunLock(run_files.lock_path) if run_files is not None else None

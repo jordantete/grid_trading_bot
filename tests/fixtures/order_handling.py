@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.order_handling.execution_strategy.live_order_execution_strategy import (
     LiveOrderExecutionStrategy,
 )
@@ -27,7 +26,6 @@ def setup_order_manager():
     balance_tracker.record_execution = AsyncMock()
     order_book = Mock()
     order_book.has_open_orders_at.return_value = False
-    event_bus = Mock(spec=EventBus)
     order_execution_strategy = Mock()
     notification_handler = Mock()
     notification_handler.async_send_notification = AsyncMock()
@@ -37,7 +35,6 @@ def setup_order_manager():
         order_validator=order_validator,
         balance_tracker=balance_tracker,
         order_book=order_book,
-        event_bus=event_bus,
         order_execution_strategy=order_execution_strategy,
         notification_handler=notification_handler,
         trading_mode=TradingMode.LIVE,
@@ -49,7 +46,6 @@ def setup_order_manager():
         order_validator,
         balance_tracker,
         order_book,
-        event_bus,
         order_execution_strategy,
         notification_handler,
     )
