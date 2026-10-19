@@ -57,10 +57,10 @@ class TestFills:
 
         local = stack.book.get_order(buy.identifier)
         assert (local.is_filled(), local.filled) == (True, buy.amount)
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.999)
         assert stack.grid.grid_levels[100.0].state == GridCycleState.READY_TO_BUY
         sell = stack.execution.order_at(110.0, OrderSide.SELL)
-        assert sell.amount == pytest.approx(buy.amount)
+        assert sell.amount == pytest.approx(buy.amount * 0.999)
         assert stack.book.get_order(sell.identifier).is_open()
         assert stack.grid.grid_levels[110.0].state == GridCycleState.WAITING_FOR_SELL_FILL
         assert reserved_matches_open_orders(stack)
@@ -85,8 +85,8 @@ class TestFills:
 
         await stack.manager.apply_order_update(view)
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount)
-        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(buy.amount)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.999)
+        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(buy.amount * 0.999)
         assert reserved_matches_open_orders(stack)
 
     async def test_a_closed_update_with_a_remainder_releases_its_reservation(self, stack):
@@ -97,8 +97,8 @@ class TestFills:
 
         await stack.manager.apply_order_update(view)
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.4)
-        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(buy.amount * 0.4)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.4 * 0.999)
+        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(buy.amount * 0.4 * 0.999)
         assert reserved_matches_open_orders(stack)
 
     async def test_an_update_for_an_order_no_longer_open_is_ignored(self, stack):
@@ -128,7 +128,7 @@ class TestFills:
 
         await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.6)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.6 * 0.999)
 
     async def test_a_fill_after_the_positions_closed_is_booked_without_a_paired_order(self, stack):
         buy = stack.execution.order_at(100.0, OrderSide.BUY)
@@ -137,7 +137,7 @@ class TestFills:
 
         await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.999)
         assert stack.execution.open_orders(OrderSide.SELL) == [stack.execution.order_at(120.0, OrderSide.SELL)]
 
     async def test_a_fill_without_a_grid_level_is_booked_and_places_nothing(self, stack):
@@ -148,7 +148,7 @@ class TestFills:
 
         await stack.manager.apply_order_update(stack.execution.fill(loose.identifier))
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + 1.0)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + 0.999)
         assert len(stack.execution.orders) == orders_before
 
     @pytest.mark.parametrize(
@@ -169,7 +169,7 @@ class TestFills:
 
         await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.999)
         assert stack.grid.grid_levels[100.0].state == GridCycleState.READY_TO_BUY
         assert stack.grid.grid_levels[110.0].state == GridCycleState.READY_TO_SELL
         assert [save.consistent for save in store.saves] == [True]
@@ -193,7 +193,7 @@ class TestFills:
 
         await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.999)
         assert stack.grid.grid_levels[100.0].state == GridCycleState.READY_TO_BUY
         assert stack.grid.grid_levels[110.0].state == GridCycleState.READY_TO_SELL
         assert [save.consistent for save in store.saves] == [True]
@@ -240,6 +240,27 @@ class TestFills:
 
         assert held_when_sent == [False]
 
+    async def test_the_paired_sell_is_sized_on_the_crypto_the_fill_received(self, stack):
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+        view = stack.execution.fill(buy.identifier)
+        view.fee = {"cost": buy.amount * 0.003, "currency": "BTC"}
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+
+        await stack.manager.apply_order_update(view)
+
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.997)
+        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(buy.amount * 0.997)
+        assert reserved_matches_open_orders(stack)
+
+    async def test_a_fee_paid_in_another_currency_leaves_the_whole_fill_to_sell(self, stack):
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+        view = stack.execution.fill(buy.identifier)
+        view.fee = {"cost": 0.01, "currency": "BNB"}
+
+        await stack.manager.apply_order_update(view)
+
+        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(buy.amount)
+
 
 class TestEndedOrders:
     @pytest.mark.parametrize("status", [OrderStatus.CANCELED, OrderStatus.EXPIRED])
@@ -273,7 +294,7 @@ class TestEndedOrders:
 
         await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.CANCELED))
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.4)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.4 * 0.999)
         assert stack.execution.order_at(90.0, OrderSide.BUY).amount == pytest.approx(buy.amount * 0.6)
         assert reserved_matches_open_orders(stack)
 
@@ -385,7 +406,7 @@ class TestBulkCancellation:
         assert await stack.manager.cancel_open_grid_orders() is True
         await stack.manager.apply_order_update(await stack.execution.get_order(buy.identifier, "BTC/USDT"))
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.4)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.4 * 0.999)
         assert stack.balances.reserved_fiat == pytest.approx(0.0, abs=1e-6)
 
     async def test_an_unreadable_cancelled_order_releases_its_remainder_as_last_seen(self, stack):
@@ -429,8 +450,8 @@ class TestPlacementEntryState:
 
         await stack.manager.apply_order_update(await stack.execution.get_order(placed.identifier, "BTC/USDT"))
 
-        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + placed.amount)
-        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(placed.amount)
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + placed.amount * 0.999)
+        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(placed.amount * 0.999)
 
 
 class TestClientOrderIds:

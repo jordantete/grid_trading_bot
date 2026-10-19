@@ -10,8 +10,8 @@ from ..validation.exceptions import (
     InsufficientBalanceError,
     InsufficientCryptoBalanceError,
 )
-from .fee_calculator import FeeCalculator
-from .order import Liquidity, Order, OrderSide, OrderStatus
+from .fee_calculator import Fee, FeeCalculator
+from .order import Order, OrderSide, OrderStatus
 from .pnl_ledger import PnlLedger
 
 _QUANTIZE_EXP = Decimal("1e-8")
@@ -145,83 +145,80 @@ class BalanceTracker:
         async with self._lock:
             fill_price = order.average if order.average is not None else order.price
             if filled_quantity > 0:
+                fee = self.fee_calculator.execution_fee(order, filled_quantity, fill_price)
                 if order.side == OrderSide.BUY:
-                    self._update_after_buy_order_filled(filled_quantity, fill_price, order.liquidity)
+                    self._update_after_buy_order_filled(filled_quantity, fill_price, fee)
                 else:
-                    self._update_after_sell_order_filled(filled_quantity, fill_price, order.liquidity)
+                    self._update_after_sell_order_filled(filled_quantity, fill_price, fee)
             if order.status != OrderStatus.OPEN and order.remaining:
                 if order.side == OrderSide.BUY:
                     self._release_fiat_unlocked(order.remaining * order.price)
                 else:
                     self._release_crypto_unlocked(order.remaining)
 
-    def _update_after_buy_order_filled(
-        self,
-        quantity: float,
-        price: float,
-        liquidity: Liquidity,
-    ) -> None:
+    def _update_after_buy_order_filled(self, quantity: float, price: float, fee: Fee) -> None:
         """
-        Updates the balances after a buy order is completed, including handling reserved funds.
-
-        Deducts the total cost (price * quantity + fee) from the reserved fiat balance,
-        releases any unused reserved fiat back to the main balance, adds the purchased
-        crypto quantity to the crypto balance, and tracks the fees incurred.
-
-        Args:
-            quantity: The quantity of crypto purchased.
-            price: The price at which the crypto was purchased (per unit).
+        Books a buy fill: its cost comes out of the reserved fiat (any excess out of the free fiat) and the crypto
+        received is credited, net of a fee charged in base. A fee charged in quote comes out of the free fiat.
         """
         d_quantity = self._to_decimal(quantity)
         d_price = self._to_decimal(price)
-        fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price, liquidity))
-        total_cost = (d_quantity * d_price + fee).quantize(_QUANTIZE_EXP)
-        self._ledger.record_buy(self._position(), d_quantity, d_price, fee)
+        received, fee_value = self._ledger_entry(OrderSide.BUY, d_quantity, d_price, fee)
+        self._ledger.record_buy(self._position(), received, d_price, fee_value)
 
-        self._reserved_fiat = (self._reserved_fiat - total_cost).quantize(_QUANTIZE_EXP)
+        self._reserved_fiat = (self._reserved_fiat - d_quantity * d_price).quantize(_QUANTIZE_EXP)
         if self._reserved_fiat < 0:
             overflow = -self._reserved_fiat
             self._balance = (self._balance - overflow).quantize(_QUANTIZE_EXP)
             self._reserved_fiat = Decimal("0")
+        if not fee.in_base:
+            self._balance = (self._balance - self._to_decimal(fee.amount)).quantize(_QUANTIZE_EXP)
 
-        self._crypto_balance = (self._crypto_balance + d_quantity).quantize(_QUANTIZE_EXP)
-        self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)
+        self._crypto_balance = (self._crypto_balance + received).quantize(_QUANTIZE_EXP)
+        self._total_fees = (self._total_fees + fee_value).quantize(_QUANTIZE_EXP)
         self.logger.info(f"Buy order completed: {quantity} crypto purchased at {price}.")
         self._log_balance_update(price)
 
-    def _update_after_sell_order_filled(
-        self,
-        quantity: float,
-        price: float,
-        liquidity: Liquidity,
-    ) -> None:
+    def _update_after_sell_order_filled(self, quantity: float, price: float, fee: Fee) -> None:
         """
-        Updates the balances after a sell order is completed, including handling reserved funds.
-
-        Deducts the sold crypto quantity from the reserved crypto balance, releases any
-        unused reserved crypto back to the main crypto balance, adds the sale proceeds
-        (quantity * price - fee) to the fiat balance, and tracks the fees incurred.
-
-        Args:
-            quantity: The quantity of crypto sold.
-            price: The price at which the crypto was sold (per unit).
+        Books a sell fill: the crypto sold leaves the reserved crypto (any excess the free crypto) and the proceeds
+        are credited, net of a fee charged in quote. A fee charged in base comes out of the free crypto.
         """
         d_quantity = self._to_decimal(quantity)
         d_price = self._to_decimal(price)
-        fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * price, liquidity))
-        sale_proceeds = (d_quantity * d_price - fee).quantize(_QUANTIZE_EXP)
-        self._ledger.record_sell(self._position(), d_quantity, d_price, fee)
-        self._reserved_crypto = (self._reserved_crypto - d_quantity).quantize(_QUANTIZE_EXP)
+        d_fee = self._to_decimal(fee.amount)
+        sold, fee_value = self._ledger_entry(OrderSide.SELL, d_quantity, d_price, fee)
+        self._ledger.record_sell(self._position(), sold, d_price, fee_value)
 
+        self._reserved_crypto = (self._reserved_crypto - d_quantity).quantize(_QUANTIZE_EXP)
         if self._reserved_crypto < 0:
             overflow = -self._reserved_crypto
-            self._crypto_balance = (self._crypto_balance - overflow).quantize(_QUANTIZE_EXP)
             self._reserved_crypto = Decimal("0")
+            self._take_free_crypto(overflow)
+        if fee.in_base:
+            self._take_free_crypto(d_fee)
 
-        self._balance = (self._balance + sale_proceeds).quantize(_QUANTIZE_EXP)
-        self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)
+        proceeds = d_quantity * d_price if fee.in_base else d_quantity * d_price - d_fee
+        self._balance = (self._balance + proceeds).quantize(_QUANTIZE_EXP)
+        self._total_fees = (self._total_fees + fee_value).quantize(_QUANTIZE_EXP)
         self.logger.info(f"Sell order completed: {quantity} crypto sold at {price}.")
         self._log_balance_update(price)
+
+    def _ledger_entry(self, side: OrderSide, quantity: Decimal, price: Decimal, fee: Fee) -> tuple[Decimal, Decimal]:
+        """The quantity a fill moves the position by and its fee valued in quote, as the PnL ledger records them."""
+        amount = self._to_decimal(fee.amount)
+        if not fee.in_base:
+            return quantity, amount
+        moved = quantity - amount if side == OrderSide.BUY else quantity + amount
+        return moved, amount * price
+
+    def _take_free_crypto(self, quantity: Decimal) -> None:
+        if quantity > self._crypto_balance:
+            self.logger.warning(
+                f"Removing {quantity} crypto with only {self._crypto_balance} free; the free crypto stops at 0."
+            )
+            quantity = self._crypto_balance
+        self._crypto_balance = (self._crypto_balance - quantity).quantize(_QUANTIZE_EXP)
 
     async def update_after_initial_purchase(self, initial_order: Order):
         """
@@ -236,18 +233,14 @@ class BalanceTracker:
 
             d_filled = self._to_decimal(initial_order.filled)
             d_average = self._to_decimal(initial_order.average)
+            fee = self.fee_calculator.execution_fee(initial_order, initial_order.filled, initial_order.average)
+            received, fee_value = self._ledger_entry(OrderSide.BUY, d_filled, d_average, fee)
+            self._ledger.record_buy(self._position(), received, d_average, fee_value)
 
-            total_cost = (d_filled * d_average).quantize(_QUANTIZE_EXP)
-            fee = self._to_decimal(
-                self.fee_calculator.calculate_fee(
-                    initial_order.filled * initial_order.average, initial_order.liquidity
-                ),
-            )
-            self._ledger.record_buy(self._position(), d_filled, d_average, fee)
-
-            self._crypto_balance = (self._crypto_balance + d_filled).quantize(_QUANTIZE_EXP)
-            self._balance = (self._balance - total_cost - fee).quantize(_QUANTIZE_EXP)
-            self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)
+            quote_fee = Decimal("0") if fee.in_base else self._to_decimal(fee.amount)
+            self._crypto_balance = (self._crypto_balance + received).quantize(_QUANTIZE_EXP)
+            self._balance = (self._balance - d_filled * d_average - quote_fee).quantize(_QUANTIZE_EXP)
+            self._total_fees = (self._total_fees + fee_value).quantize(_QUANTIZE_EXP)
             self._log_balance_update(initial_order.average)
 
     async def reserve_funds_for_buy(
@@ -356,16 +349,14 @@ class BalanceTracker:
             fill_price = order.average if order.average is not None else order.price
             d_filled = self._to_decimal(order.filled)
             d_price = self._to_decimal(fill_price)
-            fee = self._to_decimal(self.fee_calculator.calculate_fee(order.filled * fill_price, order.liquidity))
-            proceeds = (d_filled * d_price - fee).quantize(_QUANTIZE_EXP)
-            self._ledger.record_sell(self._position(), d_filled, d_price, fee)
+            fee = self.fee_calculator.execution_fee(order, order.filled, fill_price)
+            sold, fee_value = self._ledger_entry(OrderSide.SELL, d_filled, d_price, fee)
+            self._ledger.record_sell(self._position(), sold, d_price, fee_value)
 
-            self._crypto_balance = (self._crypto_balance - d_filled).quantize(_QUANTIZE_EXP)
-            if self._crypto_balance < 0:
-                self._crypto_balance = Decimal("0")
-
-            self._balance = (self._balance + proceeds).quantize(_QUANTIZE_EXP)
-            self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)
+            self._take_free_crypto(sold)
+            quote_fee = Decimal("0") if fee.in_base else self._to_decimal(fee.amount)
+            self._balance = (self._balance + d_filled * d_price - quote_fee).quantize(_QUANTIZE_EXP)
+            self._total_fees = (self._total_fees + fee_value).quantize(_QUANTIZE_EXP)
             self._log_balance_update(fill_price)
 
     def _log_balance_update(self, price: float) -> None:
@@ -441,13 +432,13 @@ class BalanceTracker:
         fills = [(order, quantity) for order, quantity in executions if quantity > 0]
         for order, quantity in sorted(fills, key=lambda item: item[0].last_trade_timestamp or item[0].timestamp or 0):
             fill_price = order.average if order.average is not None else order.price
-            d_quantity = self._to_decimal(quantity)
             d_price = self._to_decimal(fill_price)
-            fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * fill_price, order.liquidity))
+            fee = self.fee_calculator.execution_fee(order, quantity, fill_price)
+            moved, fee_value = self._ledger_entry(order.side, self._to_decimal(quantity), d_price, fee)
             if order.side == OrderSide.BUY:
-                self._ledger.record_buy(position, d_quantity, d_price, fee)
-                position += d_quantity
+                self._ledger.record_buy(position, moved, d_price, fee_value)
+                position += moved
             else:
-                self._ledger.record_sell(position, d_quantity, d_price, fee)
-                position -= d_quantity
-            self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)
+                self._ledger.record_sell(position, moved, d_price, fee_value)
+                position -= moved
+            self._total_fees = (self._total_fees + fee_value).quantize(_QUANTIZE_EXP)

@@ -239,7 +239,7 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
             symbol=raw_order_result.get("symbol", ""),
             time_in_force=raw_order_result.get("timeInForce"),
             trades=raw_order_result.get("trades", []),
-            fee=raw_order_result.get("fee"),
+            fee=raw_order_result.get("fee") or raw_order_result.get("fees") or None,
             cost=raw_order_result.get("cost"),
             info=raw_order_result.get("info", raw_order_result),
         )

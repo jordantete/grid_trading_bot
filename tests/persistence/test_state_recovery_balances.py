@@ -47,8 +47,8 @@ def _exchange_balances(before, executions):
     crypto = before.balances.get_adjusted_crypto_balance()
     for side, quantity, price in executions:
         if side == OrderSide.BUY:
-            fiat -= quantity * price * (1 + FEE)
-            crypto += quantity
+            fiat -= quantity * price
+            crypto += quantity * (1 - FEE)
         else:
             fiat += quantity * price * (1 - FEE)
             crypto -= quantity
@@ -97,7 +97,7 @@ class TestLiveRecoveryBalances:
 
         await after.manager.apply_order_update(before.execution.fill(buy.identifier))
 
-        assert after.balances.get_adjusted_crypto_balance() == pytest.approx(crypto + buy.amount * 0.6)
+        assert after.balances.get_adjusted_crypto_balance() == pytest.approx(crypto + buy.amount * 0.6 * (1 - FEE))
 
     async def test_a_fill_while_down_reaches_the_fees_and_the_cost_basis_once(self, repository):
         before = await _armed_and_saved(repository)
@@ -154,8 +154,8 @@ class TestPaperRecoveryBalances:
 
         assert result.balance_source == "db"
         exchange_service.get_balance.assert_not_awaited()
-        bought = filled.amount + partial.amount * 0.4
-        cost = (filled.amount * 100.0 + partial.amount * 0.4 * 90.0) * (1 + FEE)
+        bought = (filled.amount + partial.amount * 0.4) * (1 - FEE)
+        cost = filled.amount * 100.0 + partial.amount * 0.4 * 90.0
         assert after.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_total + bought)
         assert after.balances.get_adjusted_fiat_balance() == pytest.approx(fiat_total - cost)
         assert reserved_matches_open_orders(after)
@@ -163,5 +163,5 @@ class TestPaperRecoveryBalances:
         await after.manager.apply_order_update(before.execution.fill(partial.identifier))
 
         assert after.balances.get_adjusted_crypto_balance() == pytest.approx(
-            crypto_total + filled.amount + partial.amount
+            crypto_total + (filled.amount + partial.amount) * (1 - FEE)
         )

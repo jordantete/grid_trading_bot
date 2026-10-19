@@ -67,8 +67,8 @@ def checks(monkeypatch):
 
 def _violations(snapshot) -> list[str]:
     """
-    What breaks the saved-state invariants: reserved funds equal to what the open orders need (buy fees come out of
-    the reserved fiat, so it may fall short by the fees paid), and each waiting level holding an open order.
+    What breaks the saved-state invariants: reserved funds equal to what the open orders need, and each waiting level
+    holding an open order.
     """
     open_orders = [o for o in snapshot.orders if o["status"] == "open"]
     needed_fiat = sum(o["price"] * o["remaining"] for o in open_orders if o["side"] == "buy")
@@ -76,9 +76,8 @@ def _violations(snapshot) -> list[str]:
     balance = snapshot.balance_state
     reserved_fiat = float(balance["reserved_fiat"])
     reserved_crypto = float(balance["reserved_crypto"])
-    fees = float(balance["total_fees"])
     problems = []
-    if not needed_fiat - fees - 1e-6 <= reserved_fiat <= needed_fiat + 1e-6:
+    if abs(reserved_fiat - needed_fiat) > 1e-6:
         problems.append(f"reserved fiat {reserved_fiat} for open buys needing {needed_fiat}")
     if abs(reserved_crypto - needed_crypto) > 1e-6:
         problems.append(f"reserved crypto {reserved_crypto} for open sells needing {needed_crypto}")
@@ -200,8 +199,9 @@ def _expected_realized_pnl(executions) -> float:
     for execution in executions:
         quantity, price, fee = (Decimal(str(execution[key])) for key in ("quantity", "price", "fee"))
         if execution["side"] == "buy":
-            ledger.record_buy(position, quantity, price, fee)
-            position += quantity
+            received = quantity - fee
+            ledger.record_buy(position, received, price, fee * price)
+            position += received
         else:
             ledger.record_sell(position, quantity, price, fee)
             position -= quantity
@@ -239,10 +239,27 @@ async def test_a_restart_resumes_the_saved_state_and_books_every_fill_once(tmp_p
     totals = exchange.totals()
     assert saved.fiat_total == pytest.approx(totals["USDT"], abs=1e-6)
     assert saved.crypto_total == pytest.approx(totals["BTC"], abs=1e-6)
-    assert saved.total_fees == pytest.approx(sum(e["fee"] for e in exchange.executions()), abs=1e-6)
+    assert saved.total_fees == pytest.approx(exchange.fees_paid(), abs=1e-6)
     assert saved.realized_pnl == pytest.approx(_expected_realized_pnl(exchange.executions()), abs=1e-4)
     assert checks.saves > 0
     assert checks.problems == []
+
+
+async def test_the_fee_the_exchange_reports_is_the_one_booked(tmp_path, exchange):
+    ExchangeState.create(exchange.path, price=ARMING_PRICE, quote=1000.0, fee=0.002, report_fees=True)
+    bot = Running(_bot(_config(tmp_path)))
+    await bot.until(lambda: len(exchange.open_orders()) == ARMED_ORDERS)
+    buy = exchange.order_at(100.0, "buy")
+    exchange.fill(buy["id"])
+    await bot.until(lambda: exchange.has_open(110.0, "sell"))
+    await bot.stop()
+
+    assert exchange.order_at(110.0, "sell")["amount"] == pytest.approx(buy["amount"] * (1 - 0.002))
+    saved = _saved(tmp_path)
+    totals = exchange.totals()
+    assert saved.crypto_total == pytest.approx(totals["BTC"], abs=1e-6)
+    assert saved.fiat_total == pytest.approx(totals["USDT"], abs=1e-6)
+    assert saved.total_fees == pytest.approx(exchange.fees_paid(), abs=1e-6)
 
 
 async def test_a_fresh_start_over_open_orders_is_refused(tmp_path, exchange):

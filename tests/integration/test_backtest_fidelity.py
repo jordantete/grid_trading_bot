@@ -260,4 +260,5 @@ async def test_roi_is_measured_from_the_cash_before_the_initial_purchase(tmp_pat
     metrics = result["metrics"]
     assert metrics.armed is True
     assert metrics.roi_pct < 0
-    assert metrics.roi_pct == round((metrics.final_balance - 1000) / 1000 * 100, 2)
+    # The analyzer rounds a numpy float, which can round a tie such as -0.075 the other way from Python's round.
+    assert metrics.roi_pct == pytest.approx((metrics.final_balance - 1000) / 1000 * 100, abs=0.01)

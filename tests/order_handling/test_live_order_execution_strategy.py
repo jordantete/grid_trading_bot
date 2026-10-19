@@ -458,3 +458,14 @@ class TestLiveOrderExecutionStrategyPostOnlyRejection:
             await strategy.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 100.0, CLIENT_ORDER_ID)
 
         assert exchange_service.place_order.await_count == 1
+
+
+class TestParsedFees:
+    async def test_a_fee_list_is_kept_when_the_single_fee_is_empty(self, setup_live_strategy):
+        strategy, _ = setup_live_strategy
+        fees = [{"cost": 0.001, "currency": "BTC"}, {"cost": 0.002, "currency": "BTC"}]
+        raw_order = {"id": "1", "status": "closed", "type": "market", "side": "buy", "fee": None, "fees": fees}
+
+        order = await strategy._parse_order_result(raw_order)
+
+        assert order.fee == fees

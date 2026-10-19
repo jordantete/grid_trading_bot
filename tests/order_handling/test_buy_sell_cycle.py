@@ -206,6 +206,7 @@ class TestTrackerToOrderManagerFlow:
         balance_tracker.reserve_funds_for_buy = AsyncMock()
         balance_tracker.reserve_funds_for_sell = AsyncMock()
         balance_tracker.record_execution = AsyncMock()
+        balance_tracker.fee_calculator.order_base_fee.return_value = 0.0
         manager_execution_strategy = Mock()
         notification_handler = Mock()
         notification_handler.async_send_notification = AsyncMock()

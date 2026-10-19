@@ -1,6 +1,7 @@
 """
 A ccxt.pro-shaped exchange for BTC/USDT whose orders, balances and executions live in a JSON file: they survive
-between two bot processes, and tests fill, cancel or remove orders while no bot runs.
+between two bot processes, and tests fill, cancel or remove orders while no bot runs. Fees are taken in the currency
+each fill receives.
 """
 
 import asyncio
@@ -21,21 +22,28 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _execute(data: dict, side: str, quantity: float, price: float, from_locked: bool) -> None:
-    """
-    Moves the funds of `quantity` executed at `price`; the fee is taken in the quote currency, as the bot books it.
-    """
+def _execute(data: dict, side: str, quantity: float, price: float, from_locked: bool) -> tuple[float, str]:
+    """Moves the funds of `quantity` executed at `price`, the fee taken in the currency the fill receives."""
     balances = data["balances"]
-    fee = quantity * price * data["fee"]
     source = "used" if from_locked else "free"
     if side == "buy":
+        fee, currency = quantity * data["fee"], BASE
         balances[QUOTE][source] -= quantity * price
-        balances[QUOTE]["free"] -= fee
-        balances[BASE]["free"] += quantity
+        balances[BASE]["free"] += quantity - fee
     else:
+        fee, currency = quantity * price * data["fee"], QUOTE
         balances[BASE][source] -= quantity
         balances[QUOTE]["free"] += quantity * price - fee
-    data["executions"].append({"side": side, "quantity": quantity, "price": price, "fee": fee})
+    data["executions"].append(
+        {"side": side, "quantity": quantity, "price": price, "fee": fee, "fee_currency": currency}
+    )
+    return fee, currency
+
+
+def _report_fee(data: dict, order: dict, fee: float, currency: str) -> None:
+    if data.get("report_fees"):
+        previous = order["fee"]["cost"] if order["fee"] else 0.0
+        order["fee"] = {"cost": previous + fee, "currency": currency}
 
 
 def _move(data: dict, asset: str, amount: float, from_key: str, to_key: str) -> None:
@@ -72,7 +80,7 @@ def _open(
     }
     if order_type == "market":
         market_price = data["price"]
-        _execute(data, side, amount, market_price, from_locked=False)
+        fee, currency = _execute(data, side, amount, market_price, from_locked=False)
         order.update(
             status="closed",
             price=market_price,
@@ -82,6 +90,7 @@ def _open(
             cost=amount * market_price,
             lastTradeTimestamp=_now_ms(),
         )
+        _report_fee(data, order, fee, currency)
     elif side == "buy":
         _move(data, QUOTE, amount * price, "free", "used")
     else:
@@ -116,6 +125,7 @@ class ExchangeState:
         fee: float = 0.001,
         order_delay: float | None = None,
         fail_feed_after: int | None = None,
+        report_fees: bool = False,
     ) -> "ExchangeState":
         state = cls(path)
         state._write(
@@ -124,6 +134,7 @@ class ExchangeState:
                 "fee": fee,
                 "order_delay": order_delay,
                 "fail_feed_after": fail_feed_after,
+                "report_fees": report_fees,
                 "failing": [],
                 "next_id": 1,
                 "orders": {},
@@ -162,7 +173,8 @@ class ExchangeState:
         def change(data):
             order = data["orders"][order_id]
             filled = order["remaining"] if quantity is None or quantity >= order["remaining"] else quantity
-            _execute(data, order["side"], filled, order["price"], from_locked=True)
+            fee, currency = _execute(data, order["side"], filled, order["price"], from_locked=True)
+            _report_fee(data, order, fee, currency)
             if filled == order["remaining"]:
                 order["filled"], order["remaining"], order["status"] = order["amount"], 0.0, "closed"
             else:
@@ -197,6 +209,10 @@ class ExchangeState:
 
     def executions(self) -> list[dict]:
         return self.read()["executions"]
+
+    def fees_paid(self) -> float:
+        """Every fee charged so far, valued in the quote currency at its fill price."""
+        return sum(e["fee"] * e["price"] if e["fee_currency"] == BASE else e["fee"] for e in self.read()["executions"])
 
 
 class FakeExchange:

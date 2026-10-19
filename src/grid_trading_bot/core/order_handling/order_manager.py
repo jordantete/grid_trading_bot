@@ -478,8 +478,8 @@ class OrderManager:
         if filled_order.side == OrderSide.BUY:
             target = self.grid_manager.get_sell_target(grid_level)
             if target is not None:
-                quantity = filled_order.filled * self.grid_manager.sell_ratio
-                await self._place_order(OrderSide.SELL, grid_level, target, quantity)
+                received = filled_order.filled - self.balance_tracker.fee_calculator.order_base_fee(filled_order)
+                await self._place_order(OrderSide.SELL, grid_level, target, received * self.grid_manager.sell_ratio)
         else:
             target = self.grid_manager.get_buy_target(grid_level)
             if target is not None:

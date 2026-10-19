@@ -85,15 +85,8 @@ def build_stack(fiat: float = 2700.0, crypto: float = 20.0, trading_mode: str = 
 
 
 def reserved_matches_open_orders(stack: TradingStack) -> bool:
-    """
-    Whether the reserved funds cover what the open orders of the book still need. Buy fees come out of the reserved
-    fiat, so it may fall short of the open buys by at most the fees paid so far.
-    """
+    """Whether the reserved funds equal what the open orders of the book still need."""
     open_orders = stack.book.get_open_orders()
     fiat = sum(o.price * o.remaining for o in open_orders if o.side == OrderSide.BUY)
     crypto = sum(o.remaining for o in open_orders if o.side == OrderSide.SELL)
-    reserved_fiat = stack.balances.reserved_fiat
-    return (
-        fiat - stack.balances.total_fees - 1e-6 <= reserved_fiat <= fiat + 1e-6
-        and abs(stack.balances.reserved_crypto - crypto) <= 1e-6
-    )
+    return abs(stack.balances.reserved_fiat - fiat) <= 1e-6 and abs(stack.balances.reserved_crypto - crypto) <= 1e-6
