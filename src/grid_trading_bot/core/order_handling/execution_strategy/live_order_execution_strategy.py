@@ -40,7 +40,8 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
     ) -> Order:
         """
         Sends one market leg and returns it closed with what it executed. A leg the exchange leaves open is
-        cancelled first, and raises OrderOutcomeUnknownError when it cannot be; a leg that executed nothing raises.
+        cancelled first, and raises OrderOutcomeUnknownError when it cannot be cancelled or its final state cannot be
+        read; a leg that executed nothing raises.
         """
         leg = await self._send(OrderType.MARKET, order_side, pair, quantity, price, client_order_id)
         if leg.status == OrderStatus.OPEN:
@@ -49,6 +50,11 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
                 raise OrderOutcomeUnknownError(
                     f"Market {order_side.value} order {leg.identifier} is still open on the exchange and could not "
                     f"be cancelled."
+                )
+            if settled.status == OrderStatus.OPEN:
+                raise OrderOutcomeUnknownError(
+                    f"Market {order_side.value} order {leg.identifier} was cancelled but its final state could not "
+                    f"be read."
                 )
             leg = settled
 

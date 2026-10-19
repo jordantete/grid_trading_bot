@@ -312,15 +312,38 @@ class TestLiveOrderExecutionStrategy:
         """A leg reporting neither average nor price must not crash; it is booked at the reference price."""
         strategy, exchange_service = setup_live_strategy
         strategy.retry_delay = 0
-        partial_raw = _raw("partial-order", "open", "market", "buy", None, 1.0, 0.4)
-        exchange_service.place_order = AsyncMock(return_value=partial_raw)
+        exchange_service.place_order = AsyncMock(
+            return_value=_raw("partial-order", "open", "market", "buy", None, 1.0, 0.4)
+        )
         exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
-        exchange_service.fetch_order = AsyncMock(return_value=partial_raw)
+        exchange_service.fetch_order = AsyncMock(
+            return_value=_raw("partial-order", "canceled", "market", "buy", None, 1.0, 0.4)
+        )
 
         order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 1.0, 100.0, CLIENT_ORDER_ID)
 
         assert order.filled == pytest.approx(0.4)
         assert order.average == pytest.approx(100.0)
+
+    @pytest.mark.parametrize("refetch_error", [DataFetchError("timed out"), OrderNotFoundError("archived")])
+    @pytest.mark.parametrize("filled", [0.0, 0.3])
+    async def test_a_cancelled_market_leg_whose_final_state_cannot_be_read_has_an_unknown_outcome(
+        self, setup_live_strategy, refetch_error, filled
+    ):
+        """A fill that landed between the placement answer and the cancel would go unseen."""
+        strategy, exchange_service = setup_live_strategy
+        exchange_service.place_order = AsyncMock(
+            return_value=_raw("open-leg", "open", "market", "buy", 100.0, 1.0, filled)
+        )
+        exchange_service.cancel_order = AsyncMock(return_value={"status": "canceled"})
+        exchange_service.fetch_order = AsyncMock(side_effect=refetch_error)
+
+        with pytest.raises(
+            OrderOutcomeUnknownError, match="open-leg was cancelled but its final state could not be read"
+        ):
+            await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 1.0, 100.0, CLIENT_ORDER_ID)
+
+        assert exchange_service.place_order.await_count == 1
 
     async def test_cancel_window_fill_uses_refetched_amount(self, setup_live_strategy):
         """Fills landing between the placement response and the cancel must be captured via refetch."""
