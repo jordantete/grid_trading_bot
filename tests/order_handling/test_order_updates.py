@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from tests.fakes.trading_stack import ARMING_PRICE, build_stack, reserved_matches_open_orders
@@ -9,6 +10,7 @@ from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
 from grid_trading_bot.core.services.exceptions import DataFetchError
+from grid_trading_bot.core.validation.exceptions import InsufficientCryptoBalanceError
 
 
 @pytest.fixture
@@ -139,6 +141,31 @@ class TestFills:
         assert stack.grid.grid_levels[100.0].state == GridCycleState.READY_TO_BUY
         assert stack.grid.grid_levels[110.0].state == GridCycleState.READY_TO_SELL
         assert [save.consistent for save in store.saves] == [True]
+        assert NotificationType.ORDER_FAILED in _sent(stack)
+
+    async def test_a_paired_order_the_validator_refuses_keeps_the_fill_booked_and_saves(self, stack):
+        store = RecordingStore(stack)
+        stack.manager.state_store = store
+        stack.manager.order_validator.adjust_and_validate_sell_quantity = Mock(
+            side_effect=InsufficientCryptoBalanceError("no crypto")
+        )
+        held_when_sent = []
+
+        async def record(content, **_kwargs):
+            if content is NotificationType.ORDER_FILLED:
+                held_when_sent.append(stack.manager._lock.locked())
+
+        stack.notifications.async_send_notification.side_effect = record
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+
+        await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
+
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount)
+        assert stack.grid.grid_levels[100.0].state == GridCycleState.READY_TO_BUY
+        assert stack.grid.grid_levels[110.0].state == GridCycleState.READY_TO_SELL
+        assert [save.consistent for save in store.saves] == [True]
+        assert held_when_sent == [False]
         assert NotificationType.ORDER_FAILED in _sent(stack)
 
     async def test_the_state_is_saved_under_the_lock_once_the_paired_order_exists(self, stack):

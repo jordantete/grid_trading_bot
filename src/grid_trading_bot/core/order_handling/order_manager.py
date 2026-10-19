@@ -17,6 +17,7 @@ from ..order_handling.order_book import OrderBook
 from ..validation.exceptions import (
     InsufficientBalanceError,
     InsufficientCryptoBalanceError,
+    InvalidOrderQuantityError,
 )
 from ..validation.order_validator import OrderValidator
 from .exceptions import GridFeasibilityError, OrderExecutionFailedError
@@ -439,6 +440,12 @@ class OrderManager:
             )
         except (DataFetchError, ValueError) as e:
             self.logger.error(f"Error while handling filled order {local.identifier}: {e}", exc_info=True)
+            await self.notification_handler.async_send_notification(
+                NotificationType.ORDER_FAILED,
+                error_details=f"Failed handling filled order. {e}",
+            )
+        except (InsufficientBalanceError, InsufficientCryptoBalanceError, InvalidOrderQuantityError) as e:
+            self.logger.error(f"Paired order for filled order {local.identifier} refused: {e}")
             await self.notification_handler.async_send_notification(
                 NotificationType.ORDER_FAILED,
                 error_details=f"Failed handling filled order. {e}",
