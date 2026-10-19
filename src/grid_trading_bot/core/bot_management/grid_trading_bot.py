@@ -26,7 +26,11 @@ from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import HaltRecord, RunFiles, write_halt_marker
 from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
 from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
-from grid_trading_bot.core.persistence.state_recovery_service import StateRecoveryService
+from grid_trading_bot.core.persistence.state_recovery_service import (
+    RecoveryOutcome,
+    RecoveryResult,
+    StateRecoveryService,
+)
 from grid_trading_bot.core.reconciliation.reconciliation_service import ReconciliationService
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
@@ -234,6 +238,7 @@ class GridTradingBot:
                     self.order_manager.set_market_constraints(MarketConstraints(min_amount, min_cost))
 
             # Attempt state recovery for live trading
+            refused = False
             if self.state_recovery_service:
                 self.strategy.initialize_strategy()
                 recovery_result = await self.state_recovery_service.attempt_recovery()
@@ -247,35 +252,27 @@ class GridTradingBot:
                         f"State recovered: skip_initial_purchase={skip_initial_purchase}, "
                         f"skip_grid_init={skip_grid_init}"
                     )
+                elif recovery_result.outcome is RecoveryOutcome.NO_STATE:
+                    await self._setup_fresh_balances()
                 else:
-                    self.logger.warning("Recovery failed; resetting in-memory state for a fresh start.")
-                    self.grid_manager.reset()
-                    self.order_book.clear()
-                    self.strategy.initialize_strategy()
-                    await self.balance_tracker.setup_balances(
-                        initial_balance=self.config_manager.get_initial_balance(),
-                        initial_crypto_balance=0.0,
-                        exchange_service=self.exchange_service,
-                    )
+                    refused = True
+                    await self._refuse_start(recovery_result)
             else:
                 self.strategy.initialize_strategy()
-                await self.balance_tracker.setup_balances(
-                    initial_balance=self.config_manager.get_initial_balance(),
-                    initial_crypto_balance=0.0,
-                    exchange_service=self.exchange_service,
-                )
+                await self._setup_fresh_balances()
 
-            self._state_ready = True
-            # Placed even when a stop arrived during recovery: recovery already took these fills out of the open
-            # orders, so a final checkpoint without their pairs would lose them.
-            if recovery_result and recovery_result.orders_filled_while_down:
-                self.logger.info(
-                    f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
-                    f"orders filled while bot was down."
-                )
-                await self.order_manager.place_paired_orders_for_recovered_fills(
-                    recovery_result.orders_filled_while_down
-                )
+            if not refused:
+                self._state_ready = True
+                # Placed even when a stop arrived during recovery: recovery already took these fills out of the open
+                # orders, so a final checkpoint without their pairs would lose them.
+                if recovery_result and recovery_result.orders_filled_while_down:
+                    self.logger.info(
+                        f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
+                        f"orders filled while bot was down."
+                    )
+                    await self.order_manager.place_paired_orders_for_recovered_fills(
+                        recovery_result.orders_filled_while_down
+                    )
             self._starting = False
 
             # _start_trading does not yield before strategy.run, so this one check covers everything it starts.
@@ -297,6 +294,29 @@ class GridTradingBot:
 
         finally:
             self.is_running = False
+
+    async def _setup_fresh_balances(self) -> None:
+        await self.balance_tracker.setup_balances(
+            initial_balance=self.config_manager.get_initial_balance(),
+            initial_crypto_balance=0.0,
+            exchange_service=self.exchange_service,
+        )
+
+    async def _refuse_start(self, result: RecoveryResult) -> None:
+        """Stops before trading when the saved state cannot be resumed; the database is left as it is."""
+        db_path = self.config_manager.get_state_db_path()
+        if result.outcome is RecoveryOutcome.DEFERRED:
+            await self._stop(
+                StopRequest(StopKind.EXCHANGE_UNAVAILABLE, f"{result.reason}; the saved state {db_path} is kept")
+            )
+            return
+        await self._stop(
+            StopRequest(
+                StopKind.START_REFUSED,
+                f"{result.reason}. The saved state {db_path} is untouched: relaunch to retry once the cause is "
+                "fixed, or move it aside to start a fresh grid.",
+            )
+        )
 
     async def _start_trading(self, skip_initial_purchase: bool, skip_grid_init: bool) -> None:
         """Starts order tracking, periodic checkpoints, reconciliation and the strategy."""
@@ -433,6 +453,14 @@ class GridTradingBot:
                 kind=request.kind.value,
                 reason=request.reason,
                 config_path=self.config_path,
+            )
+        elif request.kind is StopKind.START_REFUSED:
+            await self.notification_handler.async_send_notification(
+                NotificationType.START_REFUSED, reason=request.reason, config_path=self.config_path
+            )
+        elif request.kind is StopKind.EXCHANGE_UNAVAILABLE:
+            await self.notification_handler.async_send_notification(
+                NotificationType.START_DEFERRED, reason=request.reason
             )
         else:
             await self.notification_handler.async_send_notification(

@@ -10,7 +10,11 @@ from grid_trading_bot.core.grid_management.grid_level import GridCycleState, Gri
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
-from grid_trading_bot.core.persistence.state_recovery_service import StateRecoveryService
+from grid_trading_bot.core.persistence.state_recovery_service import (
+    RecoveryOutcome,
+    StateRecoveryService,
+)
+from grid_trading_bot.core.services.exceptions import DataFetchError, OrderNotFoundError
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -129,7 +133,6 @@ def mock_repository():
     repo.load_grid_levels.return_value = []
     repo.load_all_orders.return_value = []
     repo.load_balance_state.return_value = None
-    repo.clear_all.return_value = None
     return repo
 
 
@@ -235,14 +238,13 @@ class TestStateRecoveryService:
 
         result = await service.attempt_recovery()
 
-        assert result.recovered is False
-        assert result.errors == []
-        mock_repository.clear_all.assert_not_called()
+        assert result.outcome is RecoveryOutcome.NO_STATE
+        mock_repository.save_state.assert_not_called()
 
     # 2. Config hash mismatch
-    async def test_config_hash_mismatch(self, service, mock_repository):
+    async def test_a_saved_state_for_another_grid_refuses_and_keeps_the_database(self, service, mock_repository):
         """When the saved config hash does not match the current config, the service
-        should clear all persisted state and return recovered=False."""
+        refuses the start and leaves the database alone."""
         mock_repository.load_bot_state.return_value = {
             "config_hash": "stale_hash_that_wont_match",
             "initial_purchase_done": True,
@@ -251,8 +253,9 @@ class TestStateRecoveryService:
 
         result = await service.attempt_recovery()
 
-        assert result.recovered is False
-        mock_repository.clear_all.assert_called_once()
+        assert result.outcome is RecoveryOutcome.REFUSED
+        assert "another grid configuration" in result.reason
+        mock_repository.save_state.assert_not_called()
 
     # 3. Successful basic recovery
     async def test_successful_recovery_basic(
@@ -309,7 +312,6 @@ class TestStateRecoveryService:
         assert result.ghost_orders_found == 0
         assert result.orphan_orders_found == 0
         assert result.orders_filled_while_down == []
-        assert result.errors == []
 
         # Grid level state should have been restored
         assert gl.state == GridCycleState.WAITING_FOR_BUY_FILL
@@ -332,7 +334,7 @@ class TestStateRecoveryService:
         result = await service.attempt_recovery()
 
         assert result.recovered is True
-        mock_repository.clear_all.assert_not_called()
+        mock_repository.save_state.assert_not_called()
 
     # 4. Order filled while bot was down → grid state transition + collected for paired orders
     async def test_order_filled_while_bot_down(
@@ -513,6 +515,32 @@ class TestStateRecoveryService:
         mock_order_book.update_order_status.assert_any_call("ghost-1", OrderStatus.CANCELED)
         mock_grid_manager.rollback_order_placement.assert_called_once_with(gl, OrderSide.SELL, False)
 
+    async def test_an_order_the_exchange_no_longer_knows_is_a_ghost(
+        self, service, mock_repository, mock_config_manager, mock_order_book, mock_grid_manager
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        local_order = _make_exchange_order(identifier="ghost-2", side=OrderSide.SELL, price=3050.0, remaining=0.5)
+        mock_order_book.get_open_orders.return_value = [local_order]
+        mock_order_book.get_grid_level_for_order.return_value = MagicMock()
+        service.order_execution_strategy.get_order = AsyncMock(side_effect=OrderNotFoundError("archived"))
+
+        result = await service.attempt_recovery()
+
+        assert result.outcome is RecoveryOutcome.RESUMED
+        assert result.ghost_orders_found == 1
+
+    async def test_an_unreadable_order_defers_the_recovery(
+        self, service, mock_repository, mock_config_manager, mock_order_book
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        mock_order_book.get_open_orders.return_value = [_make_exchange_order(identifier="o-1")]
+        service.order_execution_strategy.get_order = AsyncMock(side_effect=DataFetchError("timeout"))
+
+        result = await service.attempt_recovery()
+
+        assert result.outcome is RecoveryOutcome.DEFERRED
+        assert "timeout" in result.reason
+
     # 7. Orphan order on exchange not in local book
     async def test_orphan_order_on_exchange(
         self,
@@ -590,35 +618,17 @@ class TestStateRecoveryService:
         # Fees from DB
         assert mock_balance_tracker._total_fees == Decimal("15")
 
-    # 9. Balance fallback to DB when exchange fails
-    async def test_balance_fallback_to_db(
-        self,
-        service,
-        mock_repository,
-        mock_config_manager,
-        mock_balance_tracker,
-        mock_exchange_service,
+    async def test_an_unreadable_balance_defers_the_recovery(
+        self, service, mock_repository, mock_config_manager, mock_exchange_service
     ):
-        """When the exchange balance fetch fails, the service should fall back to DB values
-        and report balance_source='db'."""
         _set_valid_bot_state(mock_repository, mock_config_manager)
-
-        mock_repository.load_balance_state.return_value = _make_saved_balance(
-            fiat="4500", crypto="2.0", fees="15", reserved_fiat="300", reserved_crypto="0.3"
-        )
-
-        mock_exchange_service.get_balance = AsyncMock(side_effect=Exception("Exchange unavailable"))
+        mock_exchange_service.get_balance = AsyncMock(side_effect=DataFetchError("Exchange unavailable"))
 
         result = await service.attempt_recovery()
 
-        assert result.recovered is True
-        assert result.balance_source == "db"
-
-        assert mock_balance_tracker._balance == Decimal("4500")
-        assert mock_balance_tracker._crypto_balance == Decimal("2.0")
-        assert mock_balance_tracker._total_fees == Decimal("15")
-        assert mock_balance_tracker._reserved_fiat == Decimal("300")
-        assert mock_balance_tracker._reserved_crypto == Decimal("0.3")
+        assert result.outcome is RecoveryOutcome.DEFERRED
+        assert "Exchange unavailable" in result.reason
+        mock_repository.save_state.assert_not_called()
 
     # 10. Grid level paired references restored
     async def test_grid_level_paired_references_restored(
@@ -666,14 +676,13 @@ class TestStateRecoveryService:
         assert gl_high.paired_sell_level is None
 
     # 11. Exception during recovery falls back to fresh start
-    async def test_recovery_exception_falls_back_to_fresh(
+    async def test_an_unexpected_error_refuses_and_keeps_the_database(
         self,
         service,
         mock_repository,
         mock_config_manager,
     ):
-        """If an unexpected exception occurs during recovery, the service should
-        call clear_all and return recovered=False with the error message."""
+        """An unexpected exception during recovery refuses the start and leaves the database alone."""
         _set_valid_bot_state(mock_repository, mock_config_manager)
 
         # Force an exception during grid level restoration
@@ -681,10 +690,9 @@ class TestStateRecoveryService:
 
         result = await service.attempt_recovery()
 
-        assert result.recovered is False
-        assert len(result.errors) == 1
-        assert "Corrupt DB" in result.errors[0]
-        mock_repository.clear_all.assert_called_once()
+        assert result.outcome is RecoveryOutcome.REFUSED
+        assert "Corrupt DB" in result.reason
+        mock_repository.save_state.assert_not_called()
 
     # 12. Recovery notification sent on success
     async def test_recovery_notification_sent(
@@ -878,7 +886,7 @@ class TestStateRecoveryService:
 
         assert result.recovered is True
         assert result.strategy_state is None
-        mock_repository.clear_all.assert_not_called()
+        mock_repository.save_state.assert_not_called()
 
     # 19. Regridded geometry is re-applied so level states restore against the runtime grid
     async def test_recovery_applies_regridded_geometry_before_matching(

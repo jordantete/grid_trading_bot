@@ -271,16 +271,6 @@ class SQLiteStateRepository(StateRepositoryInterface):
 
     # ── Utilities ────────────────────────────────────────────────────────
 
-    def clear_all(self) -> None:
-        with self._write_lock:
-            self._conn.executescript("""
-                DELETE FROM grid_levels;
-                DELETE FROM orders;
-                DELETE FROM balance_state;
-                DELETE FROM bot_state;
-            """)
-        self.logger.info("All persisted state cleared.")
-
     def close(self) -> None:
         if self._conn:
             self._conn.close()

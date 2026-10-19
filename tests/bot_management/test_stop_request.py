@@ -23,6 +23,8 @@ from grid_trading_bot.core.bot_management.stop_request import (
         (StopKind.SIGNAL, False),
         (StopKind.FEED_LOST, False),
         (StopKind.CRASH, False),
+        (StopKind.START_REFUSED, False),
+        (StopKind.EXCHANGE_UNAVAILABLE, False),
     ],
 )
 def test_only_deliberate_stops_halt(kind, halts):
@@ -40,6 +42,8 @@ def test_only_deliberate_stops_halt(kind, halts):
         (StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=signal.SIGTERM), 143),
         (StopRequest(StopKind.FEED_LOST, "feed died"), EXIT_FEED_LOST),
         (StopRequest(StopKind.CRASH, "boom"), EXIT_FAILURE),
+        (StopRequest(StopKind.START_REFUSED, "orders still open"), EXIT_OK),
+        (StopRequest(StopKind.EXCHANGE_UNAVAILABLE, "exchange down"), EXIT_FEED_LOST),
     ],
 )
 def test_exit_code_per_kind(request_, code):

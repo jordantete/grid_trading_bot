@@ -567,20 +567,3 @@ class TestApplyGeometry:
         gm.complete_order(top_level, OrderSide.SELL, has_open_orders=False)
 
         assert top_level.state == GridCycleState.READY_TO_SELL
-
-
-class TestReset:
-    def test_reset_clears_grid_state(self, grid_manager_simple):
-        gm = grid_manager_simple
-        gm.apply_geometry([90.0, 100.0, 110.0], central_price=100.0, atr_grid=4.2)
-
-        gm.reset()
-
-        assert gm.is_initialized is False
-        assert gm.grid_levels == {}
-        assert gm.atr_grid is None
-        assert gm.price_grids == []
-        assert gm.sorted_buy_grids == []
-        assert gm.sorted_sell_grids == []
-        assert gm._sorted_prices == []
-        assert gm._price_index_map == {}

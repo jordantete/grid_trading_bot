@@ -37,9 +37,5 @@ class StateRepositoryInterface(ABC):
         pass
 
     @abstractmethod
-    def clear_all(self) -> None:
-        pass
-
-    @abstractmethod
     def close(self) -> None:
         pass

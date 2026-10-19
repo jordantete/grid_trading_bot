@@ -16,6 +16,8 @@ class StopKind(Enum):
     SIGNAL = "signal"
     FEED_LOST = "feed_lost"
     CRASH = "crash"
+    START_REFUSED = "start_refused"
+    EXCHANGE_UNAVAILABLE = "exchange_unavailable"
 
     @property
     def halts(self) -> bool:
@@ -36,11 +38,11 @@ class StopRequest:
     @property
     def exit_code(self) -> int:
         """Process exit code for this stop: 0 for a halt, non-zero when the supervisor should relaunch."""
-        if self.kind.halts:
+        if self.kind.halts or self.kind is StopKind.START_REFUSED:
             return EXIT_OK
         if self.kind is StopKind.SIGNAL:
             return 128 + int(self.signal_number)
-        if self.kind is StopKind.FEED_LOST:
+        if self.kind in {StopKind.FEED_LOST, StopKind.EXCHANGE_UNAVAILABLE}:
             return EXIT_FEED_LOST
         return EXIT_FAILURE
 

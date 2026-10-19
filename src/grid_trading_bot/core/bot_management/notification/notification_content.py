@@ -83,3 +83,11 @@ class NotificationType(Enum):
             "Run `grid_trading_bot resume --config {config_path}` to start a new grid."
         ),
     )
+    START_REFUSED = NotificationContent(
+        title="Start Refused",
+        message="Trading on {config_path} did not start: {reason}",
+    )
+    START_DEFERRED = NotificationContent(
+        title="Start Deferred",
+        message="Trading did not start: {reason}. The supervisor relaunches the bot.",
+    )

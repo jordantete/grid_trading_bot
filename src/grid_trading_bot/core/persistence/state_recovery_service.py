@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from decimal import Decimal
+from enum import Enum
 import json
 import logging
 
@@ -14,15 +15,24 @@ from grid_trading_bot.core.order_handling.execution_strategy.order_execution_str
 )
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus
 from grid_trading_bot.core.order_handling.order_book import OrderBook
+from grid_trading_bot.core.services.exceptions import DataFetchError, OrderNotFoundError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
 from .serializers import compute_config_hash, dict_to_order
 from .state_repository_interface import StateRepositoryInterface
 
 
+class RecoveryOutcome(Enum):
+    RESUMED = "resumed"
+    NO_STATE = "no_state"
+    REFUSED = "refused"
+    DEFERRED = "deferred"
+
+
 @dataclass
 class RecoveryResult:
-    recovered: bool
+    outcome: RecoveryOutcome
+    reason: str | None = None
     initial_purchase_done: bool = False
     grid_orders_initialized: bool = False
     orders_reconciled: int = 0
@@ -30,8 +40,11 @@ class RecoveryResult:
     ghost_orders_found: int = 0
     orders_filled_while_down: list[tuple[Order, GridLevel]] = field(default_factory=list)
     balance_source: str = "db"
-    errors: list[str] = field(default_factory=list)
     strategy_state: dict | None = None
+
+    @property
+    def recovered(self) -> bool:
+        return self.outcome is RecoveryOutcome.RESUMED
 
 
 def _optional_decimal(value: str | None) -> Decimal | None:
@@ -63,26 +76,36 @@ class StateRecoveryService:
         self.trading_pair = trading_pair
 
     async def attempt_recovery(self) -> RecoveryResult:
+        """
+        Loads the saved state and reconciles it with the exchange, without ever writing the database: an exchange
+        error defers the start, any other failure refuses it.
+        """
         try:
             return await self._do_recovery()
+        except DataFetchError as e:
+            self.logger.warning(f"Exchange unavailable during recovery: {e}")
+            return RecoveryResult(
+                RecoveryOutcome.DEFERRED, reason=f"the exchange could not be reached during recovery ({e})"
+            )
         except Exception as e:
             self.logger.error(f"Recovery failed with unexpected error: {e}", exc_info=True)
-            self.logger.warning("Falling back to fresh start.")
-            self.repository.clear_all()
-            return RecoveryResult(recovered=False, errors=[str(e)])
+            return RecoveryResult(
+                RecoveryOutcome.REFUSED, reason=f"recovery of the saved state failed ({type(e).__name__}: {e})"
+            )
 
     async def _do_recovery(self) -> RecoveryResult:
         bot_state = self.repository.load_bot_state()
         if bot_state is None:
             self.logger.info("No previous state found. Starting fresh.")
-            return RecoveryResult(recovered=False)
+            return RecoveryResult(RecoveryOutcome.NO_STATE)
 
         # Step 1: Config compatibility
         current_hash = compute_config_hash(self.config_manager)
         if bot_state["config_hash"] != current_hash:
-            self.logger.warning("Config hash mismatch — grid configuration changed since last run. Starting fresh.")
-            self.repository.clear_all()
-            return RecoveryResult(recovered=False)
+            self.logger.warning("Config hash mismatch: the grid configuration changed since the last run.")
+            return RecoveryResult(
+                RecoveryOutcome.REFUSED, reason="the saved state was written for another grid configuration"
+            )
 
         self.logger.info("Previous state found. Attempting recovery...")
 
@@ -117,7 +140,7 @@ class StateRecoveryService:
             self.logger.error(f"Failed to restore cost basis and PnL, starting them over: {e}", exc_info=True)
 
         result = RecoveryResult(
-            recovered=True,
+            RecoveryOutcome.RESUMED,
             initial_purchase_done=bot_state["initial_purchase_done"],
             grid_orders_initialized=bot_state["grid_orders_initialized"],
             orders_reconciled=reconcile_stats["reconciled"],
@@ -223,9 +246,8 @@ class StateRecoveryService:
         for order in open_orders:
             try:
                 exchange_order = await self.order_execution_strategy.get_order(order.identifier, self.trading_pair)
-            except Exception as e:
-                self.logger.warning(f"Failed to fetch order {order.identifier} from exchange: {e}")
-                continue
+            except OrderNotFoundError:
+                exchange_order = None
 
             if exchange_order is None:
                 # Order not found on exchange → mark as canceled (ghost)
@@ -293,58 +315,44 @@ class StateRecoveryService:
     async def _restore_balance(self) -> str:
         saved_balance = self.repository.load_balance_state()
 
-        try:
-            exchange_balance = await self.exchange_service.get_balance()
-            base = self.config_manager.get_base_currency()
-            quote = self.config_manager.get_quote_currency()
-            exchange_fiat = Decimal(str(exchange_balance.get("free", {}).get(quote, 0)))
-            exchange_crypto = Decimal(str(exchange_balance.get("free", {}).get(base, 0)))
+        exchange_balance = await self.exchange_service.get_balance()
+        base = self.config_manager.get_base_currency()
+        quote = self.config_manager.get_quote_currency()
+        exchange_fiat = Decimal(str(exchange_balance.get("free", {}).get(quote, 0)))
+        exchange_crypto = Decimal(str(exchange_balance.get("free", {}).get(base, 0)))
 
-            # Recalculate reserved from confirmed-still-open orders (after reconciliation).
-            # This avoids using stale DB reserved values that may include reservations
-            # for orders that filled or were canceled while the bot was down.
-            open_orders = self.order_book.get_open_orders()
-            reserved_fiat = sum(
-                (Decimal(str(o.price)) * Decimal(str(o.remaining)) for o in open_orders if o.side == OrderSide.BUY),
-                Decimal("0"),
-            )
-            reserved_crypto = sum(
-                (Decimal(str(o.remaining)) for o in open_orders if o.side == OrderSide.SELL),
-                Decimal("0"),
-            )
+        # Recalculate reserved from confirmed-still-open orders (after reconciliation).
+        # This avoids using stale DB reserved values that may include reservations
+        # for orders that filled or were canceled while the bot was down.
+        open_orders = self.order_book.get_open_orders()
+        reserved_fiat = sum(
+            (Decimal(str(o.price)) * Decimal(str(o.remaining)) for o in open_orders if o.side == OrderSide.BUY),
+            Decimal("0"),
+        )
+        reserved_crypto = sum(
+            (Decimal(str(o.remaining)) for o in open_orders if o.side == OrderSide.SELL),
+            Decimal("0"),
+        )
 
-            # Exchange "free" already excludes funds locked in open orders.
-            # Available balance = exchange_free, reserved = recalculated from open orders.
-            self.balance_tracker._balance = exchange_fiat
-            self.balance_tracker._crypto_balance = exchange_crypto
-            self.balance_tracker._reserved_fiat = reserved_fiat
-            self.balance_tracker._reserved_crypto = reserved_crypto
+        # Exchange "free" already excludes funds locked in open orders.
+        # Available balance = exchange_free, reserved = recalculated from open orders.
+        self.balance_tracker._balance = exchange_fiat
+        self.balance_tracker._crypto_balance = exchange_crypto
+        self.balance_tracker._reserved_fiat = reserved_fiat
+        self.balance_tracker._reserved_crypto = reserved_crypto
 
-            # Total fees from DB (exchange doesn't track cumulative fees)
-            if saved_balance:
-                self.balance_tracker._total_fees = Decimal(saved_balance["total_fees"])
+        # Total fees from DB (exchange doesn't track cumulative fees)
+        if saved_balance:
+            self.balance_tracker._total_fees = Decimal(saved_balance["total_fees"])
 
-            self.logger.info(
-                f"Balance restored from exchange: "
-                f"fiat={self.balance_tracker.balance}, "
-                f"crypto={self.balance_tracker.crypto_balance}, "
-                f"reserved_fiat={self.balance_tracker.reserved_fiat}, "
-                f"reserved_crypto={self.balance_tracker.reserved_crypto}"
-            )
-            return "exchange"
-
-        except Exception as e:
-            self.logger.warning(f"Failed to fetch exchange balance: {e}. Falling back to DB.")
-            if saved_balance:
-                self.balance_tracker._balance = Decimal(saved_balance["fiat_balance"])
-                self.balance_tracker._crypto_balance = Decimal(saved_balance["crypto_balance"])
-                self.balance_tracker._total_fees = Decimal(saved_balance["total_fees"])
-                self.balance_tracker._reserved_fiat = Decimal(saved_balance["reserved_fiat"])
-                self.balance_tracker._reserved_crypto = Decimal(saved_balance["reserved_crypto"])
-                return "db"
-
-            self.logger.error("No saved balance and exchange unavailable. Starting with zero balances.")
-            return "none"
+        self.logger.info(
+            f"Balance restored from exchange: "
+            f"fiat={self.balance_tracker.balance}, "
+            f"crypto={self.balance_tracker.crypto_balance}, "
+            f"reserved_fiat={self.balance_tracker.reserved_fiat}, "
+            f"reserved_crypto={self.balance_tracker.reserved_crypto}"
+        )
+        return "exchange"
 
     def _restore_accounting(self, filled_while_down: list[tuple[Order, GridLevel]]) -> None:
         saved_balance = self.repository.load_balance_state()

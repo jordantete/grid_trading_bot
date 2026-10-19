@@ -320,30 +320,6 @@ class TestGridLevels:
         assert levels[0]["state"] == "WAITING_FOR_BUY_FILL"
 
 
-class TestClearAll:
-    def test_clear_all(self, repo, sample_bot_state, sample_balance_state, sample_order, sample_grid_level):
-        _save(
-            repo,
-            bot_state=sample_bot_state,
-            balance=sample_balance_state,
-            orders=[sample_order],
-            grid_levels=[sample_grid_level],
-        )
-
-        # Verify data exists before clearing
-        assert repo.load_bot_state() is not None
-        assert repo.load_balance_state() is not None
-        assert len(repo.load_all_orders()) == 1
-        assert len(repo.load_grid_levels()) == 1
-
-        repo.clear_all()
-
-        assert repo.load_bot_state() is None
-        assert repo.load_balance_state() is None
-        assert repo.load_all_orders() == []
-        assert repo.load_grid_levels() == []
-
-
 class TestStrategyStatePersistence:
     def test_bot_state_round_trips_strategy_state(self, repo, sample_bot_state):
         state = {

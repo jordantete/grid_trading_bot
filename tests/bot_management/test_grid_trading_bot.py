@@ -16,7 +16,7 @@ from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequ
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import RunFiles
-from grid_trading_bot.core.persistence.state_recovery_service import RecoveryResult
+from grid_trading_bot.core.persistence.state_recovery_service import RecoveryOutcome, RecoveryResult
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     UnsupportedExchangeError,
@@ -485,7 +485,7 @@ class TestStrategyStatePersistenceWiring:
         bot.state_persistence_service.cleanup = Mock()
 
         recovery_result = RecoveryResult(
-            recovered=True,
+            RecoveryOutcome.RESUMED,
             initial_purchase_done=True,
             grid_orders_initialized=True,
             strategy_state={"trailing_stop": None, "atr_grid": 3.5},
@@ -517,7 +517,7 @@ class TestStrategyStatePersistenceWiring:
         bot.state_persistence_service.cleanup = Mock()
 
         recovery_result = RecoveryResult(
-            recovered=True,
+            RecoveryOutcome.RESUMED,
             initial_purchase_done=False,
             grid_orders_initialized=False,
             strategy_state=None,
@@ -529,35 +529,51 @@ class TestStrategyStatePersistenceWiring:
         bot.strategy.restore_strategy_state.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_failed_recovery_resets_memory_state(self, bot):
-        bot.grid_manager = Mock()
-        bot.order_book = Mock()
-        bot.strategy.initialize_strategy = Mock()
-        bot.strategy.run = AsyncMock()
-        bot.balance_tracker.setup_balances = AsyncMock()
-        bot.order_status_tracker.start_tracking = Mock()
-        bot._generate_and_log_performance = Mock(return_value={})
-        bot.reconciliation_service = None
-        bot.exchange_service.load_exchange_markets = AsyncMock()
-        bot.exchange_service.get_market_constraints = Mock(
-            return_value=MarketConstraints(min_amount=None, min_cost=None),
-        )
-        bot.exchange_service.close = AsyncMock()
-        bot.order_status_tracker.stop_tracking = AsyncMock()
-        bot.state_persistence_service.start_periodic_checkpoints = Mock()
-        bot.order_manager.checkpoint = AsyncMock()
-        bot.state_persistence_service.cleanup = Mock()
-
+    async def test_a_refused_recovery_starts_nothing_and_exits_zero(self, bot):
+        _prepare_startup(bot)
         bot.state_recovery_service.attempt_recovery = AsyncMock(
-            return_value=RecoveryResult(recovered=False, errors=["boom"])
+            return_value=RecoveryResult(RecoveryOutcome.REFUSED, reason="recovery of the saved state failed (bad row)")
         )
 
         await bot.run()
 
-        bot.grid_manager.reset.assert_called_once()
-        bot.order_book.clear.assert_called_once()
-        assert bot.strategy.initialize_strategy.call_count == 2  # once pre-recovery, once post-reset
+        assert bot.stop_request.kind is StopKind.START_REFUSED
+        assert bot.stop_request.exit_code == 0
+        assert "bad row" in bot.stop_request.reason
+        assert "untouched" in bot.stop_request.reason
+        bot.strategy.run.assert_not_awaited()
+        bot.balance_tracker.setup_balances.assert_not_awaited()
+        bot.order_manager.checkpoint.assert_not_awaited()
+        bot.notification_handler.async_send_notification.assert_any_await(
+            NotificationType.START_REFUSED, reason=bot.stop_request.reason, config_path="config.json"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_deferred_recovery_exits_75_and_keeps_the_state(self, bot):
+        _prepare_startup(bot)
+        bot.state_recovery_service.attempt_recovery = AsyncMock(
+            return_value=RecoveryResult(RecoveryOutcome.DEFERRED, reason="the exchange could not be reached")
+        )
+
+        await bot.run()
+
+        assert bot.stop_request.kind is StopKind.EXCHANGE_UNAVAILABLE
+        assert bot.stop_request.exit_code == 75
+        bot.strategy.run.assert_not_awaited()
+        bot.order_manager.checkpoint.assert_not_awaited()
+        bot.notification_handler.async_send_notification.assert_any_await(
+            NotificationType.START_DEFERRED, reason=bot.stop_request.reason
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_saved_state_starts_a_fresh_grid(self, bot):
+        _prepare_startup(bot)
+        bot.state_recovery_service.attempt_recovery = AsyncMock(return_value=RecoveryResult(RecoveryOutcome.NO_STATE))
+
+        await bot.run()
+
         bot.balance_tracker.setup_balances.assert_awaited_once()
+        bot.strategy.run.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_stop_checkpoints_before_cleanup(self, bot):
@@ -593,7 +609,9 @@ class TestStrategyStatePersistenceWiring:
         bot.state_persistence_service.cleanup = Mock()
         bot.order_manager.checkpoint = AsyncMock()
         bot.state_recovery_service.attempt_recovery = AsyncMock(
-            return_value=RecoveryResult(recovered=True, initial_purchase_done=True, grid_orders_initialized=False)
+            return_value=RecoveryResult(
+                RecoveryOutcome.RESUMED, initial_purchase_done=True, grid_orders_initialized=False
+            )
         )
 
         await bot.run()
@@ -625,6 +643,25 @@ def _run_files(tmp_path):
         lock_path=str(tmp_path / "bot_x.lock"),
         halt_path=str(tmp_path / "halted_x.json"),
     )
+
+
+def _prepare_startup(bot):
+    """Stubs everything around the startup sequence so a test can run `bot.run()` to the end."""
+    bot.strategy.initialize_strategy = Mock()
+    bot.strategy.run = AsyncMock()
+    bot.order_status_tracker.start_tracking = Mock()
+    bot.order_status_tracker.stop_tracking = AsyncMock()
+    bot._generate_and_log_performance = Mock(return_value={})
+    bot.reconciliation_service = None
+    bot.exchange_service.load_exchange_markets = AsyncMock()
+    bot.exchange_service.get_market_constraints = Mock(return_value=MarketConstraints(None, None))
+    bot.exchange_service.close = AsyncMock()
+    bot.balance_tracker.setup_balances = AsyncMock()
+    bot.order_manager.checkpoint = AsyncMock()
+    bot.notification_handler.async_send_notification = AsyncMock()
+    if bot.state_persistence_service is not None:
+        bot.state_persistence_service.start_periodic_checkpoints = Mock()
+        bot.state_persistence_service.cleanup = Mock()
 
 
 class TestShutdownSequence(BotFixtures):
@@ -784,7 +821,7 @@ class TestShutdownSequence(BotFixtures):
             recovery_started.set()
             await recovery_may_return.wait()
             calls.append("recovered")
-            return RecoveryResult(recovered=True, initial_purchase_done=True, grid_orders_initialized=True)
+            return RecoveryResult(RecoveryOutcome.RESUMED, initial_purchase_done=True, grid_orders_initialized=True)
 
         bot.state_recovery_service = Mock()
         bot.state_recovery_service.attempt_recovery = AsyncMock(side_effect=slow_recovery)
@@ -881,7 +918,7 @@ class TestShutdownSequence(BotFixtures):
         bot.state_recovery_service = Mock()
         bot.state_recovery_service.attempt_recovery = AsyncMock(
             return_value=RecoveryResult(
-                recovered=True,
+                RecoveryOutcome.RESUMED,
                 initial_purchase_done=True,
                 grid_orders_initialized=True,
                 orders_filled_while_down=[("order", "level")],
@@ -926,7 +963,7 @@ class TestShutdownSequence(BotFixtures):
             recovery_started.set()
             await recovery_may_return.wait()
             return RecoveryResult(
-                recovered=True,
+                RecoveryOutcome.RESUMED,
                 initial_purchase_done=True,
                 grid_orders_initialized=True,
                 orders_filled_while_down=[("order", "level")],
