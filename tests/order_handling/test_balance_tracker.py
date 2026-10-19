@@ -705,6 +705,20 @@ class TestRecoveryAccounting:
         assert bt._ledger.realized_pnl == Decimal("0")
         assert bt._ledger.avg_cost == Decimal("100")
 
+    def test_replay_books_fills_of_orders_without_any_timestamp(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto
+        bt.restore_accounting(avg_cost=Decimal("100"), realized_pnl=Decimal("0"), peak_value=None)
+        ghost = _make_order(OrderSide.BUY, price=90.0, amount=1.0, filled=0.0, remaining=1.0)
+        sell = _make_order(OrderSide.SELL, price=110.0, average=110.0, amount=1.0, filled=1.0, remaining=0.0)
+        for order in (ghost, sell):
+            order.timestamp = None
+            order.last_trade_timestamp = None
+
+        bt.replay_fills_on_cost_basis(Decimal("2"), [(ghost, 0.0), (sell, sell.filled)])
+
+        assert float(bt._ledger.realized_pnl) == pytest.approx(10.0 - 0.11)
+        assert bt.total_fees == pytest.approx(0.11)
+
 
 class TestFillAccountingFixes:
     async def test_a_sell_beyond_its_reservation_takes_the_excess_from_the_free_crypto(self, balance_tracker):

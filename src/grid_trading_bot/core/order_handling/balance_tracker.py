@@ -438,9 +438,8 @@ class BalanceTracker:
         fees. Balances stay untouched: they were restored from the exchange, which already includes these fills.
         """
         position = starting_position
-        for order, quantity in sorted(executions, key=lambda item: item[0].last_trade_timestamp or item[0].timestamp):
-            if quantity <= 0:
-                continue
+        fills = [(order, quantity) for order, quantity in executions if quantity > 0]
+        for order, quantity in sorted(fills, key=lambda item: item[0].last_trade_timestamp or item[0].timestamp or 0):
             fill_price = order.average if order.average is not None else order.price
             d_quantity = self._to_decimal(quantity)
             d_price = self._to_decimal(fill_price)

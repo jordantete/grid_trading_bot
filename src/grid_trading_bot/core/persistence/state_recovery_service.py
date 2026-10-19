@@ -139,7 +139,9 @@ class StateRecoveryService:
                 self._restore_accounting(executions)
             except Exception as e:
                 # Reporting-only state: losing it must not turn a good recovery into a fresh start.
-                self.logger.error(f"Failed to restore cost basis and PnL, starting them over: {e}", exc_info=True)
+                self.logger.error(
+                    f"Failed to restore or replay the cost basis and PnL; they may be incomplete: {e}", exc_info=True
+                )
 
         result = RecoveryResult(
             RecoveryOutcome.RESUMED,
