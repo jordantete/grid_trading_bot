@@ -304,6 +304,7 @@ class TestEndedOrders:
         assert sorted(o.price for o in stack.execution.open_orders(OrderSide.SELL)) == [110.0, 110.0, 120.0]
 
     async def test_an_ended_order_without_a_grid_level_is_settled_and_notified(self, stack):
+        await stack.balances.reserve_funds_for_buy(95.0)
         loose = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0)
         stack.book.add_order(loose)
         orders_before = len(stack.execution.orders)
@@ -312,7 +313,22 @@ class TestEndedOrders:
 
         assert not stack.book.get_order(loose.identifier).is_open()
         assert len(stack.execution.orders) == orders_before
+        assert reserved_matches_open_orders(stack)
         assert NotificationType.ORDER_CANCELLED in _sent(stack)
+
+    async def test_a_rejected_order_without_a_grid_level_reports_the_rejection(self, stack):
+        await stack.balances.reserve_funds_for_buy(95.0)
+        loose = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0)
+        stack.book.add_order(loose)
+        orders_before = len(stack.execution.orders)
+
+        await stack.manager.apply_order_update(stack.execution.end(loose.identifier, OrderStatus.REJECTED))
+
+        assert not stack.book.get_order(loose.identifier).is_open()
+        assert len(stack.execution.orders) == orders_before
+        assert reserved_matches_open_orders(stack)
+        assert NotificationType.ORDER_CANCELLED in _sent(stack)
+        assert NotificationType.ERROR_OCCURRED in _sent(stack)
 
     async def test_a_failed_replacement_releases_its_reservation(self, stack):
         buy = stack.execution.order_at(90.0, OrderSide.BUY)

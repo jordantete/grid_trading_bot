@@ -355,21 +355,18 @@ class OrderManager:
         grid_level = self.order_book.get_grid_level_for_order(local)
         if grid_level is None:
             self.logger.warning(f"Order {local.identifier} ended ({local.status.value}) without a grid level.")
-            return
-        self.grid_manager.rollback_order_placement(
-            grid_level, local.side, self.order_book.has_open_orders_at(grid_level)
-        )
-        if local.status == OrderStatus.REJECTED:
-            self.logger.error(
-                f"The exchange rejected order {local.identifier} at {grid_level.price}; not re-placing it."
+        else:
+            self.grid_manager.rollback_order_placement(
+                grid_level, local.side, self.order_book.has_open_orders_at(grid_level)
             )
+        if local.status == OrderStatus.REJECTED:
+            self.logger.error(f"The exchange rejected order {local.identifier} at {local.price}; not re-placing it.")
             await self.notification_handler.async_send_notification(
                 NotificationType.ERROR_OCCURRED,
-                error_details=(
-                    f"The exchange rejected order {local.identifier} at grid level {grid_level.price}; "
-                    "it is not re-placed."
-                ),
+                error_details=f"The exchange rejected order {local.identifier} at {local.price}; it is not re-placed.",
             )
+            return
+        if grid_level is None:
             return
         if self._positions_closed:
             self.logger.info(f"Positions are closed; not re-placing ended order {local.identifier}.")
