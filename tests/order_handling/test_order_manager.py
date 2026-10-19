@@ -284,7 +284,8 @@ class TestOrderManager:
         order_execution_strategy.execute_limit_order = AsyncMock(return_value=mock_order)
         notification_handler.async_send_notification = AsyncMock()
 
-        await manager._place_order(OrderSide.SELL, source_grid_level, target_grid_level, quantity)
+        async with manager._locked():
+            await manager._place_order(OrderSide.SELL, source_grid_level, target_grid_level, quantity)
 
         # Reserve is called before placing the order
         balance_tracker.reserve_funds_for_sell.assert_awaited_once_with(quantity)

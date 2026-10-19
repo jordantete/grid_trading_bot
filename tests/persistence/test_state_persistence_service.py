@@ -63,10 +63,10 @@ class TestCleanup:
 
         assert all(not callbacks for callbacks in event_bus.subscribers.values())
 
-    def test_cleanup_closes_the_repository(self, setup_persistence_service):
+    async def test_cleanup_closes_the_repository(self, setup_persistence_service):
         service, repository, *_ = setup_persistence_service
 
-        service.cleanup()
+        await service.cleanup()
 
         repository.close.assert_called_once()
 
@@ -79,7 +79,7 @@ class TestCleanup:
             await service.save(ArmingFlags())
         halt_task = service._halt_task
 
-        service.cleanup()
+        await service.cleanup()
         await asyncio.wait({halt_task}, timeout=1)
 
         assert halt_task.cancelled()
@@ -129,6 +129,8 @@ class TestSave:
 
         await service.save(ArmingFlags())
 
+        await service.wait_for_alerts()
+
         notification_handler.async_send_notification.assert_awaited_once_with(
             NotificationType.CHECKPOINT_FAILED, error_details="disk I/O error"
         )
@@ -139,6 +141,8 @@ class TestSave:
 
         for _ in range(4):
             await service.save(ArmingFlags())
+
+        await service.wait_for_alerts()
 
         sent = notification_handler.async_send_notification.await_args_list
         assert [call.args[0] for call in sent] == [
@@ -185,6 +189,8 @@ class TestSave:
             await service.save(ArmingFlags())
         await service._halt_task
 
+        await service.wait_for_alerts()
+
         assert [request.kind for request in requests] == [StopKind.PERSISTENCE]
         alert_errors = [r for r in caplog.records if r.levelname == "ERROR" and r.exc_info and "alert" in r.message]
         assert len(alert_errors) == 3
@@ -195,8 +201,80 @@ class TestSave:
 
         await service.save(ArmingFlags())
 
+        await service.wait_for_alerts()
+
         repository.save_state.assert_not_called()
         notification_handler.async_send_notification.assert_awaited_once()
+
+
+class TestAlertsOutsideTheSave:
+    async def test_a_save_does_not_wait_for_its_alert(self, setup_persistence_service):
+        service, repository, *_, notification_handler = setup_persistence_service
+        released = asyncio.Event()
+
+        async def slow(*_args, **_kwargs):
+            await released.wait()
+
+        notification_handler.async_send_notification.side_effect = slow
+        repository.save_state.side_effect = OSError("full")
+
+        await asyncio.wait_for(service.save(ArmingFlags()), timeout=1)
+
+        assert len(service._alert_tasks) == 1
+        released.set()
+        await service.wait_for_alerts()
+        notification_handler.async_send_notification.assert_awaited_once()
+
+    async def test_alerts_go_out_in_the_order_they_were_raised(self, setup_persistence_service):
+        service, repository, *_, notification_handler = setup_persistence_service
+        sent = []
+
+        async def record(notification_type, **_details):
+            if notification_type is NotificationType.CHECKPOINT_FAILED:
+                await asyncio.sleep(0.02)
+            sent.append(notification_type)
+
+        notification_handler.async_send_notification.side_effect = record
+        repository.save_state.side_effect = [OSError("full"), None]
+
+        await service.save(ArmingFlags())
+        await service.save(ArmingFlags())
+        await service.wait_for_alerts()
+
+        assert sent == [NotificationType.CHECKPOINT_FAILED, NotificationType.CHECKPOINT_RESTORED]
+
+    async def test_cleanup_waits_for_an_alert_in_flight(self, setup_persistence_service):
+        service, repository, *_, notification_handler = setup_persistence_service
+        sent = []
+
+        async def slow(notification_type, **_details):
+            await asyncio.sleep(0.02)
+            sent.append(notification_type)
+
+        notification_handler.async_send_notification.side_effect = slow
+        repository.save_state.side_effect = OSError("full")
+        await service.save(ArmingFlags())
+
+        await service.cleanup()
+
+        assert sent == [NotificationType.CHECKPOINT_FAILED]
+        repository.close.assert_called_once()
+
+    async def test_cleanup_gives_up_on_an_alert_that_hangs(self, setup_persistence_service, monkeypatch):
+        service, repository, *_, notification_handler = setup_persistence_service
+        monkeypatch.setattr(StatePersistenceService, "ALERT_DRAIN_TIMEOUT", 0.05)
+
+        async def hang(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        notification_handler.async_send_notification.side_effect = hang
+        repository.save_state.side_effect = OSError("full")
+        await service.save(ArmingFlags())
+
+        await asyncio.wait_for(service.cleanup(), timeout=1)
+
+        repository.close.assert_called_once()
+        assert service._alert_tasks == set()
 
 
 class TestPeriodicCheckpoints:
@@ -206,7 +284,7 @@ class TestPeriodicCheckpoints:
 
         service.start_periodic_checkpoints(interval_seconds=0.01, checkpoint=checkpoint)
         await asyncio.sleep(0.05)
-        service.cleanup()
+        await service.cleanup()
 
         assert checkpoint.await_count >= 2
 
@@ -216,7 +294,7 @@ class TestPeriodicCheckpoints:
 
         service.start_periodic_checkpoints(interval_seconds=10, checkpoint=checkpoint)
         task = service._periodic_task
-        service.cleanup()
+        await service.cleanup()
         await asyncio.sleep(0)
 
         assert task.cancelled() or task.done()
@@ -230,4 +308,4 @@ class TestPeriodicCheckpoints:
         service.start_periodic_checkpoints(interval_seconds=10, checkpoint=checkpoint)
 
         assert service._periodic_task is task
-        service.cleanup()
+        await service.cleanup()

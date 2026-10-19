@@ -500,3 +500,63 @@ class TestClientOrderIds:
 
         assert stack.balances.crypto_balance == pytest.approx(20.0)
         assert NotificationType.ERROR_OCCURRED in _sent(stack)
+
+
+class TestNotificationsAfterTheLock:
+    @staticmethod
+    def _record_sends(stack, fail_on=None):
+        sent = []
+
+        async def record(content, **_kwargs):
+            sent.append((content, stack.manager._lock.locked()))
+            if content is fail_on:
+                raise RuntimeError("apprise down")
+
+        stack.notifications.async_send_notification.side_effect = record
+        return sent
+
+    async def test_a_fill_notifies_after_the_lock_and_before_its_paired_order(self, stack):
+        sent = self._record_sends(stack)
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+
+        await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
+
+        assert sent == [(NotificationType.ORDER_FILLED, False), (NotificationType.ORDER_PLACED, False)]
+
+    async def test_an_ended_order_notifies_after_the_lock(self, stack):
+        sent = self._record_sends(stack)
+        buy = stack.execution.order_at(90.0, OrderSide.BUY)
+
+        await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.CANCELED))
+
+        assert sent == [(NotificationType.ORDER_CANCELLED, False)]
+
+    async def test_a_failed_grid_order_notifies_after_the_lock(self):
+        stack = build_stack()
+        sent = self._record_sends(stack)
+        stack.execution.fail_next_limit_order = OrderExecutionFailedError(
+            "network down", OrderSide.BUY, OrderType.LIMIT, "BTC/USDT", 1.0, 80.0
+        )
+
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+
+        assert (NotificationType.ORDER_FAILED, False) in sent
+        assert all(not locked for _, locked in sent)
+
+    async def test_a_notification_that_fails_does_not_stop_the_next(self, stack):
+        sent = self._record_sends(stack, fail_on=NotificationType.ORDER_FILLED)
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+
+        await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
+
+        assert [content for content, _ in sent] == [NotificationType.ORDER_FILLED, NotificationType.ORDER_PLACED]
+
+    async def test_what_was_queued_before_an_error_still_goes_out(self, stack):
+        sent = self._record_sends(stack)
+        stack.grid.complete_order = Mock(side_effect=RuntimeError("level broken"))
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+
+        with pytest.raises(RuntimeError, match="level broken"):
+            await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
+
+        assert sent == [(NotificationType.ORDER_FILLED, False)]

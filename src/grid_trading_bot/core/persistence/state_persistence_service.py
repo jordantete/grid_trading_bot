@@ -20,6 +20,7 @@ from .state_repository_interface import StateRepositoryInterface, StateSnapshot
 
 class StatePersistenceService:
     MAX_CONSECUTIVE_FAILURES = 3
+    ALERT_DRAIN_TIMEOUT = 5.0
 
     def __init__(
         self,
@@ -49,6 +50,8 @@ class StatePersistenceService:
         self._consecutive_failures = 0
         self._halt_task: asyncio.Task | None = None
         self._periodic_task: asyncio.Task | None = None
+        self._alert_tasks: set[asyncio.Task] = set()
+        self._last_alert: asyncio.Task | None = None
 
     def snapshot(self, arming: ArmingFlags) -> StateSnapshot:
         """The state of every component at this instant, as the repository stores it."""
@@ -79,15 +82,15 @@ class StatePersistenceService:
             snapshot = self.snapshot(arming)
             await asyncio.to_thread(self.repository.save_state, snapshot)
         except Exception as error:
-            await self._record_failure(error)
+            self._record_failure(error)
             return
-        await self._record_success()
+        self._record_success()
 
-    async def _record_failure(self, error: Exception) -> None:
+    def _record_failure(self, error: Exception) -> None:
         self._consecutive_failures += 1
         self.logger.error(f"Checkpoint failed ({self._consecutive_failures} in a row): {error}", exc_info=error)
         if self._consecutive_failures == 1:
-            await self._alert(NotificationType.CHECKPOINT_FAILED, error_details=str(error))
+            self._alert(NotificationType.CHECKPOINT_FAILED, error_details=str(error))
         if self._consecutive_failures == self.MAX_CONSECUTIVE_FAILURES:
             request = StopRequest(
                 StopKind.PERSISTENCE,
@@ -96,17 +99,39 @@ class StatePersistenceService:
             # Published from its own task: the failed save runs under the OrderManager lock, which the halt needs.
             self._halt_task = asyncio.create_task(self.event_bus.publish(Events.STOP_BOT, request))
 
-    async def _record_success(self) -> None:
+    def _record_success(self) -> None:
         if self._consecutive_failures:
             failures, self._consecutive_failures = self._consecutive_failures, 0
-            await self._alert(NotificationType.CHECKPOINT_RESTORED, failures=failures)
+            self._alert(NotificationType.CHECKPOINT_RESTORED, failures=failures)
         self.logger.debug("Checkpoint written.")
 
-    async def _alert(self, notification_type: NotificationType, **details: Any) -> None:
+    def _alert(self, notification_type: NotificationType, **details: Any) -> None:
+        # Sent from a task so a slow notification never holds the save, which runs under the OrderManager lock.
+        task = asyncio.create_task(self._send_alert(self._last_alert, notification_type, details))
+        self._alert_tasks.add(task)
+        task.add_done_callback(self._alert_tasks.discard)
+        self._last_alert = task
+
+    async def _send_alert(
+        self, previous: asyncio.Task | None, notification_type: NotificationType, details: dict[str, Any]
+    ) -> None:
+        if previous is not None:
+            await asyncio.wait({previous})
         try:
             await self.notification_handler.async_send_notification(notification_type, **details)
         except Exception as error:
             self.logger.error(f"Checkpoint alert {notification_type.name} could not be sent: {error}", exc_info=True)
+
+    async def wait_for_alerts(self, timeout: float | None = None) -> None:
+        """Waits until the alerts raised so far are sent, cancelling those still pending after `timeout` seconds."""
+        if not self._alert_tasks:
+            return
+        _, pending = await asyncio.wait(set(self._alert_tasks), timeout=timeout)
+        for task in pending:
+            task.cancel()
+        if pending:
+            self.logger.warning(f"{len(pending)} checkpoint alert(s) still unsent after {timeout} s; dropped.")
+            await asyncio.wait(pending)
 
     def start_periodic_checkpoints(self, interval_seconds: float, checkpoint: Callable[[], Awaitable[None]]) -> None:
         """Calls `checkpoint` on every interval, so state that changes between order operations (the trailing-stop
@@ -125,11 +150,12 @@ class StatePersistenceService:
         except asyncio.CancelledError:
             pass
 
-    def cleanup(self) -> None:
+    async def cleanup(self) -> None:
         if self._periodic_task:
             self._periodic_task.cancel()
             self._periodic_task = None
         # A halt task that already started is the one running the shutdown that calls this cleanup.
         if self._halt_task and inspect.getcoroutinestate(self._halt_task.get_coro()) == inspect.CORO_CREATED:
             self._halt_task.cancel()
+        await self.wait_for_alerts(self.ALERT_DRAIN_TIMEOUT)
         self.repository.close()
