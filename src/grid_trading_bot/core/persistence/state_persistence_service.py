@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
+import inspect
 import json
 import logging
 from typing import Any
@@ -86,9 +87,7 @@ class StatePersistenceService:
         self._consecutive_failures += 1
         self.logger.error(f"Checkpoint failed ({self._consecutive_failures} in a row): {error}", exc_info=error)
         if self._consecutive_failures == 1:
-            await self.notification_handler.async_send_notification(
-                NotificationType.CHECKPOINT_FAILED, error_details=str(error)
-            )
+            await self._alert(NotificationType.CHECKPOINT_FAILED, error_details=str(error))
         if self._consecutive_failures == self.MAX_CONSECUTIVE_FAILURES:
             request = StopRequest(
                 StopKind.PERSISTENCE,
@@ -100,10 +99,14 @@ class StatePersistenceService:
     async def _record_success(self) -> None:
         if self._consecutive_failures:
             failures, self._consecutive_failures = self._consecutive_failures, 0
-            await self.notification_handler.async_send_notification(
-                NotificationType.CHECKPOINT_RESTORED, failures=failures
-            )
+            await self._alert(NotificationType.CHECKPOINT_RESTORED, failures=failures)
         self.logger.debug("Checkpoint written.")
+
+    async def _alert(self, notification_type: NotificationType, **details: Any) -> None:
+        try:
+            await self.notification_handler.async_send_notification(notification_type, **details)
+        except Exception as error:
+            self.logger.error(f"Checkpoint alert {notification_type.name} could not be sent: {error}", exc_info=True)
 
     def start_periodic_checkpoints(self, interval_seconds: float, checkpoint: Callable[[], Awaitable[None]]) -> None:
         """Calls `checkpoint` on every interval, so state that changes between order operations (the trailing-stop
@@ -126,4 +129,7 @@ class StatePersistenceService:
         if self._periodic_task:
             self._periodic_task.cancel()
             self._periodic_task = None
+        # A halt task that already started is the one running the shutdown that calls this cleanup.
+        if self._halt_task and inspect.getcoroutinestate(self._halt_task.get_coro()) == inspect.CORO_CREATED:
+            self._halt_task.cancel()
         self.repository.close()

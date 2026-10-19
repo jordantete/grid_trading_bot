@@ -70,6 +70,21 @@ class TestCleanup:
 
         repository.close.assert_called_once()
 
+    async def test_cleanup_cancels_a_halt_requested_by_the_final_checkpoint(self, setup_persistence_service):
+        service, repository, event_bus, *_ = setup_persistence_service
+        requests = []
+        event_bus.subscribe(Events.STOP_BOT, requests.append)
+        repository.save_state.side_effect = OSError("full")
+        for _ in range(3):
+            await service.save(ArmingFlags())
+        halt_task = service._halt_task
+
+        service.cleanup()
+        await asyncio.wait({halt_task}, timeout=1)
+
+        assert halt_task.cancelled()
+        assert requests == []
+
 
 class TestSnapshot:
     def test_snapshot_holds_the_flags_and_every_component(self, setup_persistence_service):
@@ -158,6 +173,21 @@ class TestSave:
         await asyncio.sleep(0)
 
         assert len(requests) == 1
+
+    async def test_a_failing_alert_never_escapes_a_save(self, setup_persistence_service, caplog):
+        service, repository, event_bus, *_, notification_handler = setup_persistence_service
+        requests = []
+        event_bus.subscribe(Events.STOP_BOT, requests.append)
+        notification_handler.async_send_notification.side_effect = ValueError("bad template")
+        repository.save_state.side_effect = [OSError("full"), None, OSError("full"), OSError("full"), OSError("full")]
+
+        for _ in range(5):
+            await service.save(ArmingFlags())
+        await service._halt_task
+
+        assert [request.kind for request in requests] == [StopKind.PERSISTENCE]
+        alert_errors = [r for r in caplog.records if r.levelname == "ERROR" and r.exc_info and "alert" in r.message]
+        assert len(alert_errors) == 3
 
     async def test_a_snapshot_that_cannot_be_built_counts_as_a_failure(self, setup_persistence_service):
         service, repository, _, order_book, *_, notification_handler = setup_persistence_service

@@ -16,6 +16,7 @@ from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequ
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import RunFiles
+from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
 from grid_trading_bot.core.persistence.state_recovery_service import RecoveryOutcome, RecoveryResult
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
@@ -667,6 +668,25 @@ def _record_shutdown(bot, calls, run_files=None):
     return bot
 
 
+def _failing_store(bot, config_manager):
+    """A real store on the bot's event bus whose every write fails."""
+    repository = MagicMock()
+    repository.save_state.side_effect = OSError("disk full")
+    store = StatePersistenceService(
+        repository,
+        bot.event_bus,
+        bot.notification_handler,
+        bot.order_book,
+        bot.grid_manager,
+        bot.balance_tracker,
+        config_manager,
+        bot.trading_pair,
+        "simple_grid",
+    )
+    bot.state_persistence_service = store
+    return store
+
+
 def _run_files(tmp_path):
     return RunFiles(
         db_path=str(tmp_path / "state.db"),
@@ -756,6 +776,51 @@ class TestShutdownSequence(BotFixtures):
         assert marker["kind"] == "manual"
         assert marker["reason"] == "User issued stop command"
         assert bot.notification_handler.async_send_notification.await_args.args[0] == NotificationType.BOT_HALTED
+
+    @pytest.mark.asyncio
+    async def test_a_persistence_halt_runs_its_shutdown_to_the_end(
+        self, config_manager, notification_handler, tmp_path
+    ):
+        bot = GridTradingBot("config.json", config_manager, notification_handler, EventBus(), no_plot=True)
+        calls = []
+        _record_shutdown(bot, calls, _run_files(tmp_path))
+
+        async def notify(*_args, **_kwargs):
+            await asyncio.sleep(0)
+            calls.append("notify")
+
+        bot.notification_handler.async_send_notification = AsyncMock(side_effect=notify)
+        store = _failing_store(bot, config_manager)
+
+        for _ in range(3):
+            await store.save(ArmingFlags())
+        await asyncio.wait({store._halt_task}, timeout=5)
+
+        assert bot.stop_request.kind is StopKind.PERSISTENCE
+        assert calls == ["notify", "tracking", "strategy", "cancel", "checkpoint", "notify", "close"]
+        assert bot.notification_handler.async_send_notification.await_args.args[0] == NotificationType.BOT_HALTED
+        store.repository.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_halt_requested_by_the_final_checkpoint_is_dropped_with_the_store(
+        self, config_manager, notification_handler
+    ):
+        bot = GridTradingBot("config.json", config_manager, notification_handler, EventBus(), no_plot=True)
+        _record_shutdown(bot, [])
+        store = _failing_store(bot, config_manager)
+        for _ in range(2):
+            await store.save(ArmingFlags())
+
+        async def final_checkpoint(**_kwargs):
+            await store.save(ArmingFlags())
+
+        bot.order_manager.checkpoint = final_checkpoint
+
+        await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
+        await asyncio.wait({store._halt_task}, timeout=1)
+
+        assert store._halt_task.cancelled()
+        assert bot.stop_request.kind is StopKind.SIGNAL
 
     @pytest.mark.asyncio
     async def test_the_final_checkpoint_bounds_its_wait_for_the_lock(self, bot):
