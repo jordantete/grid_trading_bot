@@ -1,10 +1,19 @@
-class UnsupportedExchangeError(Exception):
+from grid_trading_bot.core.exceptions import GridBotError, OrderRefusedError
+
+
+class ExchangeServiceError(GridBotError):
+    """Base of the errors the exchange layer raises."""
+
+    pass
+
+
+class UnsupportedExchangeError(ExchangeServiceError):
     """Raised when the exchange is not supported."""
 
     pass
 
 
-class DataFetchError(Exception):
+class DataFetchError(ExchangeServiceError):
     """Raised when data fetching fails after retries."""
 
     pass
@@ -16,50 +25,73 @@ class OrderNotFoundError(DataFetchError):
     pass
 
 
-class HistoricalMarketDataFileNotFoundError(Exception):
+class OrderNotPlacedError(DataFetchError):
+    """
+    Raised when a placement surely did not reach the order book: the request never left, or the exchange answered
+    with an error. Sending it again under the same client order id is safe.
+    """
+
+    pass
+
+
+class OrderOutcomeUnknownError(DataFetchError):
+    """Raised when a placement may have reached the order book and no lookup by its client order id settled it."""
+
+    pass
+
+
+class HistoricalMarketDataFileNotFoundError(ExchangeServiceError):
     """Raised when historical market data has not been found in repository."""
 
     pass
 
 
-class UnsupportedTimeframeError(Exception):
+class UnsupportedTimeframeError(ExchangeServiceError):
     """Raised when a timeframe is not supported by a given exchange."""
 
     pass
 
 
-class UnsupportedPairError(Exception):
+class UnsupportedPairError(ExchangeServiceError):
     """Raised when a crypto pair is not supported by a given exchange."""
 
     pass
 
 
-class OrderCancellationError(Exception):
+class OrderCancellationError(ExchangeServiceError):
     """Raised when order cancellation fails."""
 
     pass
 
 
-class PostOnlyRejectedError(Exception):
+class OrderRejectedError(OrderRefusedError):
+    """
+    Raised when the exchange refuses an order for a business reason (insufficient funds, an invalid order): a normal
+    answer, not an exchange fault.
+    """
+
+    pass
+
+
+class PostOnlyRejectedError(OrderRejectedError):
     """
     Raised when the exchange refuses a maker-only order because it would have crossed
     the spread.
 
     This is an expected outcome, not a fault: the grid level is simply not placeable at
-    this moment. Deliberately not a `DataFetchError`, so it is neither wrapped into an
-    `OrderExecutionFailedError` by the execution strategy nor reported as a failed order.
+    this moment. Never a `DataFetchError`, so it is not handled as a transient exchange failure.
     """
 
     pass
 
 
-class CircuitBreakerOpenError(Exception):
+class CircuitBreakerOpenError(ExchangeServiceError):
     """Raised when the circuit breaker is open and all API calls are blocked."""
 
     pass
 
 
-class MissingEnvironmentVariableError(Exception):
+class MissingEnvironmentVariableError(ExchangeServiceError):
     """Raised when env variable are missing (EXCHANGE_API_KEY and/or EXCHANGE_SECRET_KEY)."""
 
     pass

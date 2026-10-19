@@ -1,4 +1,7 @@
-class ConfigError(Exception):
+from grid_trading_bot.core.exceptions import GridBotError
+
+
+class ConfigError(GridBotError):
     """Base class for all configuration-related errors."""
 
     pass

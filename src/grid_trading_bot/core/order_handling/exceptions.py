@@ -1,7 +1,9 @@
+from grid_trading_bot.core.exceptions import GridBotError
+
 from .order import OrderSide, OrderType
 
 
-class OrderExecutionFailedError(Exception):
+class OrderExecutionFailedError(GridBotError):
     def __init__(
         self,
         message: str,
@@ -19,5 +21,5 @@ class OrderExecutionFailedError(Exception):
         self.price = price
 
 
-class GridFeasibilityError(Exception):
+class GridFeasibilityError(GridBotError):
     """Raised when the configured grid produces orders below exchange minimums."""

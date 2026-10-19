@@ -1,4 +1,7 @@
-class BotControllerError(Exception):
+from grid_trading_bot.core.exceptions import GridBotError
+
+
+class BotControllerError(GridBotError):
     """Base exception class for BotController errors."""
 
 
