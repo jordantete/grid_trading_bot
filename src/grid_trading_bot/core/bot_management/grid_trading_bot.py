@@ -22,6 +22,7 @@ from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
+from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import HaltRecord, RunFiles, write_halt_marker
 from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
 from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
@@ -49,6 +50,7 @@ from .notification.notification_handler import NotificationHandler
 class GridTradingBot:
     TICKER_FEED_STALENESS_THRESHOLD = 120.0  # seconds
     TICK_DRAIN_TIMEOUT = 20.0  # seconds
+    CHECKPOINT_LOCK_TIMEOUT = 5.0  # seconds
 
     def __init__(
         self,
@@ -176,6 +178,7 @@ class GridTradingBot:
                 self.notification_handler,
                 self.trading_mode,
                 trading_pair,
+                state_store=self.state_persistence_service,
             )
 
             trading_performance_analyzer = TradingPerformanceAnalyzer(self.config_manager, order_book)
@@ -237,11 +240,7 @@ class GridTradingBot:
                 if recovery_result.recovered:
                     skip_initial_purchase = recovery_result.initial_purchase_done
                     skip_grid_init = recovery_result.grid_orders_initialized
-                    if self.state_persistence_service:
-                        self.state_persistence_service.set_flags(
-                            initial_purchase_done=skip_initial_purchase,
-                            grid_orders_initialized=skip_grid_init,
-                        )
+                    self.order_manager.restore_arming(ArmingFlags(skip_initial_purchase, skip_grid_init))
                     if recovery_result.strategy_state is not None:
                         self.strategy.restore_strategy_state(recovery_result.strategy_state)
                     self.logger.info(
@@ -304,7 +303,7 @@ class GridTradingBot:
         self.order_status_tracker.start_tracking()
         if self.state_persistence_service:
             self.state_persistence_service.start_periodic_checkpoints(
-                self.config_manager.get_checkpoint_interval_seconds()
+                self.config_manager.get_checkpoint_interval_seconds(), self.order_manager.checkpoint
             )
         if self.reconciliation_service:
             self.reconciliation_service.start()
@@ -376,7 +375,10 @@ class GridTradingBot:
                 await self._attempt("order cancellation", lambda: self.order_manager.close_positions(liquidate=False))
             if self.state_persistence_service:
                 if self._state_ready:
-                    await self._attempt("final checkpoint", self.state_persistence_service.checkpoint_now)
+                    await self._attempt(
+                        "final checkpoint",
+                        lambda: self.order_manager.checkpoint(lock_timeout=self.CHECKPOINT_LOCK_TIMEOUT),
+                    )
                 else:
                     self.logger.info("No state was loaded yet; skipping the final checkpoint to keep the saved state.")
                 await self._attempt("persistence cleanup", self.state_persistence_service.cleanup)

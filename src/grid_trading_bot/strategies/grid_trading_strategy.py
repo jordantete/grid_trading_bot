@@ -367,12 +367,10 @@ class GridTradingStrategy(TradingStrategyInterface):
                 f"Current price {current_price} is within the grid range. Will perform initial purchase",
             )
             await self.order_manager.perform_initial_purchase(current_price)
-            await self.event_bus.publish(Events.INITIAL_PURCHASE_DONE, None)
         else:
             self.logger.info("Skipping initial purchase (recovered from persisted state).")
         self.logger.info("Initial purchase done, will initialize grid orders")
         await self.order_manager.initialize_grid_orders(current_price)
-        await self.event_bus.publish(Events.GRID_ORDERS_INITIALIZED, None)
         self.armed = True
         return True
 
@@ -539,7 +537,6 @@ class GridTradingStrategy(TradingStrategyInterface):
             return False
 
         await self.order_manager.initialize_grid_orders(center_price)
-        await self.event_bus.publish(Events.GRID_ORDERS_INITIALIZED, None)
         return True
 
     def export_strategy_state(self) -> dict:

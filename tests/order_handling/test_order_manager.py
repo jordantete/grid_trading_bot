@@ -8,6 +8,7 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError, OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.services.exceptions import DataFetchError, PostOnlyRejectedError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
@@ -1397,3 +1398,100 @@ class TestNoNewOrderOnceClosed:
         await manager.place_paired_orders_for_recovered_fills([(fill, Mock(price=95.0))])
 
         order_execution_strategy.execute_limit_order.assert_not_awaited()
+
+
+class RecordingStore:
+    def __init__(self, manager_ref):
+        self.manager_ref = manager_ref
+        self.saves = []
+
+    async def save(self, arming):
+        self.saves.append((arming, self.manager_ref()._lock.locked()))
+
+
+@pytest.fixture
+def manager_with_store(setup_order_manager):
+    manager = setup_order_manager[0]
+    store = RecordingStore(lambda: manager)
+    manager.state_store = store
+    return manager, store, setup_order_manager
+
+
+class TestStateSaves:
+    async def test_initialize_grid_orders_saves_under_the_lock_with_the_grid_flag(self, manager_with_store):
+        manager, store, (_, grid_manager, *_rest) = manager_with_store
+        grid_manager.get_initial_order_plan.return_value = []
+
+        await manager.initialize_grid_orders(100.0)
+
+        assert store.saves == [(ArmingFlags(grid_orders_initialized=True), True)]
+
+    async def test_the_initial_purchase_saves_its_flag_even_when_it_buys_nothing(self, manager_with_store):
+        manager, store, (_, grid_manager, *_rest) = manager_with_store
+        grid_manager.get_initial_order_quantity.return_value = 0
+
+        await manager.perform_initial_purchase(100.0)
+
+        assert store.saves == [(ArmingFlags(initial_purchase_done=True), True)]
+
+    async def test_a_done_initial_purchase_is_never_repeated(self, manager_with_store):
+        manager, store, (*_, order_execution_strategy, _) = manager_with_store
+        manager.restore_arming(ArmingFlags(initial_purchase_done=True))
+        order_execution_strategy.execute_market_order = AsyncMock()
+
+        await manager.perform_initial_purchase(100.0)
+
+        order_execution_strategy.execute_market_order.assert_not_awaited()
+        assert store.saves == []
+
+    async def test_a_bulk_cancellation_saves(self, manager_with_store):
+        manager, store, (_, _, _, _, order_book, *_rest) = manager_with_store
+        order_book.get_open_orders.return_value = []
+        order_book.get_buy_orders_with_grid.return_value = []
+        order_book.get_sell_orders_with_grid.return_value = []
+
+        assert await manager.cancel_open_grid_orders() is True
+
+        assert len(store.saves) == 1
+
+    async def test_recovered_pairs_save_once_after_placing(self, manager_with_store):
+        manager, store, _ = manager_with_store
+        manager._place_paired_order = AsyncMock()
+
+        await manager.place_paired_orders_for_recovered_fills([(Mock(), Mock()), (Mock(), Mock())])
+
+        assert manager._place_paired_order.await_count == 2
+        assert len(store.saves) == 1
+
+    async def test_a_failed_grid_placement_still_saves_what_was_placed(self, manager_with_store):
+        manager, store, (_, grid_manager, *_rest) = manager_with_store
+        grid_manager.get_initial_order_plan.side_effect = RuntimeError("plan broken")
+
+        with pytest.raises(RuntimeError):
+            await manager.initialize_grid_orders(100.0)
+
+        assert store.saves == [(ArmingFlags(), True)]
+
+    async def test_checkpoint_saves_under_the_lock(self, manager_with_store):
+        manager, store, _ = manager_with_store
+
+        await manager.checkpoint()
+
+        assert store.saves == [(ArmingFlags(), True)]
+
+    async def test_a_checkpoint_gives_up_when_the_lock_stays_held(self, manager_with_store):
+        manager, store, _ = manager_with_store
+        await manager._lock.acquire()
+        try:
+            await asyncio.wait_for(manager.checkpoint(lock_timeout=0.05), timeout=1)
+        finally:
+            manager._lock.release()
+
+        assert store.saves == []
+
+    async def test_without_a_store_nothing_is_saved(self, setup_order_manager):
+        manager = setup_order_manager[0]
+
+        await manager.checkpoint()
+
+        assert not manager._lock.locked()

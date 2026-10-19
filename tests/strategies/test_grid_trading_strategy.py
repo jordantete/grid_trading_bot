@@ -739,17 +739,6 @@ class TestTrailingStopOrchestration:
         assert s.trailing_stop.stop_price == 95.0  # ratchet preserved, protection not discarded
 
 
-class TestExecuteRegridEventPublish:
-    async def test_successful_regrid_publishes_grid_orders_initialized(self, strategy_fixture):
-        s = strategy_fixture
-        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=True)
-
-        result = await s._execute_regrid(100.0, 2.0)
-
-        assert result is True
-        s.event_bus.publish.assert_any_await(Events.GRID_ORDERS_INITIALIZED, None)
-
-
 class TestStrategyStateExportRestore:
     def test_export_includes_trailing_stop_atr_grid_and_geometry(self, strategy_fixture):
         s = strategy_fixture

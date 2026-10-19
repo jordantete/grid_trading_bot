@@ -14,6 +14,7 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.domain.strategy_type import StrategyType
+from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import RunFiles
 from grid_trading_bot.core.persistence.state_recovery_service import RecoveryResult
 from grid_trading_bot.core.services.exceptions import (
@@ -480,7 +481,7 @@ class TestStrategyStatePersistenceWiring:
         bot.exchange_service.close = AsyncMock()
         bot.order_status_tracker.stop_tracking = AsyncMock()
         bot.state_persistence_service.start_periodic_checkpoints = Mock()
-        bot.state_persistence_service.checkpoint_now = AsyncMock()
+        bot.order_manager.checkpoint = AsyncMock()
         bot.state_persistence_service.cleanup = Mock()
 
         recovery_result = RecoveryResult(
@@ -512,7 +513,7 @@ class TestStrategyStatePersistenceWiring:
         bot.exchange_service.close = AsyncMock()
         bot.order_status_tracker.stop_tracking = AsyncMock()
         bot.state_persistence_service.start_periodic_checkpoints = Mock()
-        bot.state_persistence_service.checkpoint_now = AsyncMock()
+        bot.order_manager.checkpoint = AsyncMock()
         bot.state_persistence_service.cleanup = Mock()
 
         recovery_result = RecoveryResult(
@@ -544,7 +545,7 @@ class TestStrategyStatePersistenceWiring:
         bot.exchange_service.close = AsyncMock()
         bot.order_status_tracker.stop_tracking = AsyncMock()
         bot.state_persistence_service.start_periodic_checkpoints = Mock()
-        bot.state_persistence_service.checkpoint_now = AsyncMock()
+        bot.order_manager.checkpoint = AsyncMock()
         bot.state_persistence_service.cleanup = Mock()
 
         bot.state_recovery_service.attempt_recovery = AsyncMock(
@@ -566,13 +567,41 @@ class TestStrategyStatePersistenceWiring:
         bot.reconciliation_service = None
         call_order = []
         bot.strategy.stop = AsyncMock(side_effect=lambda: call_order.append("strategy"))
-        bot.state_persistence_service.checkpoint_now = AsyncMock(side_effect=lambda: call_order.append("checkpoint"))
+        bot.order_manager.checkpoint = AsyncMock(side_effect=lambda **_kw: call_order.append("checkpoint"))
         bot.state_persistence_service.cleanup = Mock(side_effect=lambda: call_order.append("cleanup"))
         bot.exchange_service.close = AsyncMock()
 
         await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
 
         assert call_order == ["strategy", "checkpoint", "cleanup"]
+
+    def test_order_manager_saves_through_the_persistence_service(self, bot):
+        assert bot.order_manager.state_store is bot.state_persistence_service
+
+    @pytest.mark.asyncio
+    async def test_recovered_flags_reach_the_order_manager(self, bot):
+        bot.strategy.initialize_strategy = Mock()
+        bot.strategy.run = AsyncMock()
+        bot.order_status_tracker.start_tracking = Mock()
+        bot.order_status_tracker.stop_tracking = AsyncMock()
+        bot._generate_and_log_performance = Mock(return_value={})
+        bot.reconciliation_service = None
+        bot.exchange_service.load_exchange_markets = AsyncMock()
+        bot.exchange_service.get_market_constraints = Mock(return_value=MarketConstraints(None, None))
+        bot.exchange_service.close = AsyncMock()
+        bot.state_persistence_service.start_periodic_checkpoints = Mock()
+        bot.state_persistence_service.cleanup = Mock()
+        bot.order_manager.checkpoint = AsyncMock()
+        bot.state_recovery_service.attempt_recovery = AsyncMock(
+            return_value=RecoveryResult(recovered=True, initial_purchase_done=True, grid_orders_initialized=False)
+        )
+
+        await bot.run()
+
+        assert bot.order_manager.arming == ArmingFlags(initial_purchase_done=True, grid_orders_initialized=False)
+        bot.state_persistence_service.start_periodic_checkpoints.assert_called_once_with(
+            60.0, bot.order_manager.checkpoint
+        )
 
 
 def _record_shutdown(bot, calls, run_files=None):
@@ -581,7 +610,7 @@ def _record_shutdown(bot, calls, run_files=None):
     bot.strategy.stop = AsyncMock(side_effect=lambda: calls.append("strategy"))
     bot.order_manager.close_positions = AsyncMock(side_effect=lambda **_kw: calls.append("cancel"))
     bot.state_persistence_service = Mock()
-    bot.state_persistence_service.checkpoint_now = AsyncMock(side_effect=lambda: calls.append("checkpoint"))
+    bot.order_manager.checkpoint = AsyncMock(side_effect=lambda **_kw: calls.append("checkpoint"))
     bot.notification_handler.async_send_notification = AsyncMock(side_effect=lambda *_a, **_kw: calls.append("notify"))
     bot.exchange_service.close = AsyncMock(side_effect=lambda: calls.append("close"))
     bot.run_files = run_files
@@ -613,6 +642,14 @@ class TestShutdownSequence(BotFixtures):
         assert marker["kind"] == "manual"
         assert marker["reason"] == "User issued stop command"
         assert bot.notification_handler.async_send_notification.await_args.args[0] == NotificationType.BOT_HALTED
+
+    @pytest.mark.asyncio
+    async def test_the_final_checkpoint_bounds_its_wait_for_the_lock(self, bot):
+        _record_shutdown(bot, [])
+
+        await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
+
+        bot.order_manager.checkpoint.assert_awaited_once_with(lock_timeout=GridTradingBot.CHECKPOINT_LOCK_TIMEOUT)
 
     @pytest.mark.asyncio
     async def test_the_halt_marker_exists_before_the_orders_are_cancelled(self, bot, tmp_path):
@@ -700,7 +737,7 @@ class TestShutdownSequence(BotFixtures):
         await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
 
         assert calls == ["tracking", "strategy", "notify", "close"]
-        bot.state_persistence_service.checkpoint_now.assert_not_awaited()
+        bot.order_manager.checkpoint.assert_not_awaited()
         bot.state_persistence_service.cleanup.assert_called_once()
 
     @pytest.mark.asyncio
@@ -714,7 +751,7 @@ class TestShutdownSequence(BotFixtures):
             await bot.run()
 
         assert bot.stop_request.kind is StopKind.CRASH
-        bot.state_persistence_service.checkpoint_now.assert_not_awaited()
+        bot.order_manager.checkpoint.assert_not_awaited()
         bot.state_persistence_service.cleanup.assert_called_once()
         assert calls[-1] == "close"
 
@@ -791,7 +828,7 @@ class TestShutdownSequence(BotFixtures):
         assert calls_when_requested == []
         assert calls == ["tracking", "strategy", "notify", "close"]
         assert bot.stop_request.kind is StopKind.SIGNAL
-        bot.state_persistence_service.checkpoint_now.assert_not_awaited()
+        bot.order_manager.checkpoint.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_failed_halt_marker_alerts_then_still_cancels_checkpoints_and_closes(self, bot, tmp_path):
@@ -992,11 +1029,11 @@ class TestShutdownSequence(BotFixtures):
         calls = []
         _record_shutdown(bot, calls)
 
-        async def slow_checkpoint():
+        async def slow_checkpoint(**_kw):
             await asyncio.sleep(0.05)
             calls.append("checkpoint")
 
-        bot.state_persistence_service.checkpoint_now = AsyncMock(side_effect=slow_checkpoint)
+        bot.order_manager.checkpoint = AsyncMock(side_effect=slow_checkpoint)
         bot.exchange_service.load_exchange_markets = AsyncMock()
         bot.exchange_service.get_market_constraints = Mock(return_value=MarketConstraints(None, None))
         bot.balance_tracker.setup_balances = AsyncMock()

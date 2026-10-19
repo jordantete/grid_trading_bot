@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import json
 import logging
 from typing import Any
@@ -10,7 +10,6 @@ from grid_trading_bot.core.bot_management.notification.notification_handler impo
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
-from grid_trading_bot.core.order_handling.order import Order
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 
@@ -46,37 +45,9 @@ class StatePersistenceService:
         self.strategy_type = strategy_type
         self.strategy_state_provider = strategy_state_provider
         self._config_hash = compute_config_hash(config_manager)
-        self._initial_purchase_done = False
-        self._grid_orders_initialized = False
         self._consecutive_failures = 0
         self._halt_task: asyncio.Task | None = None
         self._periodic_task: asyncio.Task | None = None
-
-        self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
-        self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
-        self.event_bus.subscribe(Events.INITIAL_PURCHASE_DONE, self._on_initial_purchase_done)
-        self.event_bus.subscribe(Events.GRID_ORDERS_INITIALIZED, self._on_grid_orders_initialized)
-
-    async def _on_order_filled(self, order: Order) -> None:
-        await self.checkpoint_now()
-
-    async def _on_order_cancelled(self, order: Order) -> None:
-        await self.checkpoint_now()
-
-    async def _on_initial_purchase_done(self, data: Any) -> None:
-        self._initial_purchase_done = True
-        await self.checkpoint_now()
-
-    async def _on_grid_orders_initialized(self, data: Any) -> None:
-        self._grid_orders_initialized = True
-        await self.checkpoint_now()
-
-    def set_flags(self, initial_purchase_done: bool, grid_orders_initialized: bool) -> None:
-        self._initial_purchase_done = initial_purchase_done
-        self._grid_orders_initialized = grid_orders_initialized
-
-    async def checkpoint_now(self) -> None:
-        await self.save(ArmingFlags(self._initial_purchase_done, self._grid_orders_initialized))
 
     def snapshot(self, arming: ArmingFlags) -> StateSnapshot:
         """The state of every component at this instant, as the repository stores it."""
@@ -134,18 +105,20 @@ class StatePersistenceService:
             )
         self.logger.debug("Checkpoint written.")
 
-    def start_periodic_checkpoints(self, interval_seconds: float) -> None:
-        """Starts the periodic checkpoint loop (captures state that changes between order events,
-        e.g. the trailing-stop ratchet)."""
+    def start_periodic_checkpoints(self, interval_seconds: float, checkpoint: Callable[[], Awaitable[None]]) -> None:
+        """Calls `checkpoint` on every interval, so state that changes between order operations (the trailing-stop
+        ratchet) is saved too."""
         if self._periodic_task and not self._periodic_task.done():
             return
-        self._periodic_task = asyncio.create_task(self._periodic_checkpoint_loop(interval_seconds))
+        self._periodic_task = asyncio.create_task(self._periodic_checkpoint_loop(interval_seconds, checkpoint))
 
-    async def _periodic_checkpoint_loop(self, interval_seconds: float) -> None:
+    async def _periodic_checkpoint_loop(
+        self, interval_seconds: float, checkpoint: Callable[[], Awaitable[None]]
+    ) -> None:
         try:
             while True:
                 await asyncio.sleep(interval_seconds)
-                await self.checkpoint_now()
+                await checkpoint()
         except asyncio.CancelledError:
             pass
 
@@ -153,8 +126,4 @@ class StatePersistenceService:
         if self._periodic_task:
             self._periodic_task.cancel()
             self._periodic_task = None
-        self.event_bus.unsubscribe(Events.ORDER_FILLED, self._on_order_filled)
-        self.event_bus.unsubscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
-        self.event_bus.unsubscribe(Events.INITIAL_PURCHASE_DONE, self._on_initial_purchase_done)
-        self.event_bus.unsubscribe(Events.GRID_ORDERS_INITIALIZED, self._on_grid_orders_initialized)
         self.repository.close()

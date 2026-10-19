@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 import logging
 
 from grid_trading_bot.config.trading_mode import TradingMode
@@ -22,6 +23,7 @@ from .execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
 from .order import Order, OrderSide
+from .state_store import ArmingFlags, StateStore
 
 
 class OrderManager:
@@ -36,6 +38,7 @@ class OrderManager:
         notification_handler: NotificationHandler,
         trading_mode: TradingMode,
         trading_pair: str,
+        state_store: StateStore | None = None,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.grid_manager = grid_manager
@@ -47,6 +50,8 @@ class OrderManager:
         self.notification_handler = notification_handler
         self.trading_mode: TradingMode = trading_mode
         self.trading_pair = trading_pair
+        self.state_store = state_store
+        self.arming = ArmingFlags()
         self.market_constraints: MarketConstraints | None = None
         self._lock = asyncio.Lock()
         self._positions_closed = False
@@ -61,6 +66,30 @@ class OrderManager:
 
     def set_market_constraints(self, constraints: MarketConstraints) -> None:
         self.market_constraints = constraints
+
+    def restore_arming(self, arming: ArmingFlags) -> None:
+        self.arming = arming
+
+    async def checkpoint(self, lock_timeout: float | None = None) -> None:
+        """
+        Saves the state once no order operation holds the lock. Gives up after `lock_timeout` seconds: every
+        completed operation already saved its own state.
+        """
+        if self.state_store is None:
+            return
+        try:
+            await asyncio.wait_for(self._lock.acquire(), lock_timeout)
+        except TimeoutError:
+            self.logger.warning(f"An order operation still held the lock after {lock_timeout} s; checkpoint skipped.")
+            return
+        try:
+            await self._save_state()
+        finally:
+            self._lock.release()
+
+    async def _save_state(self) -> None:
+        if self.state_store is not None:
+            await self.state_store.save(self.arming)
 
     def validate_grid_feasibility(self, current_price: float) -> None:
         """
@@ -90,14 +119,21 @@ class OrderManager:
         current_price: float,
     ):
         """
-        Places the initial grid orders the strategy plans for the current price.
+        Places the initial grid orders the strategy plans for the current price, then saves the state.
         """
         async with self._lock:
-            for grid_level, side in self.grid_manager.get_initial_order_plan(current_price):
-                if self._positions_closed:
-                    self.logger.info("Positions are closed; skipping the remaining initial grid orders.")
-                    return
-                await self._initialize_order(grid_level, side, current_price)
+            try:
+                await self._place_initial_orders(current_price)
+                self.arming = replace(self.arming, grid_orders_initialized=True)
+            finally:
+                await self._save_state()
+
+    async def _place_initial_orders(self, current_price: float) -> None:
+        for grid_level, side in self.grid_manager.get_initial_order_plan(current_price):
+            if self._positions_closed:
+                self.logger.info("Positions are closed; skipping the remaining initial grid orders.")
+                return
+            await self._initialize_order(grid_level, side, current_price)
 
     async def cancel_open_grid_orders(self) -> bool:
         """
@@ -108,42 +144,48 @@ class OrderManager:
         failure it stops and returns False, leaving remaining orders open.
         """
         async with self._lock:
-            open_orders = set(self.order_book.get_open_orders())
-            pairs = [
-                (order, grid_level)
-                for order, grid_level in (
-                    self.order_book.get_buy_orders_with_grid() + self.order_book.get_sell_orders_with_grid()
-                )
-                if order in open_orders
-            ]
+            try:
+                return await self._cancel_open_grid_orders()
+            finally:
+                await self._save_state()
 
-            for order, grid_level in pairs:
-                cancelled = await self.order_execution_strategy.cancel_order(order.identifier, self.trading_pair)
-                if not cancelled:
-                    self.logger.error(f"Failed to cancel order {order.identifier}; aborting bulk cancellation.")
-                    return False
+    async def _cancel_open_grid_orders(self) -> bool:
+        open_orders = set(self.order_book.get_open_orders())
+        pairs = [
+            (order, grid_level)
+            for order, grid_level in (
+                self.order_book.get_buy_orders_with_grid() + self.order_book.get_sell_orders_with_grid()
+            )
+            if order in open_orders
+        ]
 
-                final_order = order
-                if self.trading_mode != TradingMode.BACKTEST:
-                    try:
-                        fetched = await self.order_execution_strategy.get_order(order.identifier, self.trading_pair)
-                        if fetched is not None:
-                            final_order = fetched
-                    except DataFetchError as e:
-                        self.logger.warning(
-                            f"Could not refetch cancelled order {order.identifier}; using local state: {e}",
-                        )
+        for order, grid_level in pairs:
+            cancelled = await self.order_execution_strategy.cancel_order(order.identifier, self.trading_pair)
+            if not cancelled:
+                self.logger.error(f"Failed to cancel order {order.identifier}; aborting bulk cancellation.")
+                return False
 
-                await self.balance_tracker.settle_cancelled_order(final_order)
-                self._settled_cancellation_ids.add(order.identifier)
-                self.order_book.remove_open_order(order)
-                if grid_level is not None:
-                    self.grid_manager.rollback_order_placement(
-                        grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
+            final_order = order
+            if self.trading_mode != TradingMode.BACKTEST:
+                try:
+                    fetched = await self.order_execution_strategy.get_order(order.identifier, self.trading_pair)
+                    if fetched is not None:
+                        final_order = fetched
+                except DataFetchError as e:
+                    self.logger.warning(
+                        f"Could not refetch cancelled order {order.identifier}; using local state: {e}",
                     )
-                self.logger.info(f"Cancelled {order.side.value} order {order.identifier} at {order.price}.")
 
-            return True
+            await self.balance_tracker.settle_cancelled_order(final_order)
+            self._settled_cancellation_ids.add(order.identifier)
+            self.order_book.remove_open_order(order)
+            if grid_level is not None:
+                self.grid_manager.rollback_order_placement(
+                    grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
+                )
+            self.logger.info(f"Cancelled {order.side.value} order {order.identifier} at {order.price}.")
+
+        return True
 
     async def _initialize_order(self, grid_level: GridLevel, side: OrderSide, current_price: float) -> None:
         price = grid_level.price
@@ -262,70 +304,73 @@ class OrderManager:
         settled once: orders already settled here or by a bulk cancellation are skipped.
         """
         async with self._lock:
-            if order.identifier in self._settled_cancellation_ids:
-                self.logger.info(f"Cancel event for {order.identifier} already handled; skipping.")
-                return
+            try:
+                if order.identifier in self._settled_cancellation_ids:
+                    self.logger.info(f"Cancel event for {order.identifier} already handled; skipping.")
+                    return
 
-            grid_level = self.order_book.get_grid_level_for_order(order)
+                grid_level = self.order_book.get_grid_level_for_order(order)
 
-            if grid_level is None:
-                self.logger.warning(f"Cancelled order {order.identifier} has no grid level; skipping settlement.")
+                if grid_level is None:
+                    self.logger.warning(f"Cancelled order {order.identifier} has no grid level; skipping settlement.")
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.ORDER_CANCELLED,
+                        order_details=str(order),
+                    )
+                    return
+
+                await self.balance_tracker.settle_cancelled_order(order)
+                self._settled_cancellation_ids.add(order.identifier)
+                self.order_book.remove_open_order(order)
+                self.grid_manager.rollback_order_placement(
+                    grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
+                )
                 await self.notification_handler.async_send_notification(
                     NotificationType.ORDER_CANCELLED,
                     order_details=str(order),
                 )
-                return
 
-            await self.balance_tracker.settle_cancelled_order(order)
-            self._settled_cancellation_ids.add(order.identifier)
-            self.order_book.remove_open_order(order)
-            self.grid_manager.rollback_order_placement(
-                grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
-            )
-            await self.notification_handler.async_send_notification(
-                NotificationType.ORDER_CANCELLED,
-                order_details=str(order),
-            )
+                if self._positions_closed:
+                    self.logger.info(f"Positions are closed; not re-placing cancelled order {order.identifier}.")
+                    return
 
-            if self._positions_closed:
-                self.logger.info(f"Positions are closed; not re-placing cancelled order {order.identifier}.")
-                return
-
-            try:
-                quantity = order.remaining if order.remaining and order.remaining > 0 else order.amount
-                adjusted_quantity = self._validate_order_quantity(order.side, quantity, grid_level.price)
-                if self.market_constraints is not None:
-                    violation = self.market_constraints.violation(adjusted_quantity, grid_level.price)
-                    if violation:
-                        self.logger.warning(f"Not re-placing cancelled order at {grid_level.price}: {violation}")
-                        return
-                await self._reserve_funds(order.side, adjusted_quantity, grid_level.price)
                 try:
-                    new_order = await self.order_execution_strategy.execute_limit_order(
-                        order.side,
-                        self.trading_pair,
-                        adjusted_quantity,
-                        grid_level.price,
+                    quantity = order.remaining if order.remaining and order.remaining > 0 else order.amount
+                    adjusted_quantity = self._validate_order_quantity(order.side, quantity, grid_level.price)
+                    if self.market_constraints is not None:
+                        violation = self.market_constraints.violation(adjusted_quantity, grid_level.price)
+                        if violation:
+                            self.logger.warning(f"Not re-placing cancelled order at {grid_level.price}: {violation}")
+                            return
+                    await self._reserve_funds(order.side, adjusted_quantity, grid_level.price)
+                    try:
+                        new_order = await self.order_execution_strategy.execute_limit_order(
+                            order.side,
+                            self.trading_pair,
+                            adjusted_quantity,
+                            grid_level.price,
+                        )
+                    except PostOnlyRejectedError as e:
+                        await self._skip_post_only_rejection(
+                            order.side, adjusted_quantity, grid_level.price, e, "Cancelled-order re-placement"
+                        )
+                        return
+                    except Exception:
+                        await self._release_funds(order.side, adjusted_quantity, grid_level.price)
+                        raise
+                    if new_order is None:
+                        await self._release_funds(order.side, adjusted_quantity, grid_level.price)
+                        self.logger.error(f"Re-placement at grid level {grid_level.price} returned None.")
+                        return
+                    self.grid_manager.mark_order_pending(grid_level, new_order)
+                    self.order_book.add_order(new_order, grid_level)
+                    self.logger.info(f"Re-placed cancelled {order.side.value} order at grid level {grid_level.price}.")
+                except Exception as e:
+                    await self._handle_order_error(
+                        e, f"Failed to re-place cancelled order at grid level {grid_level.price}"
                     )
-                except PostOnlyRejectedError as e:
-                    await self._skip_post_only_rejection(
-                        order.side, adjusted_quantity, grid_level.price, e, "Cancelled-order re-placement"
-                    )
-                    return
-                except Exception:
-                    await self._release_funds(order.side, adjusted_quantity, grid_level.price)
-                    raise
-                if new_order is None:
-                    await self._release_funds(order.side, adjusted_quantity, grid_level.price)
-                    self.logger.error(f"Re-placement at grid level {grid_level.price} returned None.")
-                    return
-                self.grid_manager.mark_order_pending(grid_level, new_order)
-                self.order_book.add_order(new_order, grid_level)
-                self.logger.info(f"Re-placed cancelled {order.side.value} order at grid level {grid_level.price}.")
-            except Exception as e:
-                await self._handle_order_error(
-                    e, f"Failed to re-place cancelled order at grid level {grid_level.price}"
-                )
+            finally:
+                await self._save_state()
 
     async def _on_order_filled(
         self,
@@ -338,35 +383,39 @@ class OrderManager:
             order: The filled Order instance.
         """
         async with self._lock:
-            if self._positions_closed:
-                self.logger.info(
-                    f"Positions already closed; ignoring fill for order {order.identifier}.",
-                )
-                return
             try:
-                grid_level = self.order_book.get_grid_level_for_order(order)
-
-                if not grid_level:
-                    self.logger.error(
-                        f"Could not handle Order completion - No grid level found for the given filled order {order}",
+                if self._positions_closed:
+                    self.logger.info(
+                        f"Positions already closed; ignoring fill for order {order.identifier}.",
                     )
                     return
+                try:
+                    grid_level = self.order_book.get_grid_level_for_order(order)
 
-                await self._handle_order_completion(order, grid_level)
+                    if not grid_level:
+                        self.logger.error(
+                            "Could not handle Order completion - No grid level found for the given filled order "
+                            f"{order}",
+                        )
+                        return
 
-            except OrderExecutionFailedError as e:
-                self.logger.error(f"Failed while handling filled order - {e!s}", exc_info=True)
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ORDER_FAILED,
-                    error_details=f"Failed handling filled order. {e}",
-                )
+                    await self._handle_order_completion(order, grid_level)
 
-            except (DataFetchError, ValueError) as e:
-                self.logger.error(f"Error while handling filled order {order.identifier}: {e}", exc_info=True)
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ORDER_FAILED,
-                    error_details=f"Failed handling filled order. {e}",
-                )
+                except OrderExecutionFailedError as e:
+                    self.logger.error(f"Failed while handling filled order - {e!s}", exc_info=True)
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.ORDER_FAILED,
+                        error_details=f"Failed handling filled order. {e}",
+                    )
+
+                except (DataFetchError, ValueError) as e:
+                    self.logger.error(f"Error while handling filled order {order.identifier}: {e}", exc_info=True)
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.ORDER_FAILED,
+                        error_details=f"Failed handling filled order. {e}",
+                    )
+            finally:
+                await self._save_state()
 
     async def _handle_order_completion(
         self,
@@ -490,13 +539,16 @@ class OrderManager:
                 that were found CLOSED on the exchange during recovery.
         """
         async with self._lock:
-            for order, grid_level in filled_orders:
-                try:
-                    await self._place_paired_order(order, grid_level)
-                except Exception as e:
-                    await self._handle_order_error(
-                        e, f"Error placing paired order for recovered fill {order.identifier}"
-                    )
+            try:
+                for order, grid_level in filled_orders:
+                    try:
+                        await self._place_paired_order(order, grid_level)
+                    except Exception as e:
+                        await self._handle_order_error(
+                            e, f"Error placing paired order for recovered fill {order.identifier}"
+                        )
+            finally:
+                await self._save_state()
 
     async def perform_initial_purchase(
         self,
@@ -509,64 +561,73 @@ class OrderManager:
             current_price: The current price of the trading pair.
         """
         async with self._lock:
-            if self._positions_closed:
-                self.logger.info("Positions are closed; skipping the initial purchase.")
+            if self.arming.initial_purchase_done:
+                self.logger.info("Initial purchase already done; skipping it.")
+                return
+            try:
+                if self._positions_closed:
+                    self.logger.info("Positions are closed; skipping the initial purchase.")
+                    return
+                await self._buy_initial_position(current_price)
+            finally:
+                self.arming = replace(self.arming, initial_purchase_done=True)
+                await self._save_state()
+
+    async def _buy_initial_position(self, current_price: float) -> None:
+        initial_quantity = self.grid_manager.get_initial_order_quantity(
+            current_fiat_balance=self.balance_tracker.balance,
+            current_crypto_balance=self.balance_tracker.crypto_balance,
+            current_price=current_price,
+        )
+
+        if initial_quantity <= 0:
+            self.logger.warning("Initial purchase quantity is zero or negative. Skipping initial purchase.")
+            return
+
+        if self.market_constraints is not None:
+            violation = self.market_constraints.violation(initial_quantity, current_price)
+            if violation:
+                self.logger.warning(f"Skipping initial purchase: {violation}")
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ORDER_FAILED,
+                    error_details=f"Initial purchase skipped: {violation}",
+                )
                 return
 
-            initial_quantity = self.grid_manager.get_initial_order_quantity(
-                current_fiat_balance=self.balance_tracker.balance,
-                current_crypto_balance=self.balance_tracker.crypto_balance,
-                current_price=current_price,
+        self.logger.info(f"Performing initial crypto purchase: {initial_quantity} at price {current_price}.")
+
+        try:
+            buy_order = await self.order_execution_strategy.execute_market_order(
+                OrderSide.BUY,
+                self.trading_pair,
+                initial_quantity,
+                current_price,
+            )
+            self.logger.info(f"Initial crypto purchase completed. Order details: {buy_order}")
+            self.order_book.add_order(buy_order)
+            await self.notification_handler.async_send_notification(
+                NotificationType.ORDER_PLACED,
+                order_details=f"Initial purchase done: {buy_order!s}",
             )
 
-            if initial_quantity <= 0:
-                self.logger.warning("Initial purchase quantity is zero or negative. Skipping initial purchase.")
-                return
+            await self.balance_tracker.update_after_initial_purchase(initial_order=buy_order)
 
-            if self.market_constraints is not None:
-                violation = self.market_constraints.violation(initial_quantity, current_price)
-                if violation:
-                    self.logger.warning(f"Skipping initial purchase: {violation}")
-                    await self.notification_handler.async_send_notification(
-                        NotificationType.ORDER_FAILED,
-                        error_details=f"Initial purchase skipped: {violation}",
-                    )
-                    return
+        except OrderExecutionFailedError as e:
+            self.logger.error(f"Failed while executing initial purchase - {e!s}", exc_info=True)
+            await self.notification_handler.async_send_notification(
+                NotificationType.ORDER_FAILED,
+                error_details=f"Error while performing initial purchase. {e}",
+            )
 
-            self.logger.info(f"Performing initial crypto purchase: {initial_quantity} at price {current_price}.")
-
-            try:
-                buy_order = await self.order_execution_strategy.execute_market_order(
-                    OrderSide.BUY,
-                    self.trading_pair,
-                    initial_quantity,
-                    current_price,
-                )
-                self.logger.info(f"Initial crypto purchase completed. Order details: {buy_order}")
-                self.order_book.add_order(buy_order)
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ORDER_PLACED,
-                    order_details=f"Initial purchase done: {buy_order!s}",
-                )
-
-                await self.balance_tracker.update_after_initial_purchase(initial_order=buy_order)
-
-            except OrderExecutionFailedError as e:
-                self.logger.error(f"Failed while executing initial purchase - {e!s}", exc_info=True)
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ORDER_FAILED,
-                    error_details=f"Error while performing initial purchase. {e}",
-                )
-
-            except (DataFetchError, ValueError) as e:
-                self.logger.error(
-                    f"Failed to perform initial purchase at current_price: {current_price} - error: {e}",
-                    exc_info=True,
-                )
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ORDER_FAILED,
-                    error_details=f"Error while performing initial purchase. {e}",
-                )
+        except (DataFetchError, ValueError) as e:
+            self.logger.error(
+                f"Failed to perform initial purchase at current_price: {current_price} - error: {e}",
+                exc_info=True,
+            )
+            await self.notification_handler.async_send_notification(
+                NotificationType.ORDER_FAILED,
+                error_details=f"Error while performing initial purchase. {e}",
+            )
 
     async def close_positions(self, liquidate: bool, current_price: float | None = None) -> None:
         """
@@ -594,50 +655,53 @@ class OrderManager:
             return
 
         async with self._lock:
-            quantity = self.balance_tracker.crypto_balance
-            if quantity <= 0:
-                self.logger.info("No crypto balance to liquidate.")
-                return
-            if self.market_constraints is not None and current_price is not None:
-                violation = self.market_constraints.violation(quantity, current_price)
-                if violation:
-                    self.logger.error(f"Cannot liquidate position: {violation}")
-                    await self.notification_handler.async_send_notification(
-                        NotificationType.ERROR_OCCURRED,
-                        error_details=f"Liquidation skipped: {violation}",
-                    )
-                    return
             try:
-                order = await self.order_execution_strategy.execute_market_order(
-                    OrderSide.SELL,
-                    self.trading_pair,
-                    quantity,
-                    current_price,
-                )
-                if not order:
-                    raise OrderExecutionFailedError(f"Liquidation order returned None at price {current_price}")
-                await self.balance_tracker.update_after_liquidation(order)
-                self.order_book.add_order(order)
-                if order.filled < quantity:
+                quantity = self.balance_tracker.crypto_balance
+                if quantity <= 0:
+                    self.logger.info("No crypto balance to liquidate.")
+                    return
+                if self.market_constraints is not None and current_price is not None:
+                    violation = self.market_constraints.violation(quantity, current_price)
+                    if violation:
+                        self.logger.error(f"Cannot liquidate position: {violation}")
+                        await self.notification_handler.async_send_notification(
+                            NotificationType.ERROR_OCCURRED,
+                            error_details=f"Liquidation skipped: {violation}",
+                        )
+                        return
+                try:
+                    order = await self.order_execution_strategy.execute_market_order(
+                        OrderSide.SELL,
+                        self.trading_pair,
+                        quantity,
+                        current_price,
+                    )
+                    if not order:
+                        raise OrderExecutionFailedError(f"Liquidation order returned None at price {current_price}")
+                    await self.balance_tracker.update_after_liquidation(order)
+                    self.order_book.add_order(order)
+                    if order.filled < quantity:
+                        await self.notification_handler.async_send_notification(
+                            NotificationType.ERROR_OCCURRED,
+                            error_details=(
+                                f"Liquidation partially filled: {order.filled}/{quantity}. "
+                                f"Remaining position is still on the exchange account."
+                            ),
+                        )
+                except OrderExecutionFailedError as e:
+                    self.logger.error(f"Liquidation failed: {e!s}")
+                    await self.notification_handler.async_send_notification(
+                        NotificationType.ORDER_FAILED,
+                        error_details=f"Failed to liquidate position: {e}",
+                    )
+                except (DataFetchError, ValueError) as e:
+                    self.logger.error(f"Failed to liquidate at {current_price}: {e}")
                     await self.notification_handler.async_send_notification(
                         NotificationType.ERROR_OCCURRED,
-                        error_details=(
-                            f"Liquidation partially filled: {order.filled}/{quantity}. "
-                            f"Remaining position is still on the exchange account."
-                        ),
+                        error_details=f"Failed to liquidate position: {e}",
                     )
-            except OrderExecutionFailedError as e:
-                self.logger.error(f"Liquidation failed: {e!s}")
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ORDER_FAILED,
-                    error_details=f"Failed to liquidate position: {e}",
-                )
-            except (DataFetchError, ValueError) as e:
-                self.logger.error(f"Failed to liquidate at {current_price}: {e}")
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ERROR_OCCURRED,
-                    error_details=f"Failed to liquidate position: {e}",
-                )
+            finally:
+                await self._save_state()
 
     async def execute_take_profit_or_stop_loss_order(
         self,

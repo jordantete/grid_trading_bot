@@ -57,59 +57,18 @@ def _saved(repository) -> StateSnapshot:
     return repository.save_state.call_args[0][0]
 
 
-class TestEventSubscription:
-    def test_subscribes_to_events(self, setup_persistence_service):
-        service, _, event_bus, *_ = setup_persistence_service
+class TestCleanup:
+    def test_the_store_subscribes_to_nothing(self, setup_persistence_service):
+        _, _, event_bus, *_ = setup_persistence_service
 
-        assert service._on_order_filled in event_bus.subscribers[Events.ORDER_FILLED]
-        assert service._on_order_cancelled in event_bus.subscribers[Events.ORDER_CANCELLED]
-        assert service._on_initial_purchase_done in event_bus.subscribers[Events.INITIAL_PURCHASE_DONE]
-        assert service._on_grid_orders_initialized in event_bus.subscribers[Events.GRID_ORDERS_INITIALIZED]
+        assert all(not callbacks for callbacks in event_bus.subscribers.values())
 
-    def test_cleanup_unsubscribes_and_closes_the_repository(self, setup_persistence_service):
-        service, repository, event_bus, *_ = setup_persistence_service
+    def test_cleanup_closes_the_repository(self, setup_persistence_service):
+        service, repository, *_ = setup_persistence_service
 
         service.cleanup()
 
-        for callbacks in event_bus.subscribers.values():
-            assert service._on_order_filled not in callbacks
-            assert service._on_order_cancelled not in callbacks
-            assert service._on_initial_purchase_done not in callbacks
-            assert service._on_grid_orders_initialized not in callbacks
         repository.close.assert_called_once()
-
-
-class TestEventsSave:
-    @pytest.mark.parametrize("event", [Events.ORDER_FILLED, Events.ORDER_CANCELLED])
-    async def test_an_order_event_saves(self, setup_persistence_service, event):
-        _service, repository, event_bus, *_ = setup_persistence_service
-
-        await event_bus.publish(event, MagicMock())
-
-        repository.save_state.assert_called_once()
-
-    async def test_initial_purchase_done_sets_its_flag(self, setup_persistence_service):
-        _service, repository, event_bus, *_ = setup_persistence_service
-
-        await event_bus.publish(Events.INITIAL_PURCHASE_DONE, {})
-
-        assert _saved(repository).bot_state["initial_purchase_done"] is True
-
-    async def test_grid_orders_initialized_sets_its_flag(self, setup_persistence_service):
-        _service, repository, event_bus, *_ = setup_persistence_service
-
-        await event_bus.publish(Events.GRID_ORDERS_INITIALIZED, {})
-
-        assert _saved(repository).bot_state["grid_orders_initialized"] is True
-
-    async def test_set_flags_then_checkpoint_now(self, setup_persistence_service):
-        service, repository, *_ = setup_persistence_service
-
-        service.set_flags(initial_purchase_done=True, grid_orders_initialized=True)
-        await service.checkpoint_now()
-
-        assert _saved(repository).bot_state["initial_purchase_done"] is True
-        assert _saved(repository).bot_state["grid_orders_initialized"] is True
 
 
 class TestSnapshot:
@@ -212,18 +171,20 @@ class TestSave:
 
 class TestPeriodicCheckpoints:
     async def test_the_loop_writes_on_its_interval(self, setup_persistence_service):
-        service, repository, *_ = setup_persistence_service
+        service, *_ = setup_persistence_service
+        checkpoint = AsyncMock()
 
-        service.start_periodic_checkpoints(interval_seconds=0.01)
+        service.start_periodic_checkpoints(interval_seconds=0.01, checkpoint=checkpoint)
         await asyncio.sleep(0.05)
         service.cleanup()
 
-        assert repository.save_state.call_count >= 2
+        assert checkpoint.await_count >= 2
 
     async def test_cleanup_cancels_the_loop(self, setup_persistence_service):
         service, *_ = setup_persistence_service
+        checkpoint = AsyncMock()
 
-        service.start_periodic_checkpoints(interval_seconds=10)
+        service.start_periodic_checkpoints(interval_seconds=10, checkpoint=checkpoint)
         task = service._periodic_task
         service.cleanup()
         await asyncio.sleep(0)
@@ -232,10 +193,11 @@ class TestPeriodicCheckpoints:
 
     async def test_starting_twice_keeps_one_loop(self, setup_persistence_service):
         service, *_ = setup_persistence_service
+        checkpoint = AsyncMock()
 
-        service.start_periodic_checkpoints(interval_seconds=10)
+        service.start_periodic_checkpoints(interval_seconds=10, checkpoint=checkpoint)
         task = service._periodic_task
-        service.start_periodic_checkpoints(interval_seconds=10)
+        service.start_periodic_checkpoints(interval_seconds=10, checkpoint=checkpoint)
 
         assert service._periodic_task is task
         service.cleanup()
