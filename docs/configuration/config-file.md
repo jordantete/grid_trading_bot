@@ -185,9 +185,9 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 | `log_level` | string | Yes | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `log_to_file` | bool | Yes | Enable logging to a file in the `logs/` directory. |
 
-### `persistence` *(optional, live mode only)*
+### `persistence` *(optional, live and paper trading)*
 
-SQLite state persistence for crash recovery. Only active in `live` trading mode — ignored in `backtest` and `paper_trading`.
+SQLite state persistence for crash recovery. The state is saved in `live` and `paper_trading` modes and ignored in `backtest`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

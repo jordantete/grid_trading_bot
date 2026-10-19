@@ -27,13 +27,10 @@ See the [Environment Variables](../configuration/environment-variables.md) page 
 
 | Type | Title | Trigger |
 |------|-------|---------|
-| `ORDER_FILLED` | Order Filled | Automatically on every order fill (via EventBus) |
+| `ORDER_FILLED` | Order Filled | After each fill, sent by `OrderManager` once its lock is released |
 | `ORDER_PLACED` | Order Placement Successful | When an order is successfully placed |
 | `ORDER_FAILED` | Order Placement Failed | When an order placement fails |
 | `ORDER_CANCELLED` | Order Cancellation | When an order is cancelled |
-
-!!! note
-    `ORDER_FILLED` is the only notification automatically triggered via an EventBus subscription. All other notifications are sent programmatically by the relevant components.
 
 ### Strategy Notifications
 
@@ -52,6 +49,10 @@ See the [Environment Variables](../configuration/environment-variables.md) page 
 | `BOT_HALTED` | Bot Halted | When the bot halts. The text asks you to check the exchange for orders left open before running `resume` |
 | `BOT_SUSPENDED` | Bot Suspended | When the bot stops with its open orders kept; the next start resumes them |
 | `START_REFUSED_HALTED` | Start Refused | Once, when a start is refused because the config is halted |
+| `START_REFUSED` | Start Refused | When a start is refused for lack of a safe state: open orders on the pair with no saved state (the message lists their identifiers), or a saved state that cannot be resumed (written for another grid, or recovery failed). Exit 0, database untouched |
+| `START_DEFERRED` | Start Deferred | When the exchange is unreachable while the saved state is loaded or the open orders are checked. Exit 75, so the supervisor relaunches the bot |
+| `CHECKPOINT_FAILED` | Checkpoint Failed | At the first failed write of the state database; trading continues. After 3 failures in a row the bot halts |
+| `CHECKPOINT_RESTORED` | Checkpoint Restored | At the first successful write after one or more failures |
 
 ### Reconciliation Notifications
 

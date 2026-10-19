@@ -88,7 +88,7 @@ The account value in quote currency (fiat plus all crypto held, reserved include
 
 ### 7. Drawdown
 
-The fall from the peak, in percent. In live mode the peak is persisted with the bot state and survives restarts; in paper trading it restarts from the current value.
+The fall from the peak, in percent. In live and paper trading the peak is persisted with the bot state and survives restarts.
 
 ### 8. Realized vs Unrealized PnL
 

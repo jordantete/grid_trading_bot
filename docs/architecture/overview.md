@@ -25,8 +25,8 @@ src/grid_trading_bot/
 │   │   ├── balance_tracker.py      # Fiat/crypto balances
 │   │   ├── order_book.py           # Order-to-grid mapping
 │   │   └── execution_strategy/     # Backtest vs live execution
-│   ├── persistence/                # State persistence (live mode)
-│   │   ├── state_persistence_service.py  # Event-driven checkpoints
+│   ├── persistence/                # State persistence (live and paper)
+│   │   ├── state_persistence_service.py  # State snapshots in one transaction
 │   │   ├── state_recovery_service.py     # Merge recovery on restart
 │   │   ├── sqlite_state_repository.py    # SQLite backend
 │   │   └── serializers.py                # Model serialization
@@ -80,16 +80,15 @@ Two factories select implementations based on the configured `TradingMode`:
 
 ### Event Bus
 
-Decoupled communication via a publish/subscribe system. Components subscribe to events rather than calling each other directly.
+Decoupled communication via a publish/subscribe system, now reduced to the shutdown request.
 
 | Event | Published When | Typical Subscribers |
 |-------|---------------|-------------------|
-| `ORDER_FILLED` | An order is fully executed | OrderManager, BalanceTracker, StatePersistenceService |
-| `ORDER_CANCELLED` | An order is cancelled | OrderManager, StatePersistenceService |
-| `START_BOT` | Bot initialization complete | BotController |
-| `STOP_BOT` | Shutdown requested | All components |
-| `INITIAL_PURCHASE_DONE` | Initial crypto purchase completed | StatePersistenceService |
-| `GRID_ORDERS_INITIALIZED` | Grid orders placed for the first time | StatePersistenceService |
+| `STOP_BOT` | Shutdown requested (stop command, TP/SL, halt, signal) | `GridTradingBot` |
+
+### Fill Pipeline
+
+Order updates do not travel on the event bus. The order tracker (live and paper trading) and the order simulator (backtest) hand each exchange view of an order to `OrderManager.apply_order_update`. Under its lock, it books the newly filled quantity, moves the grid level, places the paired order (or re-places a cancelled or expired one; a rejected one is not re-placed), then saves the state. The fill notification goes out once the lock is released.
 
 ### State Machine
 
@@ -125,7 +124,7 @@ The strategy handles:
 | Mode | Exchange Service | Execution Strategy | Additional Tasks |
 |------|-----------------|-------------------|-----------------|
 | `backtest` | `BacktestExchangeService` (CSV/CCXT OHLCV) | Instant fill | None |
-| `paper_trading` | `LiveExchangeService` (sandbox APIs) | Retry with backoff | BotController, HealthCheck |
+| `paper_trading` | `LiveExchangeService` (sandbox APIs) | Retry with backoff | BotController, HealthCheck, StatePersistence |
 | `live` | `LiveExchangeService` (production APIs) | Retry with backoff | BotController, HealthCheck, StatePersistence, ReconciliationService |
 
 In live and paper modes, the bot runs three concurrent async tasks:
@@ -134,29 +133,38 @@ In live and paper modes, the bot runs three concurrent async tasks:
 2. **BotController** — Runtime CLI commands for status and control
 3. **HealthCheck** — System resource monitoring (CPU, memory)
 
-## State Persistence (Live Mode Only)
+## State Persistence (Live and Paper Trading)
 
-In live trading mode, the bot persists its state to a SQLite database so it can recover from crashes or restarts without losing order history, grid states, or balance tracking.
+In live and paper trading, the bot persists its state to a SQLite database so it can recover from crashes or restarts without losing order history, grid states, or balance tracking.
 
 ### How It Works
 
-- **Checkpoint strategy**: Event-driven — a full snapshot is written after every `ORDER_FILLED`, `ORDER_CANCELLED`, `INITIAL_PURCHASE_DONE`, and `GRID_ORDERS_INITIALIZED` event
+- **Checkpoint strategy**: a full snapshot is written in one transaction at the end of every order operation (fill with its paired order, cancellation, expiry, rejection, initial purchase, grid placement, regrid, bulk cancellation), plus a periodic checkpoint and a final one at shutdown. A failed write alerts ("Checkpoint Failed"); 3 in a row halt the bot
 - **Database**: SQLite with WAL (Write-Ahead Logging) mode for crash safety
 - **DB path**: `data/{BASE}_{QUOTE}/state_{config_hash[:8]}.db` (auto-derived, or explicit via `persistence.db_path` in config)
 
 ### Recovery on Restart
 
-When the bot starts in live mode with an existing state DB:
+When the bot starts with an existing state DB, `StateRecoveryService` has one of four outcomes:
 
-1. **Config compatibility** — Compares config hash; if grid configuration changed, clears DB and starts fresh
+1. **Resumed** — the saved state is loaded and reconciled with the exchange (below).
+2. **Refused: another grid** — the DB was written for a different grid (explicit `persistence.db_path` reused). Exit 0, "Start Refused", DB untouched.
+3. **Refused: recovery failed** — an exception during recovery (corrupt row, bug). Exit 0, "Start Refused" naming the cause, DB untouched.
+4. **Deferred** — the exchange is unreachable during reconciliation. Exit 75, "Start Deferred", DB untouched; the supervisor relaunches.
+
+Nothing deletes the DB except `resume`, which archives it. With no saved state, a fresh start first checks `fetch_open_orders` for the pair: any open order refuses the start (exit 0, "Start Refused"), and a failed check defers it (exit 75).
+
+A resume works as follows:
+
+1. **Config compatibility** — The DB name carries a hash of `grid_strategy`, `exchange`, `pair` and `trading_settings.timeframe`; `risk_management` is not part of it
 2. **Grid level restoration** — Overlays saved states and paired-level references onto freshly computed grid levels
 3. **Order restoration** — Reconstructs Order objects from DB, repopulates the OrderBook
 4. **Exchange reconciliation** — For each locally-open order, fetches current status from exchange:
-    - Filled while bot was down → updates status locally
-    - Canceled on exchange → releases reserved funds
+    - Filled (fully or partly) while bot was down → books each fill once, with its fee, and places the paired order
+    - Cancelled, expired or rejected on exchange → frees the level and releases reserved funds
     - Not found → marks as ghost, releases funds
     - Orphan orders on exchange (not in local book) → logged as warnings, not auto-adopted
-5. **Balance restoration** — Exchange balance is authoritative; DB reserved amounts are overlaid
+5. **Balance restoration** — Live: the exchange balance is authoritative and DB reserved amounts are overlaid. Paper: the virtual balances come from the DB and the fills are booked on them
 
 ### Configuration
 
@@ -169,4 +177,4 @@ When the bot starts in live mode with an existing state DB:
 }
 ```
 
-Both fields are optional. Persistence is enabled by default in live mode. The `db_path` defaults to `data/{BASE}_{QUOTE}/state_{hash}.db` where `{hash}` is derived from the grid configuration, ensuring different grid configs get separate databases even for the same trading pair
+Both fields are optional. Persistence is enabled by default in live and paper trading. The `db_path` defaults to `data/{BASE}_{QUOTE}/state_{hash}.db` where `{hash}` is derived from the grid configuration, ensuring different grid configs get separate databases even for the same trading pair
