@@ -1489,6 +1489,30 @@ class TestStateSaves:
 
         assert store.saves == []
 
+    async def test_the_liquidation_saves_once_under_the_lock_after_the_market_sell(self, manager_with_store):
+        manager, store, (_, _, _, balance_tracker, order_book, _, order_execution_strategy, _) = manager_with_store
+        order_book.get_open_orders.return_value = []
+        order_book.get_buy_orders_with_grid.return_value = []
+        order_book.get_sell_orders_with_grid.return_value = []
+        balance_tracker.crypto_balance = 1.0
+        order_execution_strategy.execute_market_order = AsyncMock(
+            return_value=_mock_order(side=OrderSide.SELL, status=OrderStatus.CLOSED, filled=1.0, amount=1.0)
+        )
+        events = []
+        balance_tracker.update_after_liquidation = AsyncMock(side_effect=lambda *_a: events.append("booked"))
+        original_save = store.save
+
+        async def recording_save(arming):
+            events.append("saved")
+            await original_save(arming)
+
+        store.save = recording_save
+
+        await manager.close_positions(liquidate=True, current_price=100.0)
+
+        assert [locked for _, locked in store.saves] == [True, True]
+        assert events == ["saved", "booked", "saved"]
+
     async def test_without_a_store_nothing_is_saved(self, setup_order_manager):
         manager = setup_order_manager[0]
 
