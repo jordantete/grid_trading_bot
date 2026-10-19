@@ -87,7 +87,12 @@ class Order:
 
     def apply_update(self, update: "Order") -> float:
         """Takes the exchange's view of this order and returns the quantity filled since the previous view."""
-        filled = update.filled if update.filled is not None else self.filled
+        if update.filled is not None:
+            filled = update.filled
+        elif update.status == OrderStatus.CLOSED:
+            filled = self.amount
+        else:
+            filled = self.filled
         newly_filled = filled - self.filled
         self.status = update.status
         self.filled = filled

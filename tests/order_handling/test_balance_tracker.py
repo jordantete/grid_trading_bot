@@ -155,14 +155,16 @@ class TestBalanceTracker:
         balance_tracker._crypto_balance = Decimal("5")
         fee_calculator.calculate_fee.return_value = 5  # Mock fee calculation
 
-        buy_order = Mock(side=OrderSide.BUY, filled=1, price=100, average=None)
+        buy_order = Mock(side=OrderSide.BUY, filled=1, price=100, average=None, status=OrderStatus.CLOSED, remaining=0)
         balance_tracker._reserved_fiat = Decimal("105")  # Reserved fiat for the buy order (price + fee)
         await balance_tracker.record_execution(buy_order, buy_order.filled)
         assert balance_tracker.crypto_balance == 6  # Crypto balance increases by 1
         assert balance_tracker.total_fees == 5  # Total fees reflect the buy order fee
         assert balance_tracker.reserved_fiat == 0  # Reserved fiat should be fully consumed
 
-        sell_order = Mock(side=OrderSide.SELL, filled=1, price=200, average=None)
+        sell_order = Mock(
+            side=OrderSide.SELL, filled=1, price=200, average=None, status=OrderStatus.CLOSED, remaining=0
+        )
         balance_tracker._reserved_crypto = Decimal("1")  # Reserved crypto for the sell order
         await balance_tracker.record_execution(sell_order, sell_order.filled)
         assert balance_tracker.total_fees == 10  # Total fees include the sell order fee
@@ -178,13 +180,15 @@ class TestBalanceTracker:
         balance_tracker._crypto_balance = Decimal("5")
         fee_calculator.calculate_fee.return_value = 0
 
-        buy_order = Mock(side=OrderSide.BUY, filled=1, price=100, average=101.0)
+        buy_order = Mock(side=OrderSide.BUY, filled=1, price=100, average=101.0, status=OrderStatus.CLOSED, remaining=0)
         balance_tracker._reserved_fiat = Decimal("101")
         await balance_tracker.record_execution(buy_order, buy_order.filled)
         assert balance_tracker.reserved_fiat == 0  # 101 consumed at the slipped price, not 100
         assert balance_tracker.crypto_balance == 6
 
-        sell_order = Mock(side=OrderSide.SELL, filled=1, price=200, average=198.0)
+        sell_order = Mock(
+            side=OrderSide.SELL, filled=1, price=200, average=198.0, status=OrderStatus.CLOSED, remaining=0
+        )
         balance_tracker._reserved_crypto = Decimal("1")
         await balance_tracker.record_execution(sell_order, sell_order.filled)
         assert balance_tracker.balance == 1198  # proceeds at 198, not 200
@@ -422,6 +426,24 @@ class TestRecordEndedOrder:
         assert bt.reserved_crypto == pytest.approx(0.0, abs=1e-8)
         assert bt.crypto_balance == pytest.approx(1.7)
         assert bt.balance > 0  # proceeds of 0.3 * 100 minus fee
+
+    async def test_closed_order_with_a_remainder_releases_it(self, balance_tracker):
+        await balance_tracker.reserve_funds_for_buy(100.0)
+        order = _make_order(
+            side=OrderSide.BUY,
+            price=100.0,
+            average=100.0,
+            amount=1.0,
+            filled=0.4,
+            remaining=0.6,
+            status=OrderStatus.CLOSED,
+        )
+
+        await balance_tracker.record_execution(order, order.filled)
+
+        assert balance_tracker.crypto_balance == pytest.approx(0.4)
+        assert balance_tracker.reserved_fiat == pytest.approx(0.0, abs=1e-6)
+        assert balance_tracker.balance == pytest.approx(1000.0 - 40.0 - 0.04)
 
 
 class TestUpdateAfterLiquidation:

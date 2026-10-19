@@ -71,6 +71,30 @@ class TestFills:
         assert stack.execution.order_at(100.0, OrderSide.BUY).amount == pytest.approx(sell.amount)
         assert reserved_matches_open_orders(stack)
 
+    async def test_a_closed_update_without_a_filled_quantity_books_the_full_amount(self, stack):
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+        view = stack.execution.fill(buy.identifier)
+        view.filled = None
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+
+        await stack.manager.apply_order_update(view)
+
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount)
+        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(buy.amount)
+        assert reserved_matches_open_orders(stack)
+
+    async def test_a_closed_update_with_a_remainder_releases_its_reservation(self, stack):
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+        view = stack.execution.fill(buy.identifier, buy.amount * 0.4)
+        view.status = OrderStatus.CLOSED
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+
+        await stack.manager.apply_order_update(view)
+
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.4)
+        assert stack.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(buy.amount * 0.4)
+        assert reserved_matches_open_orders(stack)
+
     async def test_an_update_for_an_order_no_longer_open_is_ignored(self, stack):
         buy = stack.execution.order_at(100.0, OrderSide.BUY)
         update = stack.execution.fill(buy.identifier)

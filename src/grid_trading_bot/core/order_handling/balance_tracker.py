@@ -11,7 +11,7 @@ from ..validation.exceptions import (
     InsufficientCryptoBalanceError,
 )
 from .fee_calculator import FeeCalculator
-from .order import ENDED_UNFILLED_STATUSES, Liquidity, Order, OrderSide, OrderStatus
+from .order import Liquidity, Order, OrderSide, OrderStatus
 from .pnl_ledger import PnlLedger
 
 _QUANTIZE_EXP = Decimal("1e-8")
@@ -140,7 +140,7 @@ class BalanceTracker:
     async def record_execution(self, order: Order, filled_quantity: float) -> None:
         """
         Books `filled_quantity` more of `order` at its fill price, then releases the reservation of the unfilled
-        remainder once the order ended without filling it.
+        remainder once the order is no longer open.
         """
         async with self._lock:
             fill_price = order.average if order.average is not None else order.price
@@ -149,7 +149,7 @@ class BalanceTracker:
                     self._update_after_buy_order_filled(filled_quantity, fill_price, order.liquidity)
                 else:
                     self._update_after_sell_order_filled(filled_quantity, fill_price, order.liquidity)
-            if order.status in ENDED_UNFILLED_STATUSES and order.remaining:
+            if order.status != OrderStatus.OPEN and order.remaining:
                 if order.side == OrderSide.BUY:
                     self._release_fiat_unlocked(order.remaining * order.price)
                 else:
