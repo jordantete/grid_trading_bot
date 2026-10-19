@@ -78,7 +78,7 @@ class LiveExchangeService(ExchangeInterface):
             half_open_max_calls=self.config_manager.get_circuit_breaker_half_open_max_calls(),
             # A maker-only order that would cross is a normal market condition, not an
             # exchange fault — a run of them must never open the breaker.
-            benign_exceptions=(PostOnlyRejectedError,),
+            benign_exceptions=(PostOnlyRejectedError, OrderNotFound),
         )
         self._last_known_price: float | None = None
         self._max_price_deviation: float = 0.50

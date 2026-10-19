@@ -561,6 +561,29 @@ class TestLiveExchangeService:
         with pytest.raises(OrderNotFoundError, match="Order 123 not found on BTC/USD"):
             await service.fetch_order("123", "BTC/USD")
 
+    @pytest.mark.asyncio
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    async def test_unknown_orders_do_not_open_the_circuit_breaker(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.fetch_order = AsyncMock(side_effect=ccxt.OrderNotFound("binance Order does not exist."))
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        for _ in range(6):
+            with pytest.raises(OrderNotFoundError):
+                await service.fetch_order("123", "BTC/USD")
+
+        assert service.circuit_breaker.state == CircuitState.CLOSED
+
     # ── _validate_price ────────────────────────────────────────────────
 
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
