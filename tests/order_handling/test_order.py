@@ -130,3 +130,42 @@ class TestOrderLiquidity:
 
     def test_market_order_takes_liquidity(self):
         assert self._order(OrderType.MARKET).liquidity == Liquidity.TAKER
+
+
+class TestApplyUpdate:
+    def _local(self) -> Order:
+        return Order(
+            identifier="1",
+            status=OrderStatus.OPEN,
+            order_type=OrderType.LIMIT,
+            side=OrderSide.BUY,
+            price=100.0,
+            average=None,
+            amount=1.0,
+            filled=0.0,
+            remaining=1.0,
+            timestamp=0,
+            datetime=None,
+            last_trade_timestamp=None,
+            symbol="BTC/USDT",
+            time_in_force="GTC",
+        )
+
+    def _closed(self, filled, remaining) -> Order:
+        update = self._local()
+        update.status, update.filled, update.remaining, update.average = OrderStatus.CLOSED, filled, remaining, 100.0
+        return update
+
+    def test_a_closed_update_without_a_filled_quantity_fills_what_is_not_remaining(self):
+        local = self._local()
+
+        newly_filled = local.apply_update(self._closed(filled=None, remaining=0.6))
+
+        assert newly_filled == pytest.approx(0.4)
+        assert (local.filled, local.remaining) == (pytest.approx(0.4), 0.6)
+
+    def test_a_closed_update_without_any_quantity_fills_the_whole_amount(self):
+        local = self._local()
+
+        assert local.apply_update(self._closed(filled=None, remaining=None)) == 1.0
+        assert (local.filled, local.remaining) == (1.0, 0.0)

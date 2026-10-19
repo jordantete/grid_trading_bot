@@ -90,7 +90,7 @@ class Order:
         if update.filled is not None:
             filled = update.filled
         elif update.status == OrderStatus.CLOSED:
-            filled = self.amount
+            filled = self.amount - update.remaining if update.remaining is not None else self.amount
         else:
             filled = self.filled
         newly_filled = filled - self.filled
