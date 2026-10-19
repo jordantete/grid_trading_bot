@@ -27,8 +27,8 @@ class OrderNotFoundError(DataFetchError):
 
 class OrderNotPlacedError(DataFetchError):
     """
-    Raised when a placement surely did not reach the order book: the request never left, or the exchange answered
-    with an error. Sending it again under the same client order id is safe.
+    Raised when a placement surely did not reach the order book: the circuit breaker blocked the request, or a lookup
+    by client order id confirmed the order absent. Sending it again under the same client order id is safe.
     """
 
     pass

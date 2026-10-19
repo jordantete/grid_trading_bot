@@ -157,7 +157,15 @@ class TestLiveExchangeService:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "error",
-        [ccxt.RequestTimeout("timed out"), ccxt.ExchangeNotAvailable("503"), ccxt.DuplicateOrderId("duplicate")],
+        [
+            ccxt.RequestTimeout("timed out"),
+            ccxt.ExchangeNotAvailable("503"),
+            ccxt.DuplicateOrderId("duplicate"),
+            ccxt.OperationFailed("-1006 Execution status unknown"),
+            ccxt.BadResponse("bad body"),
+            ccxt.NullResponse("empty body"),
+            ccxt.ExchangeError("body cut off"),
+        ],
     )
     async def test_a_placement_whose_answer_may_be_lost_has_an_unknown_outcome(
         self,
@@ -175,6 +183,55 @@ class TestLiveExchangeService:
 
         with pytest.raises(OrderOutcomeUnknownError):
             await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0, client_order_id="g1")
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "message",
+        [
+            'binance {"code":-2010,"msg":"Duplicate order sent."}',
+            'okx {"code":"1","data":[{"sCode":"51016","sMsg":"Duplicated client order ID"}]}',
+            'binanceusdm {"code":-4116,"msg":"ClientOrderId is duplicated."}',
+        ],
+    )
+    async def test_a_duplicate_client_id_reported_as_invalid_order_has_an_unknown_outcome(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+        message,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.create_order.side_effect = ccxt.InvalidOrder(message)
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        for _ in range(6):
+            with pytest.raises(OrderOutcomeUnknownError):
+                await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0, client_order_id="g1")
+        assert service.circuit_breaker.state == CircuitState.CLOSED
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_duplicate_wording_without_a_client_id_stays_a_refusal(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.create_order.side_effect = ccxt.InvalidOrder("Duplicate order sent.")
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        with pytest.raises(OrderRejectedError):
+            await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
 
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
@@ -343,7 +400,7 @@ class TestLiveExchangeService:
         mock_exchange_instance.create_order.side_effect = ccxt.BaseError("Exchange error")
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
-        with pytest.raises(OrderNotPlacedError, match="Error placing order"):
+        with pytest.raises(OrderOutcomeUnknownError, match="outcome is unknown"):
             await service.place_order("BTC/USD", "market", "buy", 1, 50000.0)
         mock_exchange_instance.create_order.assert_awaited_once_with("BTC/USD", "market", "buy", 1, 50000.0, params={})
 

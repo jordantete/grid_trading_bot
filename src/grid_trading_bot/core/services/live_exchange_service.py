@@ -59,6 +59,11 @@ def _is_post_only_rejection(error: BaseException) -> bool:
     return any(marker in message for marker in _POST_ONLY_REJECTION_MARKERS)
 
 
+def _is_duplicate_client_id(error: BaseException) -> bool:
+    """Whether a plain InvalidOrder says the client order id is already held (Binance -2010/-4116, OKX 51016)."""
+    return isinstance(error, InvalidOrder) and "duplicat" in str(error).lower()
+
+
 class LiveExchangeService(ExchangeInterface):
     def __init__(
         self,
@@ -358,8 +363,9 @@ class LiveExchangeService(ExchangeInterface):
     ) -> dict[str, str | float]:
         """
         Sends one order. Raises `PostOnlyRejectedError` or `OrderRejectedError` when the exchange refuses it,
-        `OrderNotPlacedError` when it surely was not placed (breaker open, an error answer) and
-        `OrderOutcomeUnknownError` when it may have been (network error, a client id the exchange already holds).
+        `OrderNotPlacedError` when the breaker blocked the request and `OrderOutcomeUnknownError` for every other
+        failure, since the order may be live (network error, unknown execution status, empty answer, a client id
+        the exchange already holds).
         """
         try:
             precise_amount = self.round_amount(pair, amount)
@@ -380,6 +386,8 @@ class LiveExchangeService(ExchangeInterface):
                         raise PostOnlyRejectedError(
                             f"Maker-only {order_side} order on {pair} at {precise_price} would have crossed: {e!s}",
                         ) from e
+                    if client_order_id is not None and _is_duplicate_client_id(e):
+                        raise DuplicateOrderId(str(e)) from e
                     if isinstance(e, InsufficientFunds | InvalidOrder | BadRequest):
                         raise OrderRejectedError(f"The exchange refused the {order_side} order on {pair}: {e!s}") from e
                     raise
@@ -398,7 +406,7 @@ class LiveExchangeService(ExchangeInterface):
             raise OrderOutcomeUnknownError(f"Network issue occurred while placing order: {e!s}") from e
 
         except BaseError as e:
-            raise OrderNotPlacedError(f"Error placing order: {e!s}") from e
+            raise OrderOutcomeUnknownError(f"Error placing order, the outcome is unknown: {e!s}") from e
 
     async def fetch_order(
         self,
