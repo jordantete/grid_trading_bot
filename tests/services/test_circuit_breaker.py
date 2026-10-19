@@ -250,3 +250,19 @@ class TestCircuitBreakerBenignExceptions:
                 await breaker.call(func)
 
         assert breaker.state == CircuitState.OPEN
+
+    @pytest.mark.asyncio
+    async def test_a_benign_answer_to_the_half_open_probe_closes_the_breaker(self, breaker):
+        failing = AsyncMock(side_effect=Exception("real fault"))
+        for _ in range(3):
+            with pytest.raises(Exception, match="real fault"):
+                await breaker.call(failing)
+        assert breaker.state == CircuitState.OPEN
+
+        future_time = time.monotonic() + 2.0
+        with patch("grid_trading_bot.core.services.circuit_breaker.time.monotonic", return_value=future_time):
+            with pytest.raises(BenignError):
+                await breaker.call(AsyncMock(side_effect=BenignError("unknown order")))
+
+            assert breaker.state == CircuitState.CLOSED
+            assert await breaker.call(AsyncMock(return_value="ok")) == "ok"

@@ -26,7 +26,8 @@ class CircuitBreaker:
         Args:
             benign_exceptions: Exception types that represent an expected rejection rather
                 than a fault. They propagate to the caller but count as neither a failure
-                nor a success, so a run of them can never trip the breaker.
+                nor a success, so a run of them can never trip the breaker; a benign answer to a
+                half-open probe proves the exchange responds and closes the breaker.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.failure_threshold = failure_threshold
@@ -60,8 +61,8 @@ class CircuitBreaker:
         try:
             result = await func(*args, **kwargs)
         except self.benign_exceptions:
-            # Expected rejection: propagate it, but leave the failure tally untouched so a
-            # run of them can neither trip the breaker nor clear a real fault count.
+            # Expected rejection: the failure tally stays, but a benign answer to a half-open probe closes the breaker.
+            await self._on_benign()
             raise
         except Exception:
             await self._on_failure()
@@ -84,6 +85,13 @@ class CircuitBreaker:
                 self.logger.warning("Circuit breaker transitioning from HALF_OPEN to CLOSED.")
                 self._state = CircuitState.CLOSED
             self._failure_count = 0
+
+    async def _on_benign(self) -> None:
+        async with self._lock:
+            if self._state == CircuitState.HALF_OPEN:
+                self.logger.warning("Circuit breaker transitioning from HALF_OPEN to CLOSED.")
+                self._state = CircuitState.CLOSED
+                self._failure_count = 0
 
     async def _on_failure(self) -> None:
         async with self._lock:

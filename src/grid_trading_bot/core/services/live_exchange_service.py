@@ -76,8 +76,8 @@ class LiveExchangeService(ExchangeInterface):
             failure_threshold=self.config_manager.get_circuit_breaker_failure_threshold(),
             recovery_timeout=self.config_manager.get_circuit_breaker_recovery_timeout(),
             half_open_max_calls=self.config_manager.get_circuit_breaker_half_open_max_calls(),
-            # A maker-only order that would cross is a normal market condition, not an
-            # exchange fault — a run of them must never open the breaker.
+            # A maker-only rejection or an order the exchange no longer knows is a normal answer, not an
+            # exchange fault, so a run of them must never open the breaker.
             benign_exceptions=(PostOnlyRejectedError, OrderNotFound),
         )
         self._last_known_price: float | None = None
