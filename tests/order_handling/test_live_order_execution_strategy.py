@@ -279,22 +279,21 @@ class TestLiveOrderExecutionStrategy:
         assert order.average == pytest.approx(100.0)
         assert exchange_service.place_order.await_count == 1
 
-    async def test_execute_market_order_partial_fill_cancel_fails_returns_partial(self, setup_live_strategy):
-        """Partial fill, cancel fails: the placement-response fill is returned (no double-spend)."""
+    @pytest.mark.parametrize("filled", [0.3, 0.0])
+    async def test_a_market_leg_left_open_by_a_failed_cancel_has_an_unknown_outcome(self, setup_live_strategy, filled):
+        """While the leg may still rest or fill, neither a resend nor a final fill is safe to report."""
         strategy, exchange_service = setup_live_strategy
         strategy.retry_delay = 0
         exchange_service.place_order = AsyncMock(
-            return_value=_raw("partial-order", "open", "market", "buy", 30000, 1.0, 0.3)
+            return_value=_raw("open-leg", "open", "market", "buy", 30000, 1.0, filled)
         )
         exchange_service.cancel_order = AsyncMock(return_value={"status": "failed"})
 
-        order = await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 1.0, 30000, CLIENT_ORDER_ID)
+        with pytest.raises(OrderOutcomeUnknownError, match="open-leg is still open on the exchange"):
+            await strategy.execute_market_order(OrderSide.BUY, "BTC/USDT", 1.0, 30000, CLIENT_ORDER_ID)
 
-        assert order.status == OrderStatus.CLOSED
-        assert order.filled == pytest.approx(0.3)
-        assert order.amount == pytest.approx(1.0)
-        assert order.remaining == pytest.approx(0.7)
         assert exchange_service.place_order.await_count == 1
+        assert exchange_service.cancel_order.await_count == strategy.max_retries
 
     @pytest.mark.parametrize(
         ("status", "raised"),

@@ -39,14 +39,18 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         client_order_id: str,
     ) -> Order:
         """
-        Sends one market leg and returns it closed with what it executed. A leg the exchange leaves open with a
-        partial fill is cancelled first; a leg that executed nothing raises.
+        Sends one market leg and returns it closed with what it executed. A leg the exchange leaves open is
+        cancelled first, and raises OrderOutcomeUnknownError when it cannot be; a leg that executed nothing raises.
         """
         leg = await self._send(OrderType.MARKET, order_side, pair, quantity, price, client_order_id)
         if leg.status == OrderStatus.OPEN:
             settled = await self._handle_partial_fill(leg, pair)
-            if settled is not None:
-                leg = settled
+            if settled is None:
+                raise OrderOutcomeUnknownError(
+                    f"Market {order_side.value} order {leg.identifier} is still open on the exchange and could not "
+                    f"be cancelled."
+                )
+            leg = settled
 
         if leg.filled is not None:
             filled = leg.filled
