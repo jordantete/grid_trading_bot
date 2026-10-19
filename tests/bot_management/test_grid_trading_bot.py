@@ -730,6 +730,16 @@ class TestFreshStartGuard(BotFixtures):
         bot.strategy.run.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_the_refusal_says_how_many_open_orders_it_does_not_list(self, bot):
+        _prepare_startup(bot)
+        bot.exchange_service.fetch_open_orders = AsyncMock(return_value=[{"id": str(i)} for i in range(12)])
+
+        await bot.run()
+
+        assert "12 order(s) are still open" in bot.stop_request.reason
+        assert "(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, and 2 more)" in bot.stop_request.reason
+
+    @pytest.mark.asyncio
     async def test_the_guard_also_runs_without_persistence(self, bot):
         assert bot.state_recovery_service is None
         _prepare_startup(bot)

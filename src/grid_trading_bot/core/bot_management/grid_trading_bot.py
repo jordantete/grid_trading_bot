@@ -311,6 +311,8 @@ class GridTradingBot:
                 return False
             if open_orders:
                 listed = ", ".join(str(order.get("id")) for order in open_orders[:10])
+                if len(open_orders) > 10:
+                    listed += f", and {len(open_orders) - 10} more"
                 await self._stop(
                     StopRequest(
                         StopKind.START_REFUSED,
