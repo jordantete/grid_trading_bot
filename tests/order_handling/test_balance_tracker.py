@@ -685,13 +685,14 @@ class TestRecoveryAccounting:
         buy = _make_order(OrderSide.BUY, price=90.0, average=90.0, amount=1.0, filled=1.0, remaining=0.0)
         buy.last_trade_timestamp = 1
 
-        bt.replay_fills_on_cost_basis(Decimal("2"), [sell, buy])
+        bt.replay_fills_on_cost_basis(Decimal("2"), [(sell, sell.filled), (buy, buy.filled)])
 
         # buy first: (2 x 100 + 90 + 0.09) / 3; then sell 1 at 110 with a 0.11 fee
         assert float(bt._ledger.avg_cost) == pytest.approx(96.6966667, abs=1e-6)
         assert float(bt._ledger.realized_pnl) == pytest.approx(13.1933333, abs=1e-6)
         assert bt._crypto_balance == Decimal("2.0")
         assert bt._balance == Decimal("0")
+        assert bt.total_fees == pytest.approx(1.0 * 110.0 * 0.001 + 1.0 * 90.0 * 0.001)
 
     def test_replay_falls_back_to_limit_price_and_creation_time(self, balance_tracker_with_crypto):
         bt = balance_tracker_with_crypto
@@ -701,7 +702,7 @@ class TestRecoveryAccounting:
         buy = _make_order(OrderSide.BUY, price=90.0, average=None, amount=1.0, filled=1.0, remaining=0.0)
         buy.timestamp = 1
 
-        bt.replay_fills_on_cost_basis(Decimal("2"), [sell, buy])
+        bt.replay_fills_on_cost_basis(Decimal("2"), [(sell, sell.filled), (buy, buy.filled)])
 
         assert float(bt._ledger.realized_pnl) == pytest.approx(13.1933333, abs=1e-6)
 
@@ -710,7 +711,7 @@ class TestRecoveryAccounting:
         bt.restore_accounting(avg_cost=Decimal("100"), realized_pnl=Decimal("0"), peak_value=None)
         unfilled = _make_order(OrderSide.SELL, price=110.0, amount=1.0, filled=0.0, remaining=1.0)
 
-        bt.replay_fills_on_cost_basis(Decimal("2"), [unfilled])
+        bt.replay_fills_on_cost_basis(Decimal("2"), [(unfilled, unfilled.filled)])
 
         assert bt._ledger.realized_pnl == Decimal("0")
         assert bt._ledger.avg_cost == Decimal("100")

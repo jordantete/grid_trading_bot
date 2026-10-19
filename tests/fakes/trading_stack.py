@@ -56,14 +56,14 @@ class TradingStack:
     manager: OrderManager
 
 
-def build_stack(fiat: float = 2700.0, crypto: float = 20.0) -> TradingStack:
-    config = ConfigManager.from_dict(stack_config())
+def build_stack(fiat: float = 2700.0, crypto: float = 20.0, trading_mode: str = "live") -> TradingStack:
+    config = ConfigManager.from_dict(stack_config(trading_mode=trading_mode))
     grid = GridManager(config, StrategyType.SIMPLE_GRID)
     grid.initialize_grids_and_levels()
     balances = BalanceTracker(
         event_bus=EventBus(),
         fee_calculator=FeeCalculator(config),
-        trading_mode=TradingMode.LIVE,
+        trading_mode=TradingMode(trading_mode),
         base_currency="BTC",
         quote_currency="USDT",
     )
@@ -74,7 +74,15 @@ def build_stack(fiat: float = 2700.0, crypto: float = 20.0) -> TradingStack:
     notifications = Mock()
     notifications.async_send_notification = AsyncMock()
     manager = OrderManager(
-        grid, OrderValidator(), balances, book, EventBus(), execution, notifications, TradingMode.LIVE, "BTC/USDT"
+        grid,
+        OrderValidator(),
+        balances,
+        book,
+        EventBus(),
+        execution,
+        notifications,
+        TradingMode(trading_mode),
+        "BTC/USDT",
     )
     return TradingStack(config, grid, book, balances, execution, notifications, manager)
 

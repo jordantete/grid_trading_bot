@@ -436,22 +436,23 @@ class BalanceTracker:
         self._ledger = PnlLedger(avg_cost=avg_cost, realized_pnl=realized_pnl)
         self._peak_value = peak_value
 
-    def replay_fills_on_cost_basis(self, starting_position: Decimal, orders: list[Order]) -> None:
+    def replay_fills_on_cost_basis(self, starting_position: Decimal, executions: list[tuple[Order, float]]) -> None:
         """
-        Books fills the exchange executed while the bot was down into the cost basis and realized PnL.
-        Balances stay untouched: they were restored from the exchange, which already includes these fills.
+        Books the quantities the exchange filled while the bot was down into the cost basis, the realized PnL and the
+        fees. Balances stay untouched: they were restored from the exchange, which already includes these fills.
         """
         position = starting_position
-        for order in sorted(orders, key=lambda o: o.last_trade_timestamp or o.timestamp):
-            if not order.filled:
+        for order, quantity in sorted(executions, key=lambda item: item[0].last_trade_timestamp or item[0].timestamp):
+            if quantity <= 0:
                 continue
             fill_price = order.average if order.average is not None else order.price
-            quantity = self._to_decimal(order.filled)
-            price = self._to_decimal(fill_price)
-            fee = self._to_decimal(self.fee_calculator.calculate_fee(order.filled * fill_price, order.liquidity))
+            d_quantity = self._to_decimal(quantity)
+            d_price = self._to_decimal(fill_price)
+            fee = self._to_decimal(self.fee_calculator.calculate_fee(quantity * fill_price, order.liquidity))
             if order.side == OrderSide.BUY:
-                self._ledger.record_buy(position, quantity, price, fee)
-                position += quantity
+                self._ledger.record_buy(position, d_quantity, d_price, fee)
+                position += d_quantity
             else:
-                self._ledger.record_sell(position, quantity, price, fee)
-                position -= quantity
+                self._ledger.record_sell(position, d_quantity, d_price, fee)
+                position -= d_quantity
+            self._total_fees = (self._total_fees + fee).quantize(_QUANTIZE_EXP)

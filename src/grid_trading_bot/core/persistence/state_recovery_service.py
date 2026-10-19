@@ -13,7 +13,7 @@ from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
-from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus
+from grid_trading_bot.core.order_handling.order import ENDED_UNFILLED_STATUSES, Order, OrderSide, OrderStatus
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.services.exceptions import DataFetchError, OrderNotFoundError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
@@ -127,14 +127,14 @@ class StateRecoveryService:
         self._restore_orders()
 
         # Step 4: Reconcile with exchange (updates statuses, completes grid states for filled orders)
-        reconcile_stats, filled_while_down = await self._reconcile_with_exchange()
+        reconcile_stats, filled_while_down, executions = await self._reconcile_with_exchange()
 
         # Step 5: Restore balance (recalculates reserved from confirmed-still-open orders)
         balance_source = await self._restore_balance()
 
         # Step 6: Restore cost basis, realized PnL and peak, then book the fills made while down
         try:
-            self._restore_accounting(filled_while_down)
+            self._restore_accounting(executions)
         except Exception as e:
             # Reporting-only state: losing it must not turn a good recovery into a fresh start.
             self.logger.error(f"Failed to restore cost basis and PnL, starting them over: {e}", exc_info=True)
@@ -233,16 +233,18 @@ class StateRecoveryService:
 
     # ── Step 4: Exchange Reconciliation ──────────────────────────────────
 
-    async def _reconcile_with_exchange(self) -> tuple[dict[str, int], list[tuple[Order, GridLevel]]]:
+    async def _reconcile_with_exchange(
+        self,
+    ) -> tuple[dict[str, int], list[tuple[Order, GridLevel]], list[tuple[Order, float]]]:
         stats = {"reconciled": 0, "orphans": 0, "ghosts": 0}
         filled_while_down: list[tuple[Order, GridLevel]] = []
+        executions: list[tuple[Order, float]] = []
         open_orders = self.order_book.get_open_orders()
 
         if not open_orders:
             self.logger.info("No open orders to reconcile.")
-            return stats, filled_while_down
+            return stats, filled_while_down, executions
 
-        # Check each locally open order against exchange
         for order in open_orders:
             try:
                 exchange_order = await self.order_execution_strategy.get_order(order.identifier, self.trading_pair)
@@ -250,40 +252,36 @@ class StateRecoveryService:
                 exchange_order = None
 
             if exchange_order is None:
-                # Order not found on exchange → mark as canceled (ghost)
                 self.logger.warning(f"Ghost order {order.identifier} not found on exchange. Marking as canceled.")
-                self.order_book.update_order_status(order.identifier, OrderStatus.CANCELED)
+                order.status = OrderStatus.CANCELED
+                self.order_book.remove_open_order(order)
                 self._release_grid_level(order)
+                executions.append((order, 0.0))
                 stats["ghosts"] += 1
                 stats["reconciled"] += 1
+                continue
 
-            elif exchange_order.status == OrderStatus.CLOSED:
+            newly_filled = order.apply_update(exchange_order)
+            if exchange_order.status == OrderStatus.CLOSED:
                 self.logger.info(f"Order {order.identifier} filled on exchange while bot was down.")
-                order.status = OrderStatus.CLOSED
-                order.filled = exchange_order.filled
-                order.remaining = exchange_order.remaining
-                order.average = exchange_order.average
-                order.cost = exchange_order.cost
-                order.last_trade_timestamp = exchange_order.last_trade_timestamp
                 self.order_book.remove_open_order(order)
-
-                # Complete grid level state transition for the filled order
                 grid_level = self.order_book.get_grid_level_for_order(order)
                 if grid_level:
                     self.grid_manager.complete_order(
                         grid_level, order.side, self.order_book.has_open_orders_at(grid_level)
                     )
                     filled_while_down.append((order, grid_level))
-
+                executions.append((order, newly_filled))
                 stats["reconciled"] += 1
-
-            elif exchange_order.status == OrderStatus.CANCELED:
-                self.logger.info(f"Order {order.identifier} was canceled on exchange while bot was down.")
-                self.order_book.update_order_status(order.identifier, OrderStatus.CANCELED)
+            elif exchange_order.status in ENDED_UNFILLED_STATUSES:
+                self.logger.info(f"Order {order.identifier} ended as {exchange_order.status.value} while bot was down.")
+                self.order_book.remove_open_order(order)
                 self._release_grid_level(order)
+                executions.append((order, newly_filled))
                 stats["reconciled"] += 1
-
-            # OPEN on exchange → keep as-is
+            elif newly_filled:
+                self.logger.info(f"Order {order.identifier} partly filled while bot was down: {order.filled}.")
+                executions.append((order, newly_filled))
 
         # Check for orphan orders on exchange not in our book
         try:
@@ -300,7 +298,7 @@ class StateRecoveryService:
         except Exception as e:
             self.logger.warning(f"Failed to fetch exchange open orders for orphan check: {e}")
 
-        return stats, filled_while_down
+        return stats, filled_while_down, executions
 
     # ── Step 5: Balance Restoration ──────────────────────────────────────
 
@@ -354,7 +352,7 @@ class StateRecoveryService:
         )
         return "exchange"
 
-    def _restore_accounting(self, filled_while_down: list[tuple[Order, GridLevel]]) -> None:
+    def _restore_accounting(self, executions: list[tuple[Order, float]]) -> None:
         saved_balance = self.repository.load_balance_state()
         if not saved_balance:
             return
@@ -364,11 +362,9 @@ class StateRecoveryService:
             realized_pnl=Decimal(saved_balance.get("realized_pnl") or "0"),
             peak_value=_optional_decimal(saved_balance.get("peak_value")),
         )
-        if filled_while_down:
+        if executions:
             starting_position = Decimal(saved_balance["crypto_balance"]) + Decimal(saved_balance["reserved_crypto"])
-            self.balance_tracker.replay_fills_on_cost_basis(
-                starting_position, [order for order, _ in filled_while_down]
-            )
+            self.balance_tracker.replay_fills_on_cost_basis(starting_position, executions)
 
     # ── Notification ─────────────────────────────────────────────────────
 

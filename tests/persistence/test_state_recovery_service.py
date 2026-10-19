@@ -454,7 +454,8 @@ class TestStateRecoveryService:
 
         assert result.recovered is True
         assert result.orders_reconciled >= 1
-        mock_order_book.update_order_status.assert_any_call("cancel-1", OrderStatus.CANCELED)
+        assert local_order.status == OrderStatus.CANCELED
+        mock_order_book.remove_open_order.assert_called_once_with(local_order)
         mock_grid_manager.rollback_order_placement.assert_called_once_with(gl, OrderSide.BUY, False)
 
     async def test_order_canceled_while_bot_down_on_stacked_level(
@@ -512,7 +513,8 @@ class TestStateRecoveryService:
         assert result.recovered is True
         assert result.ghost_orders_found == 1
         assert result.orders_reconciled >= 1
-        mock_order_book.update_order_status.assert_any_call("ghost-1", OrderStatus.CANCELED)
+        assert local_order.status == OrderStatus.CANCELED
+        mock_order_book.remove_open_order.assert_called_once_with(local_order)
         mock_grid_manager.rollback_order_placement.assert_called_once_with(gl, OrderSide.SELL, False)
 
     async def test_an_order_the_exchange_no_longer_knows_is_a_ghost(
@@ -1015,7 +1017,7 @@ class TestStateRecoveryService:
         await service.attempt_recovery()
 
         assert local_order.last_trade_timestamp == 1700000500
-        mock_balance_tracker.replay_fills_on_cost_basis.assert_called_once_with(Decimal("2.5"), [local_order])
+        mock_balance_tracker.replay_fills_on_cost_basis.assert_called_once_with(Decimal("2.5"), [(local_order, 1.0)])
 
 
 def _make_real_grid_manager() -> GridManager:
