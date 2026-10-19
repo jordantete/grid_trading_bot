@@ -7,6 +7,7 @@ from grid_trading_bot.core.order_handling.execution_strategy.order_execution_str
 )
 from grid_trading_bot.core.order_handling.order import Order, OrderStatus
 from grid_trading_bot.core.order_handling.order_book import OrderBook
+from grid_trading_bot.core.order_handling.order_update_handler import OrderUpdateHandler
 from grid_trading_bot.core.services.exceptions import DataFetchError
 
 
@@ -23,6 +24,7 @@ class OrderStatusTracker:
         order_book: OrderBook,
         order_execution_strategy: OrderExecutionStrategyInterface,
         event_bus: EventBus,
+        order_update_handler: OrderUpdateHandler,
         polling_interval: float = 15.0,
     ):
         """
@@ -32,11 +34,13 @@ class OrderStatusTracker:
             order_book: OrderBook instance to manage and query orders.
             order_execution_strategy: Strategy for querying order statuses from the exchange.
             event_bus: EventBus instance for publishing state change events.
+            order_update_handler: Receives the exchange's view of every filled order.
             polling_interval: Time interval (in seconds) between status checks.
         """
         self.order_book = order_book
         self.order_execution_strategy = order_execution_strategy
         self.event_bus = event_bus
+        self.order_update_handler = order_update_handler
         self.polling_interval = polling_interval
         self._monitoring_task = None
         self._active_tasks = set()
@@ -102,8 +106,7 @@ class OrderStatusTracker:
                 self.logger.error(f"Missing 'status' in remote order object: {remote_order}", exc_info=True)
                 raise ValueError("Order data from the exchange is missing the 'status' field.")
             elif remote_order.status == OrderStatus.CLOSED:
-                self.order_book.update_order_status(remote_order.identifier, OrderStatus.CLOSED)
-                await self.event_bus.publish(Events.ORDER_FILLED, remote_order)
+                await self.order_update_handler.apply_order_update(remote_order)
                 self.logger.info(f"Order {remote_order.identifier} filled.")
             elif remote_order.status == OrderStatus.CANCELED:
                 self.order_book.update_order_status(remote_order.identifier, OrderStatus.CANCELED)

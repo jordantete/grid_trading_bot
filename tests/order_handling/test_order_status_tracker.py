@@ -44,17 +44,16 @@ class TestOrderStatusTracker:
             )
 
     @pytest.mark.asyncio
-    async def test_handle_order_status_change_closed(self, setup_tracker):
-        tracker, order_book, _, event_bus = setup_tracker
+    async def test_handle_order_status_change_closed_hands_the_fill_over(self, setup_tracker):
+        tracker, order_book, _, _ = setup_tracker
         mock_remote_order = Mock(identifier="order_1", status=OrderStatus.CLOSED)
-        event_bus.publish = AsyncMock()
 
         with patch.object(tracker.logger, "info") as mock_logger_info:
             await tracker._handle_order_status_change(mock_remote_order)
 
-            order_book.update_order_status.assert_called_once_with("order_1", OrderStatus.CLOSED)
-            event_bus.publish.assert_awaited_once_with(Events.ORDER_FILLED, mock_remote_order)
-            mock_logger_info.assert_called_once_with("Order order_1 filled.")
+        tracker.order_update_handler.apply_order_update.assert_awaited_once_with(mock_remote_order)
+        order_book.update_order_status.assert_not_called()
+        mock_logger_info.assert_called_once_with("Order order_1 filled.")
 
     @pytest.mark.asyncio
     async def test_handle_order_status_change_canceled(self, setup_tracker):

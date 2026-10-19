@@ -29,6 +29,9 @@ class OrderStatus(Enum):
     UNKNOWN = "unknown"
 
 
+ENDED_UNFILLED_STATUSES = frozenset({OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED})
+
+
 class Order:
     def __init__(
         self,
@@ -81,6 +84,21 @@ class Order:
         order that crosses is filled as a taker.
         """
         return Liquidity.TAKER if self.order_type == OrderType.MARKET else Liquidity.MAKER
+
+    def apply_update(self, update: "Order") -> float:
+        """Takes the exchange's view of this order and returns the quantity filled since the previous view."""
+        filled = update.filled if update.filled is not None else self.filled
+        newly_filled = filled - self.filled
+        self.status = update.status
+        self.filled = filled
+        self.remaining = update.remaining if update.remaining is not None else self.amount - filled
+        self.average = update.average
+        self.cost = update.cost
+        self.fee = update.fee
+        self.trades = update.trades
+        self.last_trade_timestamp = update.last_trade_timestamp
+        self.timestamp = update.timestamp
+        return newly_filled
 
     def is_filled(self) -> bool:
         return self.status == OrderStatus.CLOSED

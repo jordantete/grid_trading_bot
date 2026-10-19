@@ -2,10 +2,13 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
+
+
+def _limit_order(identifier: str, side: OrderSide, price: float) -> Order:
+    return TestOrderSimulatorFillSequence._order(identifier, side, price)
 
 
 class TestOrderSimulator:
@@ -13,119 +16,47 @@ class TestOrderSimulator:
     def setup_order_simulator(self):
         order_book = Mock()
         grid_manager = Mock()
-        event_bus = Mock(spec=EventBus)
-        event_bus.publish = AsyncMock()
-
-        simulator = OrderSimulator(
-            order_book=order_book,
-            grid_manager=grid_manager,
-            event_bus=event_bus,
-        )
-        return simulator, order_book, grid_manager, event_bus
+        handler = Mock()
+        handler.apply_order_update = AsyncMock()
+        simulator = OrderSimulator(order_book=order_book, grid_manager=grid_manager, order_update_handler=handler)
+        return simulator, order_book, grid_manager, handler
 
     @pytest.mark.asyncio
-    async def test_simulate_order_fills_partial_fill(self, setup_order_simulator):
-        simulator, order_book, grid_manager, _ = setup_order_simulator
-        mock_order = Mock(
-            side=OrderSide.BUY,
-            price=48000,
-            amount=0.02,
-            filled=0.01,
-            remaining=0.01,
-            status=OrderStatus.OPEN,
-        )
-        order_book.get_open_orders.return_value = [mock_order]
-        grid_manager.sorted_buy_grids = [48000]
+    async def test_a_crossed_order_is_handed_over_filled_in_full(self, setup_order_simulator):
+        simulator, order_book, grid_manager, handler = setup_order_simulator
+        order = _limit_order("b48", OrderSide.BUY, 48000.0)
+        order_book.get_open_orders.return_value = [order]
+        grid_manager.sorted_buy_grids = [48000.0]
         grid_manager.sorted_sell_grids = []
 
         await simulator.simulate_order_fills(49000, 47000, 1234567890)
 
-        assert mock_order.filled == 0.02
-        assert mock_order.remaining == 0.0
-        assert mock_order.status == OrderStatus.CLOSED
+        fill = handler.apply_order_update.await_args.args[0]
+        assert fill is not order
+        assert (fill.identifier, fill.status, fill.filled, fill.remaining) == ("b48", OrderStatus.CLOSED, 1.0, 0.0)
+        assert (fill.timestamp, fill.last_trade_timestamp) == (1234567890, 1234567890)
+        assert order.status == OrderStatus.OPEN
 
     @pytest.mark.asyncio
-    async def test_simulate_fill(self, setup_order_simulator):
-        simulator, _, _, event_bus = setup_order_simulator
-        mock_order = Mock(
-            amount=1.0,
-            side=OrderSide.BUY,
-            price=50000,
-        )
-        timestamp = 1234567890
+    @pytest.mark.parametrize(("side", "factor"), [(OrderSide.BUY, 1.001), (OrderSide.SELL, 0.999)])
+    async def test_slippage_moves_the_fill_price_against_the_order(self, side, factor):
+        handler = Mock()
+        handler.apply_order_update = AsyncMock()
+        simulator = OrderSimulator(order_book=Mock(), grid_manager=Mock(), order_update_handler=handler, slippage=0.001)
 
-        await simulator.simulate_fill(mock_order, timestamp)
+        await simulator.simulate_fill(_limit_order("o1", side, 50000.0), 1234567890)
 
-        assert mock_order.filled == mock_order.amount
-        assert mock_order.remaining == 0.0
-        assert mock_order.status == OrderStatus.CLOSED
-        assert mock_order.last_trade_timestamp == timestamp
-        event_bus.publish.assert_awaited_with(Events.ORDER_FILLED, mock_order)
+        assert handler.apply_order_update.await_args.args[0].average == pytest.approx(50000.0 * factor)
 
     @pytest.mark.asyncio
-    async def test_simulate_fill_buy_with_slippage(self):
-        order_book = Mock()
-        grid_manager = Mock()
-        event_bus = Mock(spec=EventBus)
-        event_bus.publish = AsyncMock()
+    async def test_no_slippage_keeps_the_average(self, setup_order_simulator):
+        simulator, _, _, handler = setup_order_simulator
+        order = _limit_order("o1", OrderSide.BUY, 50000.0)
+        order.average = 50000.0
 
-        simulator = OrderSimulator(
-            order_book=order_book,
-            grid_manager=grid_manager,
-            event_bus=event_bus,
-            slippage=0.001,
-        )
-        mock_order = Mock(
-            amount=1.0,
-            side=OrderSide.BUY,
-            price=50000.0,
-        )
+        await simulator.simulate_fill(order, 1234567890)
 
-        await simulator.simulate_fill(mock_order, 1234567890)
-
-        assert mock_order.average == 50000.0 * 1.001
-        assert mock_order.filled == mock_order.amount
-        assert mock_order.status == OrderStatus.CLOSED
-
-    @pytest.mark.asyncio
-    async def test_simulate_fill_sell_with_slippage(self):
-        order_book = Mock()
-        grid_manager = Mock()
-        event_bus = Mock(spec=EventBus)
-        event_bus.publish = AsyncMock()
-
-        simulator = OrderSimulator(
-            order_book=order_book,
-            grid_manager=grid_manager,
-            event_bus=event_bus,
-            slippage=0.001,
-        )
-        mock_order = Mock(
-            amount=1.0,
-            side=OrderSide.SELL,
-            price=50000.0,
-        )
-
-        await simulator.simulate_fill(mock_order, 1234567890)
-
-        assert mock_order.average == 50000.0 * 0.999
-        assert mock_order.filled == mock_order.amount
-        assert mock_order.status == OrderStatus.CLOSED
-
-    @pytest.mark.asyncio
-    async def test_simulate_fill_no_slippage_by_default(self, setup_order_simulator):
-        simulator, _, _, _ = setup_order_simulator
-        mock_order = Mock(
-            amount=1.0,
-            side=OrderSide.BUY,
-            price=50000.0,
-            average=50000.0,
-        )
-
-        await simulator.simulate_fill(mock_order, 1234567890)
-
-        # average should not be reassigned when slippage is 0
-        assert mock_order.average == 50000.0
+        assert handler.apply_order_update.await_args.args[0].average == 50000.0
 
 
 class TestOrderSimulatorFillSequence:
@@ -154,14 +85,13 @@ class TestOrderSimulatorFillSequence:
         for order in orders:
             order_book.add_order(order, Mock())
         grid_manager = Mock(sorted_buy_grids=buy_grids, sorted_sell_grids=sell_grids)
-        event_bus = Mock(spec=EventBus)
-        event_bus.publish = AsyncMock()
-        simulator = OrderSimulator(order_book=order_book, grid_manager=grid_manager, event_bus=event_bus)
+        handler = Mock()
+        handler.apply_order_update = AsyncMock()
+        simulator = OrderSimulator(order_book=order_book, grid_manager=grid_manager, order_update_handler=handler)
 
         await simulator.simulate_order_fills(high, low, 1234567890)
 
-        assert all(call.args[0] == Events.ORDER_FILLED for call in event_bus.publish.call_args_list)
-        return [call.args[1].identifier for call in event_bus.publish.call_args_list]
+        return [call.args[0].identifier for call in handler.apply_order_update.await_args_list]
 
     @pytest.mark.asyncio
     async def test_buys_fill_from_highest_to_lowest(self):

@@ -1,13 +1,14 @@
+import copy
 from datetime import UTC, datetime
 import logging
 
 import pandas as pd
 
-from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 
 from .order import Order, OrderSide, OrderStatus
 from .order_book import OrderBook
+from .order_update_handler import OrderUpdateHandler
 
 
 class OrderSimulator:
@@ -17,13 +18,13 @@ class OrderSimulator:
         self,
         order_book: OrderBook,
         grid_manager: GridManager,
-        event_bus: EventBus,
+        order_update_handler: OrderUpdateHandler,
         slippage: float = 0.0,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.order_book = order_book
         self.grid_manager = grid_manager
-        self.event_bus = event_bus
+        self.order_update_handler = order_update_handler
         self.slippage = slippage
 
     async def simulate_order_fills(
@@ -62,32 +63,22 @@ class OrderSimulator:
         for order in [*crossed_buys, *crossed_sells]:
             await self.simulate_fill(order, timestamp_val)
 
-    async def simulate_fill(
-        self,
-        order: Order,
-        timestamp: int,
-    ) -> None:
-        """
-        Simulates filling an order by marking it as completed and publishing an event.
-
-        Args:
-            order: The order to simulate a fill for.
-            timestamp: The timestamp at which the order is filled.
-        """
-        order.filled = order.amount
-        order.remaining = 0.0
-        order.status = OrderStatus.CLOSED
+    async def simulate_fill(self, order: Order, timestamp: int) -> None:
+        """Hands the fill of a crossed order to the order manager, which applies it to the order."""
+        fill = copy.copy(order)
+        fill.filled = order.amount
+        fill.remaining = 0.0
+        fill.status = OrderStatus.CLOSED
         if self.slippage:
-            order.average = (
+            fill.average = (
                 order.price * (1 + self.slippage) if order.side == OrderSide.BUY else order.price * (1 - self.slippage)
             )
-        self.order_book.remove_open_order(order)
-        order.timestamp = timestamp
-        order.last_trade_timestamp = timestamp
+        fill.timestamp = timestamp
+        fill.last_trade_timestamp = timestamp
         timestamp_in_seconds = timestamp / 1000 if timestamp > 10**10 else timestamp
         formatted_timestamp = datetime.fromtimestamp(timestamp_in_seconds, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
         self.logger.info(
             f"Simulated fill for {order.side.value.upper()} order at price {order.price} "
             f"with amount {order.amount}. Filled at timestamp {formatted_timestamp}",
         )
-        await self.event_bus.publish(Events.ORDER_FILLED, order)
+        await self.order_update_handler.apply_order_update(fill)

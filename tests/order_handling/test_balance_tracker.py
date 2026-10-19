@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
 from grid_trading_bot.core.order_handling.order import Liquidity, Order, OrderSide, OrderStatus, OrderType
@@ -160,14 +160,14 @@ class TestBalanceTracker:
 
         buy_order = Mock(side=OrderSide.BUY, filled=1, price=100, average=None)
         balance_tracker._reserved_fiat = Decimal("105")  # Reserved fiat for the buy order (price + fee)
-        await balance_tracker._update_balance_on_order_completion(buy_order)
+        await balance_tracker.record_execution(buy_order, buy_order.filled)
         assert balance_tracker.crypto_balance == 6  # Crypto balance increases by 1
         assert balance_tracker.total_fees == 5  # Total fees reflect the buy order fee
         assert balance_tracker.reserved_fiat == 0  # Reserved fiat should be fully consumed
 
         sell_order = Mock(side=OrderSide.SELL, filled=1, price=200, average=None)
         balance_tracker._reserved_crypto = Decimal("1")  # Reserved crypto for the sell order
-        await balance_tracker._update_balance_on_order_completion(sell_order)
+        await balance_tracker.record_execution(sell_order, sell_order.filled)
         assert balance_tracker.total_fees == 10  # Total fees include the sell order fee
         assert balance_tracker.reserved_crypto == 0  # Reserved crypto should be fully consumed
         assert balance_tracker.balance == 1195  # Remaining balance after the sell order
@@ -183,13 +183,13 @@ class TestBalanceTracker:
 
         buy_order = Mock(side=OrderSide.BUY, filled=1, price=100, average=101.0)
         balance_tracker._reserved_fiat = Decimal("101")
-        await balance_tracker._update_balance_on_order_completion(buy_order)
+        await balance_tracker.record_execution(buy_order, buy_order.filled)
         assert balance_tracker.reserved_fiat == 0  # 101 consumed at the slipped price, not 100
         assert balance_tracker.crypto_balance == 6
 
         sell_order = Mock(side=OrderSide.SELL, filled=1, price=200, average=198.0)
         balance_tracker._reserved_crypto = Decimal("1")
-        await balance_tracker._update_balance_on_order_completion(sell_order)
+        await balance_tracker.record_execution(sell_order, sell_order.filled)
         assert balance_tracker.balance == 1198  # proceeds at 198, not 200
         assert balance_tracker.reserved_crypto == 0
 
@@ -199,12 +199,10 @@ class TestBalanceTracker:
         balance_tracker._crypto_balance = Decimal("5")
         assert balance_tracker.get_total_balance_value(price=200) == 2000
 
-    def test_event_subscription(self, setup_balance_tracker):
-        balance_tracker, _, event_bus = setup_balance_tracker
-        event_bus.subscribe.assert_called_once_with(
-            Events.ORDER_FILLED,
-            balance_tracker._update_balance_on_order_completion,
-        )
+    def test_the_tracker_subscribes_to_nothing(self, setup_balance_tracker):
+        _, _, event_bus = setup_balance_tracker
+
+        event_bus.subscribe.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_setup_balances_backtest(self, setup_balance_tracker):
@@ -367,6 +365,24 @@ def balance_tracker_with_crypto(balance_tracker):
     return balance_tracker
 
 
+class TestRecordExecution:
+    async def test_only_the_given_quantity_is_booked(self, balance_tracker):
+        await balance_tracker.reserve_funds_for_buy(100.0)
+        order = _make_order(OrderSide.BUY, average=100.0, filled=1.0, remaining=0.0, status=OrderStatus.CLOSED)
+
+        await balance_tracker.record_execution(order, 0.6)
+
+        assert balance_tracker.crypto_balance == pytest.approx(0.6)
+
+    async def test_an_open_order_keeps_the_reservation_of_its_remainder(self, balance_tracker):
+        await balance_tracker.reserve_funds_for_buy(100.0)
+        order = _make_order(OrderSide.BUY, average=100.0, filled=0.4, remaining=0.6, status=OrderStatus.OPEN)
+
+        await balance_tracker.record_execution(order, 0.4)
+
+        assert balance_tracker.reserved_fiat == pytest.approx(100.0 - 40.0 - 0.04)
+
+
 class TestSettleCancelledOrder:
     async def test_zero_fill_buy_releases_full_reservation(self, balance_tracker):
         initial_balance = balance_tracker.balance
@@ -457,7 +473,7 @@ class TestBalanceTrackerLiquidityAwareFees:
             average=100.0,
         )
 
-        await tracker._update_balance_on_order_completion(order)
+        await tracker.record_execution(order, order.filled)
 
         assert float(tracker.total_fees) == pytest.approx(100.0 * self.MAKER_RATE)
 
@@ -472,7 +488,7 @@ class TestBalanceTrackerLiquidityAwareFees:
             average=100.0,
         )
 
-        await tracker._update_balance_on_order_completion(order)
+        await tracker.record_execution(order, order.filled)
 
         assert float(tracker.total_fees) == pytest.approx(100.0 * self.TAKER_RATE)
 
@@ -487,7 +503,7 @@ class TestBalanceTrackerLiquidityAwareFees:
             average=200.0,
         )
 
-        await tracker._update_balance_on_order_completion(order)
+        await tracker.record_execution(order, order.filled)
 
         assert float(tracker.total_fees) == pytest.approx(200.0 * self.MAKER_RATE)
 
@@ -591,7 +607,7 @@ class TestAccountingIdentity:
                     remaining=quantity - filled,
                 )
                 if action == "buy":
-                    await bt._update_balance_on_order_completion(order)
+                    await bt.record_execution(order, order.filled)
                 else:
                     await bt.settle_cancelled_order(order)
             elif action in ("sell", "partial_sell") and bt.crypto_balance >= quantity:
@@ -606,7 +622,7 @@ class TestAccountingIdentity:
                     remaining=quantity - filled,
                 )
                 if action == "sell":
-                    await bt._update_balance_on_order_completion(order)
+                    await bt.record_execution(order, order.filled)
                 else:
                     await bt.settle_cancelled_order(order)
             snapshot = bt.snapshot(price)
@@ -690,7 +706,7 @@ class TestFillAccountingFixes:
             OrderSide.SELL, price=100.0, average=100.0, amount=1.5, filled=1.5, status=OrderStatus.CLOSED
         )
 
-        await bt._update_balance_on_order_completion(sell)
+        await bt.record_execution(sell, sell.filled)
 
         assert bt.reserved_crypto == 0.0
         assert bt.get_adjusted_crypto_balance() == pytest.approx(0.5)

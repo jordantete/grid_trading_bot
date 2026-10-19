@@ -4,7 +4,7 @@ from decimal import Decimal
 import logging
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
 from ..validation.exceptions import (
@@ -12,7 +12,7 @@ from ..validation.exceptions import (
     InsufficientCryptoBalanceError,
 )
 from .fee_calculator import FeeCalculator
-from .order import Liquidity, Order, OrderSide, OrderStatus
+from .order import ENDED_UNFILLED_STATUSES, Liquidity, Order, OrderSide, OrderStatus
 from .pnl_ledger import PnlLedger
 
 _QUANTIZE_EXP = Decimal("1e-8")
@@ -63,15 +63,9 @@ class BalanceTracker:
         self._peak_value: Decimal | None = None
         self._lock = asyncio.Lock()
 
-        self.event_bus.subscribe(Events.ORDER_FILLED, self._update_balance_on_order_completion)
-
     @staticmethod
     def _to_decimal(value: float | int | Decimal) -> Decimal:
         return Decimal(str(value))
-
-    def cleanup(self) -> None:
-        """Unsubscribes from all EventBus events."""
-        self.event_bus.unsubscribe(Events.ORDER_FILLED, self._update_balance_on_order_completion)
 
     @property
     def balance(self) -> float:
@@ -147,24 +141,23 @@ class BalanceTracker:
         )
         return quote_balance, base_balance
 
-    async def _update_balance_on_order_completion(self, order: Order) -> None:
+    async def record_execution(self, order: Order, filled_quantity: float) -> None:
         """
-        Updates the account balance and crypto balance when an order is filled.
-
-        This method is called when an `ORDER_FILLED` event is received. It determines
-        whether the filled order is a buy or sell order and updates the balances
-        accordingly.
-
-        Args:
-            order: The filled `Order` object containing details such as the side
-                (BUY/SELL), filled quantity, and price.
+        Books `filled_quantity` more of `order` at its fill price, then releases the reservation of the unfilled
+        remainder once the order ended without filling it.
         """
         async with self._lock:
             fill_price = order.average if order.average is not None else order.price
-            if order.side == OrderSide.BUY:
-                self._update_after_buy_order_filled(order.filled, fill_price, order.liquidity)
-            elif order.side == OrderSide.SELL:
-                self._update_after_sell_order_filled(order.filled, fill_price, order.liquidity)
+            if filled_quantity > 0:
+                if order.side == OrderSide.BUY:
+                    self._update_after_buy_order_filled(filled_quantity, fill_price, order.liquidity)
+                else:
+                    self._update_after_sell_order_filled(filled_quantity, fill_price, order.liquidity)
+            if order.status in ENDED_UNFILLED_STATUSES and order.remaining:
+                if order.side == OrderSide.BUY:
+                    self._release_fiat_unlocked(order.remaining * order.price)
+                else:
+                    self._release_crypto_unlocked(order.remaining)
 
     def _update_after_buy_order_filled(
         self,

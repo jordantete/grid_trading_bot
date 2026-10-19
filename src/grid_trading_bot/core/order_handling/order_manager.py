@@ -23,7 +23,7 @@ from .exceptions import GridFeasibilityError, OrderExecutionFailedError
 from .execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
-from .order import Order, OrderSide
+from .order import Order, OrderSide, OrderStatus
 from .state_store import ArmingFlags, StateStore
 
 
@@ -57,12 +57,10 @@ class OrderManager:
         self._lock = asyncio.Lock()
         self._positions_closed = False
         self._settled_cancellation_ids: set[str] = set()
-        self.event_bus.subscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.subscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
 
     def cleanup(self) -> None:
         """Unsubscribes from all EventBus events."""
-        self.event_bus.unsubscribe(Events.ORDER_FILLED, self._on_order_filled)
         self.event_bus.unsubscribe(Events.ORDER_CANCELLED, self._on_order_cancelled)
 
     def set_market_constraints(self, constraints: MarketConstraints) -> None:
@@ -396,50 +394,55 @@ class OrderManager:
             finally:
                 await self._save_state()
 
-    async def _on_order_filled(
-        self,
-        order: Order,
-    ) -> None:
+    async def apply_order_update(self, update: Order) -> None:
         """
-        Handles filled orders and places paired orders as needed.
-
-        Args:
-            order: The filled Order instance.
+        Applies the exchange's view of one order under the lock: books what it filled, moves its grid level, places
+        the paired order, then saves the state. The fill notification goes out once the lock is released.
         """
+        filled_order = None
         async with self._lock:
+            local = self.order_book.get_order(update.identifier)
+            if local is None or not local.is_open():
+                self.logger.info(f"Update for order {update.identifier}, which is not open locally; ignoring it.")
+                return
             try:
-                if self._positions_closed:
-                    self.logger.info(
-                        f"Positions already closed; ignoring fill for order {order.identifier}.",
-                    )
-                    return
-                try:
-                    grid_level = self.order_book.get_grid_level_for_order(order)
-
-                    if not grid_level:
-                        self.logger.error(
-                            "Could not handle Order completion - No grid level found for the given filled order "
-                            f"{order}",
-                        )
-                        return
-
-                    await self._handle_order_completion(order, grid_level)
-
-                except OrderExecutionFailedError as e:
-                    self.logger.error(f"Failed while handling filled order - {e!s}", exc_info=True)
-                    await self.notification_handler.async_send_notification(
-                        NotificationType.ORDER_FAILED,
-                        error_details=f"Failed handling filled order. {e}",
-                    )
-
-                except (DataFetchError, ValueError) as e:
-                    self.logger.error(f"Error while handling filled order {order.identifier}: {e}", exc_info=True)
-                    await self.notification_handler.async_send_notification(
-                        NotificationType.ORDER_FAILED,
-                        error_details=f"Failed handling filled order. {e}",
-                    )
+                if update.status == OrderStatus.CLOSED:
+                    await self._settle_fill(local, update)
+                    filled_order = local
+                else:
+                    self.logger.info(f"Order {update.identifier} reported as {update.status.value}; nothing to apply.")
             finally:
                 await self._save_state()
+        if filled_order is not None:
+            await self.notification_handler.async_send_notification(
+                NotificationType.ORDER_FILLED, order_details=str(filled_order)
+            )
+
+    async def _settle_fill(self, local: Order, update: Order) -> None:
+        newly_filled = local.apply_update(update)
+        self.order_book.remove_open_order(local)
+        await self.balance_tracker.record_execution(local, newly_filled)
+        if self._positions_closed:
+            self.logger.info(f"Positions already closed; fill of {local.identifier} booked without a paired order.")
+            return
+        grid_level = self.order_book.get_grid_level_for_order(local)
+        if grid_level is None:
+            self.logger.error(f"Filled order {local.identifier} has no grid level; no paired order placed.")
+            return
+        try:
+            await self._handle_order_completion(local, grid_level)
+        except OrderExecutionFailedError as e:
+            self.logger.error(f"Failed while handling filled order - {e!s}", exc_info=True)
+            await self.notification_handler.async_send_notification(
+                NotificationType.ORDER_FAILED,
+                error_details=f"Failed handling filled order. {e}",
+            )
+        except (DataFetchError, ValueError) as e:
+            self.logger.error(f"Error while handling filled order {local.identifier}: {e}", exc_info=True)
+            await self.notification_handler.async_send_notification(
+                NotificationType.ORDER_FAILED,
+                error_details=f"Failed handling filled order. {e}",
+            )
 
     async def _handle_order_completion(
         self,

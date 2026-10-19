@@ -6,8 +6,7 @@ import string
 import apprise
 
 from grid_trading_bot.config.trading_mode import TradingMode
-from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
-from grid_trading_bot.core.order_handling.order import Order
+from grid_trading_bot.core.bot_management.event_bus import EventBus
 
 from .notification_content import NotificationType
 
@@ -35,15 +34,8 @@ class NotificationHandler:
         self.apprise_instance = apprise.Apprise() if self.enabled else None
 
         if self.enabled and urls is not None:
-            self.event_bus.subscribe(Events.ORDER_FILLED, self._send_notification_on_order_filled)
-
             for url in urls:
                 self.apprise_instance.add(url)
-
-    def cleanup(self) -> None:
-        """Unsubscribes from all EventBus events."""
-        if self.enabled:
-            self.event_bus.unsubscribe(Events.ORDER_FILLED, self._send_notification_on_order_filled)
 
     _formatter = string.Formatter()
 
@@ -82,6 +74,8 @@ class NotificationHandler:
         content: NotificationType | str,
         **kwargs,
     ) -> None:
+        if not self.enabled:
+            return
         async with self.lock:
             loop = asyncio.get_running_loop()
             try:
@@ -91,6 +85,3 @@ class NotificationHandler:
                 )
             except (TimeoutError, OSError, RuntimeError) as e:
                 self.logger.error(f"Failed to send notification: {e!s}")
-
-    async def _send_notification_on_order_filled(self, order: Order) -> None:
-        await self.async_send_notification(NotificationType.ORDER_FILLED, order_details=str(order))

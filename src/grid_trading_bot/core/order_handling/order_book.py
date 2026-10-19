@@ -47,6 +47,9 @@ class OrderBook:
     def get_all_sell_orders(self) -> list[Order]:
         return self.sell_orders
 
+    def get_order(self, identifier: str) -> Order | None:
+        return self._orders_by_id.get(identifier)
+
     def get_open_orders(self) -> list[Order]:
         return list(self._open_orders)
 

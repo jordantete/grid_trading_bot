@@ -13,33 +13,33 @@ class TestEventBus:
 
     def test_subscribe(self, event_bus):
         callback = Mock()
-        event_bus.subscribe(Events.ORDER_FILLED, callback)
-        assert Events.ORDER_FILLED in event_bus.subscribers
-        assert callback in event_bus.subscribers[Events.ORDER_FILLED]
+        event_bus.subscribe(Events.STOP_BOT, callback)
+        assert Events.STOP_BOT in event_bus.subscribers
+        assert callback in event_bus.subscribers[Events.STOP_BOT]
 
     @pytest.mark.asyncio
     async def test_publish_async_single_callback(self, event_bus):
         async_callback = AsyncMock()
-        event_bus.subscribe(Events.ORDER_FILLED, async_callback)
-        await event_bus.publish(Events.ORDER_FILLED, {"data": "test"})
+        event_bus.subscribe(Events.STOP_BOT, async_callback)
+        await event_bus.publish(Events.STOP_BOT, {"data": "test"})
         async_callback.assert_awaited_once_with({"data": "test"})
 
     @pytest.mark.asyncio
     async def test_publish_async_multiple_callbacks(self, event_bus):
         async_callback_1 = AsyncMock()
         async_callback_2 = AsyncMock()
-        event_bus.subscribe(Events.ORDER_FILLED, async_callback_1)
-        event_bus.subscribe(Events.ORDER_FILLED, async_callback_2)
-        await event_bus.publish(Events.ORDER_FILLED, {"data": "test"})
+        event_bus.subscribe(Events.STOP_BOT, async_callback_1)
+        event_bus.subscribe(Events.STOP_BOT, async_callback_2)
+        await event_bus.publish(Events.STOP_BOT, {"data": "test"})
         async_callback_1.assert_awaited_once_with({"data": "test"})
         async_callback_2.assert_awaited_once_with({"data": "test"})
 
     @pytest.mark.asyncio
     async def test_publish_async_with_exception(self, event_bus, caplog):
         failing_callback = AsyncMock(side_effect=Exception("Test Error"))
-        event_bus.subscribe(Events.ORDER_FILLED, failing_callback)
+        event_bus.subscribe(Events.STOP_BOT, failing_callback)
 
-        await event_bus.publish(Events.ORDER_FILLED, {"data": "test"})
+        await event_bus.publish(Events.STOP_BOT, {"data": "test"})
 
         assert "Exception in async event callback" in caplog.text
         assert "Test Error" in caplog.text
@@ -70,8 +70,8 @@ class TestEventBus:
 
     def test_publish_sync(self, event_bus):
         sync_callback = Mock()
-        event_bus.subscribe(Events.ORDER_FILLED, sync_callback)
-        event_bus.publish_sync(Events.ORDER_FILLED, {"data": "test"})
+        event_bus.subscribe(Events.STOP_BOT, sync_callback)
+        event_bus.publish_sync(Events.STOP_BOT, {"data": "test"})
         sync_callback.assert_called_once_with({"data": "test"})
 
     @pytest.mark.asyncio

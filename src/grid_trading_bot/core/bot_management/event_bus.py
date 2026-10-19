@@ -10,7 +10,6 @@ class Events:
     Defines event types for the EventBus.
     """
 
-    ORDER_FILLED = "order_filled"
     ORDER_CANCELLED = "order_cancelled"
     STOP_BOT = "stop_bot"
 

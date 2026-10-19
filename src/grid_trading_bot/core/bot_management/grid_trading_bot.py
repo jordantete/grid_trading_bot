@@ -108,20 +108,6 @@ class GridTradingBot:
             order_book = OrderBook()
             self.order_book = order_book
 
-            self.order_status_tracker = OrderStatusTracker(
-                order_book=order_book,
-                order_execution_strategy=order_execution_strategy,
-                event_bus=self.event_bus,
-                polling_interval=self.config_manager.get_order_polling_interval(),
-            )
-
-            order_simulator = OrderSimulator(
-                order_book=order_book,
-                grid_manager=grid_manager,
-                event_bus=self.event_bus,
-                slippage=self.config_manager.get_backtest_slippage(),
-            )
-
             self.reconciliation_service = None
             if self.trading_mode == TradingMode.LIVE:
                 self.reconciliation_service = ReconciliationService(
@@ -179,6 +165,21 @@ class GridTradingBot:
                 self.trading_mode,
                 trading_pair,
                 state_store=self.state_persistence_service,
+            )
+
+            self.order_status_tracker = OrderStatusTracker(
+                order_book=order_book,
+                order_execution_strategy=order_execution_strategy,
+                event_bus=self.event_bus,
+                order_update_handler=self.order_manager,
+                polling_interval=self.config_manager.get_order_polling_interval(),
+            )
+
+            order_simulator = OrderSimulator(
+                order_book=order_book,
+                grid_manager=grid_manager,
+                order_update_handler=self.order_manager,
+                slippage=self.config_manager.get_backtest_slippage(),
             )
 
             trading_performance_analyzer = TradingPerformanceAnalyzer(self.config_manager, order_book)
@@ -445,10 +446,8 @@ class GridTradingBot:
         """Unsubscribes all components from EventBus events."""
         self.event_bus.unsubscribe(Events.STOP_BOT, self._handle_stop_bot_event)
         self.order_manager.cleanup()
-        self.balance_tracker.cleanup()
         if self.reconciliation_service:
             self.reconciliation_service.cleanup()
-        self.notification_handler.cleanup()
 
     def _generate_and_log_performance(self) -> dict[str, Any] | None:
         metrics, performance_summary, formatted_orders = self.strategy.generate_performance_report()

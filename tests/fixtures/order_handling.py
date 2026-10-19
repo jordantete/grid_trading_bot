@@ -25,6 +25,7 @@ def setup_order_manager():
     balance_tracker.settle_cancelled_order = AsyncMock()
     balance_tracker.update_after_initial_purchase = AsyncMock()
     balance_tracker.update_after_liquidation = AsyncMock()
+    balance_tracker.record_execution = AsyncMock()
     order_book = Mock()
     order_book.has_open_orders_at.return_value = False
     event_bus = Mock(spec=EventBus)
@@ -60,10 +61,13 @@ def setup_tracker():
     order_book = Mock()
     order_execution_strategy = Mock()
     event_bus = Mock()
+    order_update_handler = Mock()
+    order_update_handler.apply_order_update = AsyncMock()
     tracker = OrderStatusTracker(
         order_book=order_book,
         order_execution_strategy=order_execution_strategy,
         event_bus=event_bus,
+        order_update_handler=order_update_handler,
         polling_interval=1.0,
     )
     return tracker, order_book, order_execution_strategy, event_bus
