@@ -22,6 +22,17 @@ from grid_trading_bot.strategies.plotter import Plotter
 from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
 
 
+def _order_manager_regrid(rebuilt=True):
+    """Stands in for OrderManager.regrid: runs the rebuild only when the cancellation would have succeeded."""
+
+    async def regrid(_center_price, rebuild):
+        if rebuilt:
+            rebuild()
+        return rebuilt
+
+    return AsyncMock(side_effect=regrid)
+
+
 @pytest.fixture
 def strategy_fixture():
     """
@@ -666,16 +677,15 @@ class TestTrailingStopOrchestration:
         s.config_manager.get_trailing_on_trigger.return_value = "regrid"
         s.config_manager.is_dynamic_spacing_enabled.return_value = True
         s.balance_tracker.crypto_balance = 1.0
-        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        s.order_manager.regrid = _order_manager_regrid()
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
         s.trailing_stop.update(close=100.0, atr=5.0)  # stop = 95
 
         stopped = await s._handle_trailing_stop(current_price=94.0, atr=5.0)
 
         assert stopped is False
-        s.order_manager.cancel_open_grid_orders.assert_awaited_once()
+        assert s.order_manager.regrid.await_args.args[0] == 94.0
         s.grid_manager.regrid.assert_called_once_with(94.0, 5.0)
-        s.order_manager.initialize_grid_orders.assert_awaited_once_with(94.0)
         assert s.trailing_stop.stop_price is None  # reset after regrid
 
     async def test_no_trailing_check_without_crypto(self, strategy_fixture):
@@ -709,14 +719,14 @@ class TestTrailingStopOrchestration:
         s.config_manager.is_trailing_stop_loss_enabled.return_value = True
         s.config_manager.get_trailing_on_trigger.return_value = "regrid"
         s.balance_tracker.crypto_balance = 1.0
-        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        s.order_manager.regrid = AsyncMock()
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
         s.trailing_stop.stop_price = 95.0  # restored from persisted state
 
         stopped = await s._handle_trailing_stop(current_price=94.0, atr=float("nan"))
 
         assert stopped is False
-        s.order_manager.cancel_open_grid_orders.assert_not_awaited()
+        s.order_manager.regrid.assert_not_awaited()
         s.grid_manager.regrid.assert_not_called()
         assert s.trailing_stop.stop_price == 95.0  # restored protection preserved
 
@@ -726,7 +736,7 @@ class TestTrailingStopOrchestration:
         s.config_manager.is_trailing_stop_loss_enabled.return_value = True
         s.config_manager.get_trailing_on_trigger.return_value = "regrid"
         s.balance_tracker.crypto_balance = 1.0
-        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=False)
+        s.order_manager.regrid = _order_manager_regrid(rebuilt=False)
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
         s.trailing_stop.update(close=100.0, atr=5.0)  # stop = 95
 
@@ -734,8 +744,6 @@ class TestTrailingStopOrchestration:
 
         assert stopped is False
         s.grid_manager.regrid.assert_not_called()
-        # cancelled-but-not-regridded orders re-placed on the existing grid
-        s.order_manager.initialize_grid_orders.assert_awaited_once_with(94.0)
         assert s.trailing_stop.stop_price == 95.0  # ratchet preserved, protection not discarded
 
 
@@ -830,7 +838,7 @@ class TestVolatilityRegrid:
         s.config_manager.get_regrid_threshold.return_value = 0.3
         s.config_manager.get_cooldown_bars.return_value = 5
         s.grid_manager.is_initialized = True
-        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=True)
+        s.order_manager.regrid = _order_manager_regrid()
 
     async def test_first_atr_sets_baseline_without_regrid(self, strategy_fixture):
         s = strategy_fixture
@@ -850,7 +858,7 @@ class TestVolatilityRegrid:
 
         await s._maybe_regrid_on_volatility(current_price=100.0, atr=3.0)  # |3/2 - 1| = 0.5 > 0.3
 
-        s.order_manager.cancel_open_grid_orders.assert_awaited_once()
+        s.order_manager.regrid.assert_awaited_once()
         s.grid_manager.regrid.assert_called_once_with(100.0, 3.0)
 
     async def test_no_regrid_during_cooldown(self, strategy_fixture):
@@ -878,13 +886,11 @@ class TestVolatilityRegrid:
         self._setup_dynamic(s)
         s.grid_manager.atr_grid = 2.0
         s._bars_since_regrid = 10
-        s.order_manager.cancel_open_grid_orders = AsyncMock(return_value=False)
+        s.order_manager.regrid = _order_manager_regrid(rebuilt=False)
 
         await s._maybe_regrid_on_volatility(current_price=100.0, atr=3.0)
 
         s.grid_manager.regrid.assert_not_called()
-        # cancelled-but-not-regridded orders are re-placed at original levels
-        s.order_manager.initialize_grid_orders.assert_awaited_once_with(100.0)
         assert s._bars_since_regrid == 0  # failed attempt restarts cooldown
 
 

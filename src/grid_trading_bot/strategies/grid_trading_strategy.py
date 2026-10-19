@@ -512,8 +512,8 @@ class GridTradingStrategy(TradingStrategyInterface):
 
     async def _execute_regrid(self, center_price: float, atr: float) -> bool:
         """
-        Cancels open grid orders and rebuilds the grid around center_price with the given ATR.
-        Falls back to re-placing orders on the existing grid if cancellation or regrid fails.
+        Rebuilds the grid around center_price with the given ATR through OrderManager.regrid, which cancels and
+        re-places the orders under one lock.
 
         Returns:
             bool: True only when the grid was rebuilt and orders re-placed on the NEW grid;
@@ -522,22 +522,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         if math.isnan(atr) or atr <= 0:
             return False
 
-        cancelled = await self.order_manager.cancel_open_grid_orders()
         self._bars_since_regrid = 0
-        if not cancelled:
-            self.logger.warning("Regrid aborted: could not cancel all open orders. Re-placing cancelled ones.")
-            await self.order_manager.initialize_grid_orders(center_price)
-            return False
-
-        try:
-            self.grid_manager.regrid(center_price, atr)
-        except ValueError as e:
-            self.logger.warning(f"Regrid rejected ({e}). Re-placing orders on the existing grid.")
-            await self.order_manager.initialize_grid_orders(center_price)
-            return False
-
-        await self.order_manager.initialize_grid_orders(center_price)
-        return True
+        return await self.order_manager.regrid(center_price, lambda: self.grid_manager.regrid(center_price, atr))
 
     def export_strategy_state(self) -> dict:
         """

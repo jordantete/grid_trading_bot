@@ -1519,3 +1519,54 @@ class TestStateSaves:
         await manager.checkpoint()
 
         assert not manager._lock.locked()
+
+
+class TestRegrid:
+    @pytest.fixture
+    def steps(self, manager_with_store):
+        manager, _store, _ = manager_with_store
+        recorded = []
+
+        async def cancel():
+            recorded.append(("cancel", manager._lock.locked()))
+            return manager.cancel_succeeds
+
+        async def place(price):
+            recorded.append((f"place {price}", manager._lock.locked()))
+
+        manager.cancel_succeeds = True
+        manager._cancel_open_grid_orders = cancel
+        manager._place_initial_orders = place
+        return recorded
+
+    async def test_a_regrid_cancels_rebuilds_and_places_under_one_lock_and_saves_once(self, manager_with_store, steps):
+        manager, store, _ = manager_with_store
+
+        rebuilt = await manager.regrid(100.0, lambda: steps.append(("rebuild", manager._lock.locked())))
+
+        assert rebuilt is True
+        assert steps == [("cancel", True), ("rebuild", True), ("place 100.0", True)]
+        assert len(store.saves) == 1
+
+    async def test_a_failed_cancellation_replaces_on_the_current_grid(self, manager_with_store, steps):
+        manager, store, _ = manager_with_store
+        manager.cancel_succeeds = False
+
+        rebuilt = await manager.regrid(100.0, lambda: steps.append(("rebuild", True)))
+
+        assert rebuilt is False
+        assert steps == [("cancel", True), ("place 100.0", True)]
+        assert len(store.saves) == 1
+
+    async def test_a_rejected_rebuild_replaces_on_the_existing_grid(self, manager_with_store, steps):
+        manager, store, _ = manager_with_store
+
+        def rejected_rebuild():
+            steps.append(("rebuild", True))
+            raise ValueError("Regrid would produce non-positive bottom price")
+
+        rebuilt = await manager.regrid(100.0, rejected_rebuild)
+
+        assert rebuilt is False
+        assert steps == [("cancel", True), ("rebuild", True), ("place 100.0", True)]
+        assert len(store.saves) == 1

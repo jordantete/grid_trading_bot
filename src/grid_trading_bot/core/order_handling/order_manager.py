@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 import logging
 
@@ -146,6 +147,29 @@ class OrderManager:
         async with self._lock:
             try:
                 return await self._cancel_open_grid_orders()
+            finally:
+                await self._save_state()
+
+    async def regrid(self, center_price: float, rebuild: Callable[[], None]) -> bool:
+        """
+        Cancels the open grid orders, rebuilds the geometry with `rebuild`, then places the orders the strategy plans
+        at center_price, under one lock and with one save, so no saved state shows the grid half rebuilt. A failed
+        cancellation or a rejected rebuild (ValueError) re-places orders on the current grid and returns False.
+        """
+        async with self._lock:
+            try:
+                if not await self._cancel_open_grid_orders():
+                    self.logger.warning("Regrid aborted: could not cancel all open orders. Re-placing cancelled ones.")
+                    await self._place_initial_orders(center_price)
+                    return False
+                try:
+                    rebuild()
+                except ValueError as e:
+                    self.logger.warning(f"Regrid rejected ({e}). Re-placing orders on the existing grid.")
+                    await self._place_initial_orders(center_price)
+                    return False
+                await self._place_initial_orders(center_price)
+                return True
             finally:
                 await self._save_state()
 
