@@ -43,11 +43,19 @@ def _move(data: dict, asset: str, amount: float, from_key: str, to_key: str) -> 
     data["balances"][asset][to_key] += amount
 
 
-def _open(data: dict, order_type: str, side: str, amount: float, price: float) -> dict:
+def _open(
+    data: dict,
+    order_type: str,
+    side: str,
+    amount: float,
+    price: float,
+    client_order_id: str | None = None,
+) -> dict:
     order_id = str(data["next_id"])
     data["next_id"] += 1
     order = {
         "id": order_id,
+        "clientOrderId": client_order_id,
         "status": "open",
         "type": order_type,
         "side": side,
@@ -252,20 +260,32 @@ class FakeExchange:
         return {"last": data["price"]}
 
     async def create_order(self, pair, order_type, side, amount, price=None, params=None):
+        client_order_id = (params or {}).get("clientOrderId")
         delay = self._state.read()["order_delay"]
         if delay:
             await asyncio.sleep(delay)
         order = self._state.update(
             lambda data: _open(
-                data, order_type, side, float(amount), float(price) if price is not None else data["price"]
+                data,
+                order_type,
+                side,
+                float(amount),
+                float(price) if price is not None else data["price"],
+                client_order_id,
             )
         )
-        self._record("create_order", id=order["id"], type=order_type, side=side)
+        self._record("create_order", id=order["id"], type=order_type, side=side, client_order_id=client_order_id)
         return dict(order)
 
-    async def fetch_order(self, order_id, _pair):
+    async def fetch_order(self, order_id, _pair, params=None):
         data = self._state.read()
         self._raise_if_failing(data, "fetch_order")
+        client_order_id = (params or {}).get("clientOrderId")
+        if order_id is None and client_order_id is not None:
+            for order in data["orders"].values():
+                if order["clientOrderId"] == client_order_id:
+                    return dict(order)
+            raise ccxt.OrderNotFound(f"fake exchange: no order with client order id {client_order_id}")
         if order_id not in data["orders"]:
             raise ccxt.OrderNotFound(f"fake exchange: order {order_id} does not exist")
         return dict(data["orders"][order_id])

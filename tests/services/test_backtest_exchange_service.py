@@ -203,3 +203,16 @@ class TestBacktestExchangeService:
         service = BacktestExchangeService(config_manager)
 
         await service.close()
+
+    @pytest.mark.asyncio
+    async def test_fetch_order_by_client_id_not_implemented(self, config_manager):
+        service = BacktestExchangeService(config_manager)
+
+        with pytest.raises(NotImplementedError, match="fetch_order_by_client_id is not used in backtesting"):
+            await service.fetch_order_by_client_id("g1", "BTC/USD")
+
+    def test_rounding_keeps_the_values(self, config_manager):
+        service = BacktestExchangeService(config_manager)
+
+        assert service.round_amount("BTC/USD", 0.123456789) == 0.123456789
+        assert service.round_price("BTC/USD", 100.4567) == 100.4567

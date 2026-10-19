@@ -174,8 +174,18 @@ class BacktestExchangeService(ExchangeInterface):
         order_type: str,
         amount: float,
         price: float | None = None,
+        client_order_id: str | None = None,
     ) -> dict[str, str | float]:
         raise NotImplementedError("place_order is not used in backtesting")
+
+    async def fetch_order_by_client_id(self, client_order_id: str, pair: str) -> dict[str, str | float]:
+        raise NotImplementedError("fetch_order_by_client_id is not used in backtesting")
+
+    def round_amount(self, pair: str, amount: float) -> float:
+        return amount
+
+    def round_price(self, pair: str, price: float) -> float:
+        return price
 
     async def get_balance(self) -> dict[str, Any]:
         raise NotImplementedError("get_balance is not used in backtesting")

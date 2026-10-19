@@ -18,6 +18,7 @@ class ExchangeInterface(ABC):
         order_type: str,
         amount: float,
         price: float | None = None,
+        client_order_id: str | None = None,
     ) -> dict[str, str | float]:
         """Places an order, returning a dictionary with order details including id and status.
 
@@ -27,7 +28,23 @@ class ExchangeInterface(ABC):
             order_type: Order type as expected by CCXT — "market" or "limit".
             amount: Order quantity in base currency.
             price: Limit price in quote currency. Required for limit orders, None for market orders.
+            client_order_id: Id the exchange stores with the order, so an order whose answer was lost can be found.
         """
+        pass
+
+    @abstractmethod
+    async def fetch_order_by_client_id(self, client_order_id: str, pair: str) -> dict[str, str | float]:
+        """Fetches the order placed under `client_order_id`; raises OrderNotFoundError when there is none."""
+        pass
+
+    @abstractmethod
+    def round_amount(self, pair: str, amount: float) -> float:
+        """`amount` at the exchange's precision for `pair`."""
+        pass
+
+    @abstractmethod
+    def round_price(self, pair: str, price: float) -> float:
+        """`price` at the exchange's precision for `pair`."""
         pass
 
     @abstractmethod

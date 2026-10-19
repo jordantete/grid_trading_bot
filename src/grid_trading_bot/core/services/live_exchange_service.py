@@ -7,8 +7,11 @@ import time
 from typing import Any
 
 from ccxt.base.errors import (
+    BadRequest,
     BaseError,
+    DuplicateOrderId,
     ExchangeError,
+    InsufficientFunds,
     InvalidOrder,
     NetworkError,
     OrderImmediatelyFillable,
@@ -26,6 +29,9 @@ from .exceptions import (
     MissingEnvironmentVariableError,
     OrderCancellationError,
     OrderNotFoundError,
+    OrderNotPlacedError,
+    OrderOutcomeUnknownError,
+    OrderRejectedError,
     PostOnlyRejectedError,
     UnsupportedExchangeError,
 )
@@ -76,9 +82,9 @@ class LiveExchangeService(ExchangeInterface):
             failure_threshold=self.config_manager.get_circuit_breaker_failure_threshold(),
             recovery_timeout=self.config_manager.get_circuit_breaker_recovery_timeout(),
             half_open_max_calls=self.config_manager.get_circuit_breaker_half_open_max_calls(),
-            # A maker-only rejection or an order the exchange no longer knows is a normal answer, not an
-            # exchange fault, so a run of them must never open the breaker.
-            benign_exceptions=(PostOnlyRejectedError, OrderNotFound),
+            # A refused order, an order the exchange no longer knows and a client id it already holds are normal
+            # answers, not exchange faults, so a run of them must never open the breaker.
+            benign_exceptions=(OrderRejectedError, OrderNotFound, DuplicateOrderId),
         )
         self._last_known_price: float | None = None
         self._max_price_deviation: float = 0.50
@@ -314,7 +320,7 @@ class LiveExchangeService(ExchangeInterface):
             min_cost=(limits.get("cost") or {}).get("min"),
         )
 
-    def _order_params(self, order_type: str) -> dict[str, Any]:
+    def _order_params(self, order_type: str, client_order_id: str | None = None) -> dict[str, Any]:
         """
         Builds the exchange-specific params for an order.
 
@@ -323,11 +329,23 @@ class LiveExchangeService(ExchangeInterface):
         enabled the exchange rejects a limit order that would cross instead of filling it
         as a taker; that rejection surfaces as `PostOnlyRejectedError` and leaves the grid
         level untouched for a later cycle rather than counting as a failed placement.
+        `clientOrderId` lets the bot find the order again when the answer to the placement is lost.
         """
         params: dict[str, Any] = {}
         if self.post_only and order_type.lower() == "limit":
             params["postOnly"] = True
+        if client_order_id is not None:
+            params["clientOrderId"] = client_order_id
         return params
+
+    def round_amount(self, pair: str, amount: float) -> float:
+        try:
+            return float(self.exchange.amount_to_precision(pair, amount))
+        except InvalidOrder as e:
+            raise OrderRejectedError(f"Amount {amount} is under the precision of {pair}: {e!s}") from e
+
+    def round_price(self, pair: str, price: float) -> float:
+        return float(self.exchange.price_to_precision(pair, price))
 
     async def place_order(
         self,
@@ -336,37 +354,51 @@ class LiveExchangeService(ExchangeInterface):
         order_side: str,
         amount: float,
         price: float | None = None,
+        client_order_id: str | None = None,
     ) -> dict[str, str | float]:
+        """
+        Sends one order. Raises `PostOnlyRejectedError` or `OrderRejectedError` when the exchange refuses it,
+        `OrderNotPlacedError` when it surely was not placed (breaker open, an error answer) and
+        `OrderOutcomeUnknownError` when it may have been (network error, a client id the exchange already holds).
+        """
         try:
-            precise_amount = float(self.exchange.amount_to_precision(pair, amount))
-            precise_price = float(self.exchange.price_to_precision(pair, price)) if price is not None else None
-            params = self._order_params(order_type)
+            precise_amount = self.round_amount(pair, amount)
+            precise_price = self.round_price(pair, price) if price is not None else None
+            params = self._order_params(order_type, client_order_id)
 
             async def create_order() -> dict[str, str | float]:
-                # The rejection is translated inside the breaker's callable so the breaker
-                # sees PostOnlyRejectedError — one of its benign types — rather than the raw
-                # ccxt error it would otherwise count as a failure.
+                # Refusals are translated inside the breaker's callable so the breaker sees its benign types
+                # rather than the raw ccxt errors it would otherwise count as failures.
                 try:
                     return await self.exchange.create_order(
                         pair, order_type, order_side, precise_amount, precise_price, params=params
                     )
+                except (DuplicateOrderId, OrderNotFound):
+                    raise
                 except BaseError as e:
                     if self.post_only and _is_post_only_rejection(e):
                         raise PostOnlyRejectedError(
                             f"Maker-only {order_side} order on {pair} at {precise_price} would have crossed: {e!s}",
                         ) from e
+                    if isinstance(e, InsufficientFunds | InvalidOrder | BadRequest):
+                        raise OrderRejectedError(f"The exchange refused the {order_side} order on {pair}: {e!s}") from e
                     raise
 
             return await self.circuit_breaker.call(create_order)
 
         except CircuitBreakerOpenError as e:
-            raise DataFetchError(f"Circuit breaker open: {e!s}") from e
+            raise OrderNotPlacedError(f"Circuit breaker open: {e!s}") from e
+
+        except DuplicateOrderId as e:
+            raise OrderOutcomeUnknownError(
+                f"The exchange already holds client order id {client_order_id} on {pair}: {e!s}"
+            ) from e
 
         except NetworkError as e:
-            raise DataFetchError(f"Network issue occurred while placing order: {e!s}") from e
+            raise OrderOutcomeUnknownError(f"Network issue occurred while placing order: {e!s}") from e
 
         except BaseError as e:
-            raise DataFetchError(f"Error placing order: {e!s}") from e
+            raise OrderNotPlacedError(f"Error placing order: {e!s}") from e
 
     async def fetch_order(
         self,
@@ -388,6 +420,21 @@ class LiveExchangeService(ExchangeInterface):
         except BaseError as e:
             raise DataFetchError(f"Exchange-specific error occurred: {e!s}") from e
 
+    async def fetch_order_by_client_id(self, client_order_id: str, pair: str) -> dict[str, str | float]:
+        try:
+            return await self.circuit_breaker.call(
+                self.exchange.fetch_order, None, pair, params={"clientOrderId": client_order_id}
+            )
+
+        except CircuitBreakerOpenError as e:
+            raise DataFetchError(f"Circuit breaker open: {e!s}") from e
+
+        except OrderNotFound as e:
+            raise OrderNotFoundError(f"No order with client order id {client_order_id} on {pair}: {e!s}") from e
+
+        except BaseError as e:
+            raise DataFetchError(f"Error looking up client order id {client_order_id}: {e!s}") from e
+
     async def cancel_order(
         self,
         order_id: str,
@@ -407,10 +454,8 @@ class LiveExchangeService(ExchangeInterface):
         except CircuitBreakerOpenError as e:
             raise OrderCancellationError(f"Circuit breaker open: {e!s}") from e
 
-        except OrderNotFound:
-            raise OrderCancellationError(
-                f"Order {order_id} not found for cancellation. It may already be completed or canceled.",
-            ) from None
+        except OrderNotFound as e:
+            raise OrderNotFoundError(f"Order {order_id} not found for cancellation on {pair}: {e!s}") from e
 
         except NetworkError as e:
             raise OrderCancellationError(f"Network error while canceling order {order_id}: {e!s}") from e

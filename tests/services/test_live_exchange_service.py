@@ -12,6 +12,9 @@ from grid_trading_bot.core.services.exceptions import (
     MissingEnvironmentVariableError,
     OrderCancellationError,
     OrderNotFoundError,
+    OrderNotPlacedError,
+    OrderOutcomeUnknownError,
+    OrderRejectedError,
     PostOnlyRejectedError,
     UnsupportedExchangeError,
 )
@@ -131,6 +134,202 @@ class TestLiveExchangeService:
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     @pytest.mark.asyncio
+    async def test_place_order_sends_the_client_order_id(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+        await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0, client_order_id="g3f2a9c1d0123456789abcdef")
+
+        mock_exchange_instance.create_order.assert_awaited_once_with(
+            "BTC/USD", "limit", "buy", 1, 50000.0, params={"clientOrderId": "g3f2a9c1d0123456789abcdef"}
+        )
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [ccxt.RequestTimeout("timed out"), ccxt.ExchangeNotAvailable("503"), ccxt.DuplicateOrderId("duplicate")],
+    )
+    async def test_a_placement_whose_answer_may_be_lost_has_an_unknown_outcome(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+        error,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.create_order.side_effect = error
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        with pytest.raises(OrderOutcomeUnknownError):
+            await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0, client_order_id="g1")
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ccxt.InsufficientFunds("balance too low"),
+            ccxt.InvalidOrder("Invalid price precision"),
+            ccxt.BadSymbol("no such market"),
+        ],
+    )
+    async def test_a_business_refusal_is_an_order_rejection(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+        error,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.create_order.side_effect = error
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        with pytest.raises(OrderRejectedError) as raised:
+            await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+        assert not isinstance(raised.value, PostOnlyRejectedError | DataFetchError)
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_an_amount_under_the_precision_is_refused_before_sending(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.amount_to_precision = Mock(
+            side_effect=ccxt.InvalidOrder("amount must be greater than minimum amount precision")
+        )
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        with pytest.raises(OrderRejectedError):
+            await service.place_order("BTC/USD", "limit", "buy", 0.000001, 50000.0)
+        mock_exchange_instance.create_order.assert_not_awaited()
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    def test_rounding_follows_the_exchange_precision(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.amount_to_precision = Mock(return_value="0.123")
+        mock_exchange_instance.price_to_precision = Mock(return_value="100.45")
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        assert service.round_amount("SOL/USDT", 0.12345678) == 0.123
+        assert service.round_price("SOL/USDT", 100.4567) == 100.45
+        mock_exchange_instance.amount_to_precision.assert_called_once_with("SOL/USDT", 0.12345678)
+        mock_exchange_instance.price_to_precision.assert_called_once_with("SOL/USDT", 100.4567)
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_an_order_is_looked_up_by_its_client_order_id(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.fetch_order = AsyncMock(return_value={"id": "42", "status": "open"})
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        found = await service.fetch_order_by_client_id("g1", "BTC/USD")
+
+        assert found == {"id": "42", "status": "open"}
+        mock_exchange_instance.fetch_order.assert_awaited_once_with(None, "BTC/USD", params={"clientOrderId": "g1"})
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_an_unknown_client_order_id_is_not_found(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.fetch_order = AsyncMock(side_effect=ccxt.OrderNotFound("Order does not exist."))
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        with pytest.raises(OrderNotFoundError, match="g1"):
+            await service.fetch_order_by_client_id("g1", "BTC/USD")
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_a_failed_client_order_id_lookup_is_a_fetch_error(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.fetch_order = AsyncMock(side_effect=ccxt.NetworkError("down"))
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        with pytest.raises(DataFetchError) as raised:
+            await service.fetch_order_by_client_id("g1", "BTC/USD")
+        assert not isinstance(raised.value, OrderNotFoundError)
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_cancelling_an_order_the_exchange_no_longer_knows_raises_not_found(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.cancel_order.side_effect = ccxt.OrderNotFound("Unknown order sent.")
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        with pytest.raises(OrderNotFoundError, match="order123"):
+            await service.cancel_order("order123", "BTC/USD")
+
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
     async def test_place_order_unexpected_error(
         self,
         mock_getattr,
@@ -144,7 +343,7 @@ class TestLiveExchangeService:
         mock_exchange_instance.create_order.side_effect = ccxt.BaseError("Exchange error")
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
-        with pytest.raises(DataFetchError, match="Error placing order"):
+        with pytest.raises(OrderNotPlacedError, match="Error placing order"):
             await service.place_order("BTC/USD", "market", "buy", 1, 50000.0)
         mock_exchange_instance.create_order.assert_awaited_once_with("BTC/USD", "market", "buy", 1, 50000.0, params={})
 
@@ -518,7 +717,7 @@ class TestLiveExchangeService:
 
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
-        with pytest.raises(DataFetchError, match="Network issue occurred while placing order: Network error"):
+        with pytest.raises(OrderOutcomeUnknownError, match="Network issue occurred while placing order: Network error"):
             await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
 
     @pytest.mark.asyncio
@@ -901,7 +1100,7 @@ class TestLiveExchangeServiceCircuitBreaker:
         with pytest.raises(DataFetchError, match="Circuit breaker open"):
             await service.get_current_price("BTC/USD")
 
-        with pytest.raises(DataFetchError, match="Circuit breaker open"):
+        with pytest.raises(OrderNotPlacedError, match="Circuit breaker open"):
             await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
 
         with pytest.raises(DataFetchError, match="Circuit breaker open"):
@@ -985,6 +1184,38 @@ class TestLiveExchangeServiceCircuitBreaker:
         assert service.circuit_breaker.failure_threshold == 2
         assert service.circuit_breaker.recovery_timeout == 60.0
         assert service.circuit_breaker.half_open_max_calls == 1
+
+    @pytest.mark.asyncio
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.parametrize(
+        ("error", "raised"),
+        [
+            (ccxt.InsufficientFunds("balance too low"), OrderRejectedError),
+            (ccxt.InvalidOrder("Invalid quantity"), OrderRejectedError),
+            (ccxt.DuplicateOrderId("duplicate"), OrderOutcomeUnknownError),
+        ],
+    )
+    async def test_refusals_and_duplicate_ids_never_open_the_breaker(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+        error,
+        raised,
+    ):
+        mock_getattr.return_value = mock_ccxtpro.binance
+        mock_ccxtpro.binance.return_value = mock_exchange_instance
+        mock_exchange_instance.create_order.side_effect = error
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+        for _ in range(3):
+            with pytest.raises(raised):
+                await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0, client_order_id="g1")
+
+        assert service.circuit_breaker.state == CircuitState.CLOSED
 
 
 class TestFetchRecentOhlcv:
@@ -1312,6 +1543,25 @@ class TestLiveExchangeServicePostOnly:
         _, kwargs = mock_exchange_instance.create_order.call_args
         assert "postOnly" not in kwargs["params"]
 
+    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
+    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
+    @pytest.mark.asyncio
+    async def test_a_maker_only_order_carries_its_client_order_id_too(
+        self,
+        mock_getattr,
+        mock_ccxtpro,
+        config_manager,
+        setup_env_vars,
+        mock_exchange_instance,
+    ):
+        config_manager.get_post_only.return_value = True
+        service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
+
+        await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0, client_order_id="g1")
+
+        _, kwargs = mock_exchange_instance.create_order.call_args
+        assert kwargs["params"] == {"postOnly": True, "clientOrderId": "g1"}
+
 
 class TestLiveExchangeServicePostOnlyRejection:
     """
@@ -1378,15 +1628,16 @@ class TestLiveExchangeServicePostOnlyRejection:
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     @pytest.mark.asyncio
-    async def test_unrelated_invalid_order_stays_a_data_fetch_error(
+    async def test_unrelated_invalid_order_is_an_exchange_refusal(
         self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance
     ):
-        """A genuinely bad order must not be laundered into a benign rejection."""
+        """A genuinely bad order must not be laundered into a benign maker-only rejection."""
         service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
         mock_exchange_instance.create_order.side_effect = ccxt.InvalidOrder("Invalid price precision")
 
-        with pytest.raises(DataFetchError):
+        with pytest.raises(OrderRejectedError) as raised:
             await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+        assert not isinstance(raised.value, PostOnlyRejectedError)
 
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
@@ -1399,8 +1650,9 @@ class TestLiveExchangeServicePostOnlyRejection:
         service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
         mock_exchange_instance.create_order.side_effect = ccxt.InvalidOrder("EOrder:Post only order")
 
-        with pytest.raises(DataFetchError):
+        with pytest.raises(OrderRejectedError) as raised:
             await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
+        assert not isinstance(raised.value, PostOnlyRejectedError)
 
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
