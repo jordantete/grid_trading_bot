@@ -253,13 +253,13 @@ class GridTradingBot:
                         f"skip_grid_init={skip_grid_init}"
                     )
                 elif recovery_result.outcome is RecoveryOutcome.NO_STATE:
-                    await self._setup_fresh_balances()
+                    refused = not await self._start_fresh()
                 else:
                     refused = True
                     await self._refuse_start(recovery_result)
             else:
                 self.strategy.initialize_strategy()
-                await self._setup_fresh_balances()
+                refused = not await self._start_fresh()
 
             if not refused:
                 self._state_ready = True
@@ -295,12 +295,39 @@ class GridTradingBot:
         finally:
             self.is_running = False
 
-    async def _setup_fresh_balances(self) -> None:
+    async def _start_fresh(self) -> bool:
+        """
+        Sets up the balances of a fresh grid, after checking in live and paper trading that no order is still open
+        on the pair, since no saved state covers one. Returns False when the start is refused or deferred.
+        """
+        if self._is_live_or_paper():
+            try:
+                open_orders = await self.exchange_service.fetch_open_orders(self.trading_pair)
+            except DataFetchError as e:
+                await self._stop(
+                    StopRequest(
+                        StopKind.EXCHANGE_UNAVAILABLE,
+                        f"the open orders on {self.trading_pair} could not be checked ({e})",
+                    )
+                )
+                return False
+            if open_orders:
+                listed = ", ".join(str(order.get("id")) for order in open_orders[:10])
+                await self._stop(
+                    StopRequest(
+                        StopKind.START_REFUSED,
+                        f"{len(open_orders)} order(s) are still open on {self.trading_pair} ({listed}) and no saved "
+                        "state covers them. Cancel them on the exchange, or restore the state database that placed "
+                        "them.",
+                    )
+                )
+                return False
         await self.balance_tracker.setup_balances(
             initial_balance=self.config_manager.get_initial_balance(),
             initial_crypto_balance=0.0,
             exchange_service=self.exchange_service,
         )
+        return True
 
     async def _refuse_start(self, result: RecoveryResult) -> None:
         """Stops before trading when the saved state cannot be resumed; the database is left as it is."""

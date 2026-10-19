@@ -64,7 +64,7 @@ class BotFixtures:
 
     @pytest.fixture
     def bot(self, config_manager, notification_handler, mock_event_bus):
-        return GridTradingBot(
+        bot = GridTradingBot(
             config_path="config.json",
             config_manager=config_manager,
             notification_handler=notification_handler,
@@ -72,6 +72,8 @@ class BotFixtures:
             save_performance_results_path="results.json",
             no_plot=True,
         )
+        bot.exchange_service.fetch_open_orders = AsyncMock(return_value=[])
+        return bot
 
 
 class TestGridTradingBot(BotFixtures):
@@ -452,7 +454,7 @@ class TestStrategyStatePersistenceWiring:
     def bot(self, config_manager, notification_handler, mock_event_bus):
         with patch("grid_trading_bot.core.bot_management.grid_trading_bot.SQLiteStateRepository") as mock_repo_cls:
             mock_repo_cls.return_value = MagicMock()
-            yield GridTradingBot(
+            bot = GridTradingBot(
                 config_path="config.json",
                 config_manager=config_manager,
                 notification_handler=notification_handler,
@@ -460,6 +462,8 @@ class TestStrategyStatePersistenceWiring:
                 save_performance_results_path="results.json",
                 no_plot=True,
             )
+            bot.exchange_service.fetch_open_orders = AsyncMock(return_value=[])
+            yield bot
 
     def test_persistence_service_wired_with_strategy_provider(self, bot):
         assert bot.state_persistence_service is not None
@@ -547,6 +551,17 @@ class TestStrategyStatePersistenceWiring:
         bot.notification_handler.async_send_notification.assert_any_await(
             NotificationType.START_REFUSED, reason=bot.stop_request.reason, config_path="config.json"
         )
+
+    @pytest.mark.asyncio
+    async def test_no_saved_state_over_open_orders_is_refused(self, bot):
+        _prepare_startup(bot)
+        bot.state_recovery_service.attempt_recovery = AsyncMock(return_value=RecoveryResult(RecoveryOutcome.NO_STATE))
+        bot.exchange_service.fetch_open_orders = AsyncMock(return_value=[{"id": "9"}])
+
+        await bot.run()
+
+        assert bot.stop_request.kind is StopKind.START_REFUSED
+        bot.balance_tracker.setup_balances.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_deferred_recovery_exits_75_and_keeps_the_state(self, bot):
@@ -662,6 +677,53 @@ def _prepare_startup(bot):
     if bot.state_persistence_service is not None:
         bot.state_persistence_service.start_periodic_checkpoints = Mock()
         bot.state_persistence_service.cleanup = Mock()
+
+
+class TestFreshStartGuard(BotFixtures):
+    @pytest.mark.asyncio
+    async def test_a_fresh_start_over_open_orders_is_refused(self, bot):
+        _prepare_startup(bot)
+        bot.exchange_service.fetch_open_orders = AsyncMock(return_value=[{"id": "42"}, {"id": "43"}])
+
+        await bot.run()
+
+        assert bot.stop_request.kind is StopKind.START_REFUSED
+        assert bot.stop_request.exit_code == 0
+        assert "2 order(s) are still open" in bot.stop_request.reason
+        assert "42, 43" in bot.stop_request.reason
+        bot.balance_tracker.setup_balances.assert_not_awaited()
+        bot.strategy.run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_guard_also_runs_without_persistence(self, bot):
+        assert bot.state_recovery_service is None
+        _prepare_startup(bot)
+        bot.exchange_service.fetch_open_orders = AsyncMock(return_value=[{"id": "7"}])
+
+        await bot.run()
+
+        bot.exchange_service.fetch_open_orders.assert_awaited_once_with(bot.trading_pair)
+        assert bot.stop_request.kind is StopKind.START_REFUSED
+
+    @pytest.mark.asyncio
+    async def test_a_fresh_start_without_open_orders_trades(self, bot):
+        _prepare_startup(bot)
+
+        await bot.run()
+
+        bot.balance_tracker.setup_balances.assert_awaited_once()
+        bot.strategy.run.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_exchange_defers_the_fresh_start(self, bot):
+        _prepare_startup(bot)
+        bot.exchange_service.fetch_open_orders = AsyncMock(side_effect=DataFetchError("timeout"))
+
+        await bot.run()
+
+        assert bot.stop_request.kind is StopKind.EXCHANGE_UNAVAILABLE
+        assert bot.stop_request.exit_code == 75
+        bot.strategy.run.assert_not_awaited()
 
 
 class TestShutdownSequence(BotFixtures):
@@ -1004,6 +1066,7 @@ class TestShutdownSequence(BotFixtures):
         calls = []
         _record_shutdown(bot, calls)
         bot.exchange_service.load_exchange_markets = AsyncMock()
+        bot.exchange_service.fetch_open_orders = AsyncMock(return_value=[])
         bot.exchange_service.get_market_constraints = Mock(return_value=MarketConstraints(None, None))
         bot.balance_tracker.setup_balances = AsyncMock()
         bot.order_status_tracker.start_tracking = Mock()
