@@ -62,6 +62,7 @@ class Order:
         self.average = average  # float average filling price
         self.amount = amount  # ordered amount of base currency
         self.filled = filled  # filled amount of base currency
+        self.previously_filled = 0.0  # filled amount before the last applied update, already booked when it came
         self.remaining = remaining  # remaining amount to fill
         self.timestamp = timestamp  # order placing/opening Unix timestamp in milliseconds
         self.datetime = datetime  # ISO8601 datetime of 'timestamp' with milliseconds
@@ -94,6 +95,7 @@ class Order:
         else:
             filled = self.filled
         newly_filled = filled - self.filled
+        self.previously_filled = self.filled
         self.status = update.status
         self.filled = filled
         self.remaining = update.remaining if update.remaining is not None else self.amount - filled

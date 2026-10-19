@@ -346,6 +346,20 @@ class TestBalanceTracker:
         assert balance_tracker.crypto_balance == 5
         assert balance_tracker.reserved_crypto == 0
 
+    async def test_a_release_above_the_reserve_only_below_the_booked_precision_empties_it_quietly(
+        self, setup_balance_tracker, caplog
+    ):
+        balance_tracker, _ = setup_balance_tracker
+        balance_tracker._reserved_fiat = Decimal("17.82336485")
+        balance_tracker._reserved_crypto = Decimal("0.17391304")
+
+        await balance_tracker.release_reserved_fiat(17.823364850075716)
+        await balance_tracker.release_reserved_crypto(0.173913043478)
+
+        assert (balance_tracker.reserved_fiat, balance_tracker.balance) == (0.0, 17.82336485)
+        assert (balance_tracker.reserved_crypto, balance_tracker.crypto_balance) == (0.0, 0.17391304)
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
 
 @pytest.fixture
 def balance_tracker():

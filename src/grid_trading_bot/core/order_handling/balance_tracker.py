@@ -285,7 +285,7 @@ class BalanceTracker:
 
     def _release_fiat_unlocked(self, amount: float) -> None:
         """Sync body of `release_reserved_fiat`, callable from within a held lock."""
-        d_amount = self._to_decimal(amount)
+        d_amount = self._to_decimal(amount).quantize(_QUANTIZE_EXP)
         if d_amount > self._reserved_fiat:
             self.logger.warning(
                 f"Attempted to release {amount} fiat but only {self._reserved_fiat} reserved. "
@@ -309,7 +309,7 @@ class BalanceTracker:
 
     def _release_crypto_unlocked(self, quantity: float) -> None:
         """Sync body of `release_reserved_crypto`, callable from within a held lock."""
-        d_quantity = self._to_decimal(quantity)
+        d_quantity = self._to_decimal(quantity).quantize(_QUANTIZE_EXP)
         if d_quantity > self._reserved_crypto:
             self.logger.warning(
                 f"Attempted to release {quantity} crypto but only {self._reserved_crypto} reserved. "

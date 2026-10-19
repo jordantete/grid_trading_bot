@@ -50,48 +50,70 @@ class FeeCalculator:
             return Fee(quantity * rate, in_base=True)
         return Fee(quantity * price * rate, in_base=False)
 
-    def reported_fee(self, order: Order) -> Fee | None:
-        """
-        The order's cumulative fee as the exchange reports it (one `fee` or a list of them), in base or in quote.
-        A fee paid in another currency (BNB) is a zero fee on both. None when the exchange reports no fee.
-        """
+    @staticmethod
+    def _reported_costs(order: Order) -> dict[str, float]:
+        """The order's cumulative fee per currency as the exchange reports it (one `fee` or a list of them)."""
         reported = order.fee if isinstance(order.fee, list) else [order.fee]
         costs: dict[str, float] = {}
         for fee in reported:
             if not isinstance(fee, dict) or fee.get("cost") is None or not fee.get("currency"):
                 continue
             costs[fee["currency"]] = costs.get(fee["currency"], 0.0) + abs(float(fee["cost"]))
-        if not costs:
-            return None
+        return costs
+
+    def _charged(self, order: Order, costs: dict[str, float]) -> Fee:
         if self.base_currency in costs:
             return Fee(costs[self.base_currency], in_base=True)
         if self.quote_currency in costs:
             return Fee(costs[self.quote_currency], in_base=False)
-        paid = ", ".join(f"{cost} {currency}" for currency, cost in costs.items())
-        self.logger.info(f"Order {order.identifier} paid its fee in {paid}; neither balance is charged.")
         return Fee(0.0, in_base=order.side == OrderSide.BUY)
+
+    def reported_fee(self, order: Order) -> Fee | None:
+        """
+        The order's cumulative fee as the exchange reports it (one `fee` or a list of them), in base or in quote.
+        A fee paid in another currency (BNB) is a zero fee on both. None when the exchange reports no fee.
+        """
+        costs = self._reported_costs(order)
+        return self._charged(order, costs) if costs else None
 
     def execution_fee(self, order: Order, quantity: float, price: float) -> Fee:
         """
         The fee of `quantity` more of `order` filled at `price`: the model, or once the order has ended the total
-        the exchange reports less the model fee already booked for its earlier fills.
+        the exchange reports less the model fee booked for its earlier fills. A report in another currency than
+        those earlier fills were charged in leaves the model in place, so one order is never charged in two.
         """
+        return self._delta_fee(order, quantity, price, log=True)
+
+    def order_base_fee(self, order: Order) -> float:
+        """
+        The base fee booked for the whole order: the model on what it had filled before its last update, plus the
+        fee of that update.
+        """
+        if order.side != OrderSide.BUY:
+            return 0.0
+        earlier = order.previously_filled * self._rate(order.liquidity)
+        last = self._delta_fee(order, order.filled - order.previously_filled, order.price, log=False)
+        return earlier + (last.amount if last.in_base else 0.0)
+
+    def _delta_fee(self, order: Order, quantity: float, price: float, log: bool) -> Fee:
         model = self.fill_fee(order.side, quantity, price, order.liquidity)
         if order.status in (OrderStatus.OPEN, OrderStatus.UNKNOWN):
             return model
-        reported = self.reported_fee(order)
-        if reported is None:
+        costs = self._reported_costs(order)
+        if not costs:
             return model
-        earlier = self.fill_fee(order.side, max(order.filled - quantity, 0.0), price, order.liquidity)
-        booked = earlier.amount if earlier.in_base == reported.in_base else 0.0
-        return Fee(max(reported.amount - booked, 0.0), reported.in_base)
-
-    def order_base_fee(self, order: Order) -> float:
-        """The base fee of the whole order: what the exchange reports once it ended, else the model on its fill."""
-        if order.side != OrderSide.BUY:
-            return 0.0
-        if order.status not in (OrderStatus.OPEN, OrderStatus.UNKNOWN):
-            reported = self.reported_fee(order)
-            if reported is not None:
-                return reported.amount if reported.in_base else 0.0
-        return order.filled * self._rate(order.liquidity)
+        paid = ", ".join(f"{cost} {currency}" for currency, cost in costs.items())
+        booked_before = max(order.filled - quantity, 0.0)
+        model_currency = self.base_currency if order.side == OrderSide.BUY else self.quote_currency
+        if booked_before > 0 and set(costs) != {model_currency}:
+            if log:
+                self.logger.info(
+                    f"Order {order.identifier} reported a fee of {paid} after fills charged in {model_currency} at "
+                    "the configured rate; that rate is kept for the rest of the order."
+                )
+            return model
+        if log and self.base_currency not in costs and self.quote_currency not in costs:
+            self.logger.info(f"Order {order.identifier} paid its fee in {paid}; neither balance is charged.")
+        reported = self._charged(order, costs)
+        earlier = self.fill_fee(order.side, booked_before, price, order.liquidity)
+        return Fee(max(reported.amount - earlier.amount, 0.0), reported.in_base)

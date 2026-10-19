@@ -207,3 +207,50 @@ class TestFeesInTheCurrencyReceived:
 
     def test_a_sell_has_no_base_fee(self, calculator):
         assert calculator.order_base_fee(_order(side=OrderSide.SELL)) == 0.0
+
+
+class TestReportAfterFillsBookedAtTheModel:
+    """Recovery books a partial fill seen at restart at the model; the order's final report must not mix currencies
+    with it."""
+
+    @pytest.fixture
+    def calculator(self):
+        config = Mock()
+        config.get_trading_fee.return_value = 0.001
+        config.get_maker_fee.return_value = 0.001
+        config.get_taker_fee.return_value = 0.001
+        config.get_base_currency.return_value = "BTC"
+        config.get_quote_currency.return_value = "USDT"
+        return FeeCalculator(config)
+
+    @staticmethod
+    def _ended_after_a_partial(fee) -> Order:
+        order = _order(status=OrderStatus.OPEN, filled=0.4)
+        order.apply_update(_order(fee=fee))
+        return order
+
+    @pytest.mark.parametrize("fee", [{"cost": 0.1, "currency": "USDT"}, {"cost": 0.0005, "currency": "BNB"}])
+    def test_a_report_in_another_currency_keeps_the_model(self, calculator, caplog, fee):
+        caplog.set_level(logging.INFO)
+        order = self._ended_after_a_partial(fee)
+
+        assert calculator.execution_fee(order, 0.6, 100.0) == calculator.fill_fee(
+            OrderSide.BUY, 0.6, 100.0, Liquidity.MAKER
+        )
+        assert calculator.order_base_fee(order) == pytest.approx(0.001)
+        reported = f"{fee['cost']} {fee['currency']}"
+        assert [r.levelname for r in caplog.records if reported in r.getMessage()] == ["INFO"]
+
+    def test_a_report_in_the_same_currency_replaces_the_model(self, calculator):
+        order = self._ended_after_a_partial({"cost": 0.003, "currency": "BTC"})
+
+        fee = calculator.execution_fee(order, 0.6, 100.0)
+
+        assert (fee.amount, fee.in_base) == (pytest.approx(0.0026), True)
+        assert calculator.order_base_fee(order) == pytest.approx(0.003)
+
+    def test_the_base_fee_of_an_order_reported_below_its_earlier_fills_is_what_they_were_charged(self, calculator):
+        order = self._ended_after_a_partial({"cost": 0.0001, "currency": "BTC"})
+
+        assert calculator.execution_fee(order, 0.6, 100.0).amount == 0.0
+        assert calculator.order_base_fee(order) == pytest.approx(0.0004)

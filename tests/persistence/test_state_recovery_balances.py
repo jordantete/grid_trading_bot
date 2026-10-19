@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -98,6 +99,31 @@ class TestLiveRecoveryBalances:
         await after.manager.apply_order_update(before.execution.fill(buy.identifier))
 
         assert after.balances.get_adjusted_crypto_balance() == pytest.approx(crypto + buy.amount * 0.6 * (1 - FEE))
+
+    @pytest.mark.parametrize("fee", [{"cost": 0.1, "currency": "USDT"}, {"cost": 0.0005, "currency": "BNB"}])
+    async def test_a_final_fee_in_another_currency_than_the_partial_booked_at_restart_keeps_the_model(
+        self, repository, caplog, fee
+    ):
+        caplog.set_level(logging.INFO)
+        before = await _armed_and_saved(repository)
+        fees_before = before.balances.total_fees
+        buy = before.execution.order_at(100.0, OrderSide.BUY)
+        before.execution.fill(buy.identifier, buy.amount * 0.4)
+        balances, _, crypto = _exchange_balances(before, [(OrderSide.BUY, buy.amount * 0.4, 100.0)])
+        after, _, _ = await _restarted(repository, before, balances)
+        view = before.execution.fill(buy.identifier)
+        view.fee = fee
+
+        await after.manager.apply_order_update(view)
+
+        credited = after.balances.get_adjusted_crypto_balance() - (crypto - buy.amount * 0.4 * (1 - FEE))
+        assert credited == pytest.approx(buy.amount * (1 - FEE))
+        assert after.balances.total_fees == pytest.approx(fees_before + buy.amount * 100.0 * FEE)
+        local = after.book.get_order(buy.identifier)
+        assert buy.amount - after.balances.fee_calculator.order_base_fee(local) == pytest.approx(credited)
+        assert after.execution.order_at(110.0, OrderSide.SELL).amount == pytest.approx(credited)
+        reported = f"{fee['cost']} {fee['currency']}"
+        assert [r.levelname for r in caplog.records if reported in r.getMessage()] == ["INFO"]
 
     async def test_a_fill_while_down_reaches_the_fees_and_the_cost_basis_once(self, repository):
         before = await _armed_and_saved(repository)
