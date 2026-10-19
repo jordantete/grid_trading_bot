@@ -147,24 +147,24 @@ In live and paper trading, the bot persists its state to a SQLite database so it
 
 When the bot starts with an existing state DB, `StateRecoveryService` has one of four outcomes:
 
-1. **Resumed** — the saved state is loaded and reconciled with the exchange (below).
-2. **Refused: another grid** — the DB was written for a different grid (explicit `persistence.db_path` reused). Exit 0, "Start Refused", DB untouched.
-3. **Refused: recovery failed** — an exception during recovery (corrupt row, bug). Exit 0, "Start Refused" naming the cause, DB untouched.
-4. **Deferred** — the exchange is unreachable during reconciliation. Exit 75, "Start Deferred", DB untouched; the supervisor relaunches.
+1. **Resumed**. The saved state is loaded and reconciled with the exchange (below).
+2. **Refused: another grid**. The DB was written for a different grid (explicit `persistence.db_path` reused). Exit 0, "Start Refused", DB untouched.
+3. **Refused: recovery failed**. An exception during recovery (corrupt row, bug). Exit 0, "Start Refused" naming the cause, DB untouched.
+4. **Deferred**. The exchange is unreachable during reconciliation. Exit 75, "Start Deferred", DB untouched; the supervisor relaunches.
 
 Nothing deletes the DB except `resume`, which archives it. With no saved state, a fresh start first checks `fetch_open_orders` for the pair: any open order refuses the start (exit 0, "Start Refused"), and a failed check defers it (exit 75).
 
 A resume works as follows:
 
-1. **Config compatibility** — The DB name carries a hash of `grid_strategy`, `exchange`, `pair` and `trading_settings.timeframe`; `risk_management` is not part of it
-2. **Grid level restoration** — Overlays saved states and paired-level references onto freshly computed grid levels
-3. **Order restoration** — Reconstructs Order objects from DB, repopulates the OrderBook
-4. **Exchange reconciliation** — For each locally-open order, fetches current status from exchange:
+1. **Config compatibility**. The DB name carries a hash of `grid_strategy`, `exchange`, `pair` and `trading_settings.timeframe`; `risk_management` is not part of it
+2. **Grid level restoration**. Overlays saved states and paired-level references onto freshly computed grid levels
+3. **Order restoration**. Reconstructs Order objects from DB, repopulates the OrderBook
+4. **Exchange reconciliation**. For each locally-open order, fetches current status from exchange:
     - Filled (fully or partly) while bot was down → books each fill once, with its fee, and places the paired order
     - Cancelled, expired or rejected on exchange → frees the level and releases reserved funds
     - Not found → marks as ghost, releases funds
     - Orphan orders on exchange (not in local book) → logged as warnings, not auto-adopted
-5. **Balance restoration** — Live: the exchange balance is authoritative and DB reserved amounts are overlaid. Paper: the virtual balances come from the DB and the fills are booked on them
+5. **Balance restoration**. Live: the exchange balance is authoritative and DB reserved amounts are overlaid. Paper: the virtual balances come from the DB and the fills are booked on them
 
 ### Configuration
 

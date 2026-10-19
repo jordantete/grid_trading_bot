@@ -47,7 +47,7 @@ uv run grid_trading_bot run --config config/config.live.example.json
 1. **Loads exchange markets** for the configured pair via `load_exchange_markets`, then reads back the exchange's minimum order amount/cost constraints.
 2. **Validates grid feasibility** against those constraints as soon as price first enters the grid range. If any grid level would produce an order below the exchange's minimum amount or minimum notional, the bot logs a clear error, places nothing and halts (see [Stopping](#4-stopping)). Fix this by increasing `initial_balance`/capital or reducing `num_grids`.
 3. **Resumes the saved state** (live and paper trading, persistence enabled) from `data/{BASE}_{QUOTE}/state_{hash}.db`, see [Crash / restart behavior](#5-crash-restart-behavior). Nothing ever deletes that database: a start that cannot resume it is refused or deferred instead.
-4. **Without a saved state, checks the pair for open orders** before a fresh start. Any open order on the pair refuses the start (exit 0, notification "Start Refused" with the order identifiers): no saved state covers it, so a fresh grid would trade over it. The bot assumes an exchange account dedicated to it. Otherwise it starts a fresh grid with the balances held on the account (live) or the configured `initial_balance` (paper).
+4. **Without a saved state, checks the pair for open orders** before a fresh start. Any open order on the pair refuses the start (exit 0, notification "Start Refused" with the order identifiers): no saved state covers it, so a fresh grid would trade over it. The bot assumes an exchange account dedicated to it. When the exchange cannot be reached for this check, the start is deferred (exit 75, notification "Start Deferred") and the supervisor relaunches it. Otherwise it starts a fresh grid with the balances held on the account (live) or the configured `initial_balance` (paper).
 
 ## 4. Stopping
 
@@ -78,7 +78,7 @@ uv run grid_trading_bot resume --config config/config.live.json
 
 `resume` moves the state database (and its `-wal` and `-shm` files) aside as `<name>.halted-<UTC timestamp>` and deletes the marker. The next start is a fresh grid on the balances currently held on the exchange. Without a halt, `resume` changes nothing and says the next start resumes the saved state. It refuses with exit code 1 while a bot holds the config's lock.
 
-A grid change gives a new hash, so a new state database and no marker.
+A grid, pair, exchange or timeframe change gives a new hash, so a new state database and no marker.
 
 !!! note "Stop, quit and the old commands"
     `stop` and `quit` both halt the bot. `restart` and `pause` no longer exist. See the [CLI reference](cli.md#runtime-commands) for the command list.
@@ -113,14 +113,14 @@ The `resume` example passes `${BOT_CONFIG:-config/config.json}`, the same config
 |-----------|---------|----------------------------|
 | 0 | Halt, or a refused start (open orders with no saved state, saved state that cannot be resumed) | No |
 | 1 | Unexpected exception, or the config is already running | Yes |
-| 75 | Ticker feed lost, or the exchange unreachable while the saved state is loaded | Yes |
+| 75 | Ticker feed lost, or the exchange unreachable at startup (while the saved state is loaded, or while a fresh start checks the open orders) | Yes |
 | 78 | Config error | Yes, and fails again until the config is fixed |
 | 130 | SIGINT | Yes |
 | 143 | SIGTERM (`docker compose stop`, reboot) | After a Docker daemon restart or a host reboot, even when stopped by `docker compose stop` |
 
 ## 5. Crash / restart behavior
 
-When `persistence.enabled` is `true` (the default) and `trading_mode` is `live` or `paper_trading`, the bot saves its whole state to SQLite, in one transaction, at the end of every order operation: each fill with its paired order, each cancelled, expired or rejected order, the initial purchase, the grid placement, a regrid, a bulk cancellation. It also saves every `persistence.checkpoint_interval_seconds` (default `60`, for the trailing-stop ratchet) and at shutdown. A saved state never shows a fill without its paired order.
+When `persistence.enabled` is `true` (the default) and `trading_mode` is `live` or `paper_trading`, the bot saves its whole state to SQLite, in one transaction, at the end of every order operation: each fill with its paired order, each cancelled, expired or rejected order, the initial purchase, the grid placement, a regrid, a bulk cancellation. It also saves every `persistence.checkpoint_interval_seconds` (default `60`, for the trailing-stop ratchet) and at shutdown. In a saved state, each fill has its paired order placed, or the placement failure reported ("Order Placement Failed").
 
 If a write fails, the bot alerts ("Checkpoint Failed") and keeps trading; the next write that succeeds sends "Checkpoint Restored". After 3 failed writes in a row it halts (orders cancelled, halt marker, exit 0), so no restart ever resumes a stale state.
 
@@ -128,7 +128,7 @@ A halted config refuses to start until [`resume`](#halts-and-resume) is run, and
 
 On restart, the bot loads the saved state, reconciles every open order with the exchange (filled, partly filled, cancelled, expired, rejected, or gone from the exchange) and resumes: it re-places the paired orders of the fills made while it was down, and counts each fill once, including one partly filled before the stop. Live trading takes its balances from the exchange; paper trading resumes its virtual balances from the database and books the fills on them.
 
-The saved state belongs to the grid: the database name contains a hash of `grid_strategy`, `exchange` (name and trading mode), `pair` and `trading_settings.timeframe`. Changing `risk_management` (TP, SL, trailing stop) keeps it. A grid change starts from a new database, and the open-orders check of a fresh start then refuses to trade over the orders the previous grid left open.
+The saved state belongs to the grid: the database name contains a hash of `grid_strategy`, `exchange` (name and trading mode), `pair` and `trading_settings.timeframe`. Changing `risk_management` (TP, SL, trailing stop) keeps it. A grid, pair, exchange or timeframe change starts from a new database, and the open-orders check of a fresh start then refuses to trade over the orders the previous grid left open.
 
 | At restart | What the bot does | Exit |
 |---|---|---|
@@ -136,6 +136,7 @@ The saved state belongs to the grid: the database name contains a hash of `grid_
 | Saved state written for another grid (explicit `persistence.db_path` reused) | Refuses, database untouched | 0 |
 | Recovery fails (corrupt row, bug) | Refuses, database untouched, the alert names the cause | 0 |
 | Exchange unreachable while reconciling | Defers, database untouched, the supervisor relaunches | 75 |
+| No saved state, exchange unreachable for the open-orders check | Defers, nothing written, the supervisor relaunches | 75 |
 
 To start a fresh grid after a refusal, cancel the open orders on the exchange and move the database (and its `-wal` and `-shm` files) aside; to retry the recovery once the cause is fixed, relaunch the bot.
 
@@ -163,7 +164,7 @@ For log-based dashboards, start the monitoring stack:
 docker compose up -d
 ```
 
-The dashboard charts the account value, its peak, the drawdown and realized/unrealized PnL from a line the health check logs every interval, so the curve keeps moving when no order fills. Realized PnL uses the weighted average cost of the crypto held. A manual deposit or withdrawal on the exchange account changes the position without changing that cost, so after one the realized plus unrealized PnL no longer adds up to the change in account value. They also move the drawdown: a withdrawal shows as a lasting drawdown because the peak is persisted, and a deposit raises the peak. The peak only starts over on a fresh start (a grid change or a new state database).
+The dashboard charts the account value, its peak, the drawdown and realized/unrealized PnL from a line the health check logs every interval, so the curve keeps moving when no order fills. Realized PnL uses the weighted average cost of the crypto held. A manual deposit or withdrawal on the exchange account changes the position without changing that cost, so after one the realized plus unrealized PnL no longer adds up to the change in account value. They also move the drawdown: a withdrawal shows as a lasting drawdown because the peak is persisted, and a deposit raises the peak. The peak only starts over on a fresh start (a grid, pair, exchange or timeframe change, or a new state database).
 
 See [Monitoring Setup](../monitoring/setup.md) and [Grafana Dashboard](../monitoring/grafana-dashboard.md) for details.
 
