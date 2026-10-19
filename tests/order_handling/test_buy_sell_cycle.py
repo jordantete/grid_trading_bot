@@ -176,11 +176,11 @@ class TestCcxtResponseHandling:
             await strategy._parse_order_result(raw_order)
 
 
-class TestEventDrivenBuySellFlow:
-    """Integration test of the tracker → manager → sell chain."""
+class TestTrackerToOrderManagerFlow:
+    """The tracker hands a fill it detects to the order manager, which places the paired sell."""
 
     @pytest.fixture
-    def setup_event_driven_flow(self):
+    def setup_tracker_to_manager_flow(self):
         order_book = Mock()
         order_book.has_open_orders_at.return_value = False
 
@@ -231,7 +231,7 @@ class TestEventDrivenBuySellFlow:
         )
 
     @pytest.mark.asyncio
-    async def test_tracker_detects_fill_and_triggers_sell_placement(self, setup_event_driven_flow):
+    async def test_tracker_detects_fill_and_triggers_sell_placement(self, setup_tracker_to_manager_flow):
         (
             tracker,
             _manager,
@@ -241,7 +241,7 @@ class TestEventDrivenBuySellFlow:
             grid_manager,
             order_validator,
             _balance_tracker,
-        ) = setup_event_driven_flow
+        ) = setup_tracker_to_manager_flow
 
         # Local order for tracker to discover
         local_order = Mock(identifier="order_123", symbol="BTC/USDT", status=OrderStatus.OPEN)

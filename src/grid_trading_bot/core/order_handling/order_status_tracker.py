@@ -12,8 +12,8 @@ from grid_trading_bot.core.services.exceptions import DataFetchError
 
 class OrderStatusTracker:
     """
-    Tracks the status of pending orders and publishes events
-    when their states change (e.g., open, filled, canceled).
+    Polls the exchange for the status of the open orders and hands the new state of each order that filled or ended
+    to the order update handler.
     """
 
     HANDLER_DRAIN_TIMEOUT = 10.0  # seconds
@@ -31,7 +31,7 @@ class OrderStatusTracker:
         Args:
             order_book: OrderBook instance to manage and query orders.
             order_execution_strategy: Strategy for querying order statuses from the exchange.
-            order_update_handler: Receives the exchange's view of every filled order.
+            order_update_handler: Receives the exchange's view of every order that filled or ended.
             polling_interval: Time interval (in seconds) between status checks.
         """
         self.order_book = order_book
