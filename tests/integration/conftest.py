@@ -9,6 +9,14 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+from tests.integration import lifecycle_helpers
+
+
+@pytest.fixture(autouse=True)
+def _kill_leftover_bots():
+    yield
+    lifecycle_helpers.kill_leftover_runs()
+
 
 CSV_DATA_FILE = str(Path(__file__).resolve().parent / "fixtures" / "SOL_USDT_1m.csv")
 
