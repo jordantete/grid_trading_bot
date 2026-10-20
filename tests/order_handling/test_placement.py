@@ -1237,8 +1237,8 @@ class FakeClock:
         self.now += delay
 
 
-def _liquidating_stack(crypto: float = 2.0, fiat: float = 0.0, store=None):
-    stack = build_stack(fiat=fiat, crypto=crypto, store=store)
+def _liquidating_stack(crypto: float = 2.0, fiat: float = 0.0, store=None, trading_mode: str = "live"):
+    stack = build_stack(fiat=fiat, crypto=crypto, store=store, trading_mode=trading_mode)
     clock = FakeClock()
     stack.manager._clock = clock
     stack.manager._sleep = clock.sleep
@@ -1477,6 +1477,28 @@ class TestLiquidation:
             record.levelno == logging.ERROR and record.exc_info and "attempt 1" in record.getMessage()
             for record in caplog.records
         )
+
+    async def test_an_unexpected_error_of_an_attempt_fails_a_backtest_without_retrying(self, caplog):
+        stack, clock = _liquidating_stack(crypto=2.0, trading_mode="backtest")
+        stack.execution.market_order_failures = [ValueError("boom")]
+
+        with pytest.raises(ValueError, match="boom"):
+            await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert clock.sleeps == []
+        assert _market_sells(stack) == []
+        assert not stack.manager._liquidated
+        assert any("attempt 1 raised: boom" in message for message in _errors(caplog))
+
+    async def test_an_unexpected_balance_read_error_fails_a_backtest_without_retrying(self):
+        stack, clock = _liquidating_stack(crypto=2.0, trading_mode="backtest")
+        stack.manager.exchange_balance = AsyncMock(side_effect=TypeError("must be real number, not NoneType"))
+        stack.execution.market_order_failures = [OrderRejectedError("insufficient balance")]
+
+        with pytest.raises(TypeError):
+            await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert clock.sleeps == []
 
     async def test_the_first_attempt_runs_even_when_already_interrupted(self):
         stack, _ = _liquidating_stack(crypto=2.0)

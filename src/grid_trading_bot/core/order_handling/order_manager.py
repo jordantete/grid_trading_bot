@@ -888,7 +888,8 @@ class OrderManager:
         """
         Sells the free crypto at market until none is left. A failed attempt, whatever it raised, is retried after a
         growing delay, a refusal re-reads the exchange balance first, and a remainder under the exchange minimum stops
-        with an alert. Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL seconds.
+        with an alert. Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL seconds. A backtest re-raises
+        what is neither an exchange failure nor a refusal, since nothing would ever interrupt its retries.
         """
         failures = 0
         last_alert_at: float | None = None
@@ -910,6 +911,8 @@ class OrderManager:
                 except Exception as e:
                     error = e
                     self.logger.error(f"Liquidation attempt {failures + 1} raised: {e}", exc_info=True)
+                    if self.trading_mode == TradingMode.BACKTEST:
+                        raise
                 finally:
                     await self._save_state()
             if error is None:
@@ -1006,6 +1009,8 @@ class OrderManager:
             self.logger.warning(f"Could not read the exchange balance for the next liquidation attempt: {e}")
         except Exception as e:
             self.logger.error(f"Reading the exchange balance for the next attempt failed: {e}", exc_info=True)
+            if self.trading_mode == TradingMode.BACKTEST:
+                raise
         return fallback
 
     async def _pause(self, delay: float) -> None:
