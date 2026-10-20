@@ -29,7 +29,7 @@ from .exceptions import GridFeasibilityError, OrderExecutionFailedError
 from .execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
-from .order import ENDED_UNFILLED_STATUSES, Order, OrderSide, OrderStatus, OrderType
+from .order import ENDED_UNFILLED_STATUSES, FINAL_STATUSES, Order, OrderSide, OrderStatus, OrderType
 from .placement_journal import PendingPlacement, PlacementJournal, PlacementPurpose, adopt_order, new_client_order_id
 from .state_store import ArmingFlags, StateStore
 
@@ -781,8 +781,8 @@ class OrderManager:
     async def _send_market_entry(self, entry: PendingPlacement) -> Order:
         """
         Sends one market leg through the journal, looking it up first when an earlier send's outcome is unknown.
-        A found order is returned only once it is closed and filled; one that ended unfilled has taken its client id, so
-        the entry moves to a new one. A lookup counts as an attempt.
+        A found order is returned only once it is closed and filled; one that ended, closed included, without a fill has
+        taken its client id, so the entry moves to a new one. A lookup counts as an attempt.
         Raises DataFetchError when the order is not placed or its outcome stays unknown, OrderRefusedError on a refusal.
         """
         if entry.sent:
@@ -795,15 +795,12 @@ class OrderManager:
                 settled.status = OrderStatus.CLOSED
                 settled.average = found.average or found.price or entry.price
                 return settled
-            if found is not None and found.status not in ENDED_UNFILLED_STATUSES:
+            if found is not None and found.status not in FINAL_STATUSES:
                 raise OrderOutcomeUnknownError(
                     f"Market order {entry.client_order_id} is {found.status.value} on the exchange without a fill."
                 )
             if found is not None:
-                self.journal.remove(entry.client_order_id)
-                entry.client_order_id = new_client_order_id(self.config_hash)
-                entry.attempts = 0
-                self.journal.add(entry)
+                self._move_to_new_client_id(entry)
             entry.sent = False
         entry.sent = True
         if self.state_store is not None and not await self.state_store.save_pending(entry):
@@ -817,6 +814,14 @@ class OrderManager:
         except OrderNotPlacedError:
             entry.sent = False
             raise
+
+    def _move_to_new_client_id(self, entry: PendingPlacement) -> None:
+        """Re-keys an unsent entry whose client id an order that executed nothing already took."""
+        self.journal.remove(entry.client_order_id)
+        entry.client_order_id = new_client_order_id(self.config_hash)
+        entry.sent = False
+        entry.attempts = 0
+        self.journal.add(entry)
 
     async def _book_initial_purchase(self, order: Order) -> None:
         # A leg whose remainder was cancelled is final for what it filled; the next leg buys the rest.

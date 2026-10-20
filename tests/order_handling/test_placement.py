@@ -1122,6 +1122,29 @@ class TestInitialPurchase:
         assert stack.balances.crypto_balance == pytest.approx(entry.quantity * 0.999)
         assert len(stack.journal) == 0
 
+    @pytest.mark.parametrize("filled", [0.0, None])
+    async def test_an_order_found_closed_without_a_fill_is_sent_again_under_a_new_client_id(self, filled):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        entry = await self._lose_the_answer(stack)
+        found = stack.execution.orders[stack.execution.client_ids[entry.client_order_id]]
+        found.status, found.filled, found.remaining = OrderStatus.CLOSED, filled, entry.quantity
+        old_client_id = entry.client_order_id
+        sent_ids = []
+        real_execute = stack.execution.execute_market_order
+
+        async def execute(side, pair, quantity, price, client_order_id):
+            sent_ids.append(client_order_id)
+            return await real_execute(side, pair, quantity, price, client_order_id)
+
+        stack.execution.execute_market_order = execute
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        [new_client_id] = sent_ids
+        assert new_client_id != old_client_id
+        assert stack.balances.crypto_balance == pytest.approx(entry.quantity * 0.999)
+        assert len(stack.journal) == 0
+
     async def test_an_order_found_in_an_unknown_status_without_a_fill_is_neither_booked_nor_sent_again(self):
         stack = build_stack(crypto=0.0, store=RecordingStore())
         entry = await self._lose_the_answer(stack)
@@ -1477,6 +1500,31 @@ class TestLiquidation:
         assert _market_sells(stack) == [2.0]
         assert stack.balances.crypto_balance == 0.0
         assert clock.sleeps == [1, 2]
+        assert len(stack.journal) == 0
+        assert stack.manager._liquidated
+
+    @pytest.mark.parametrize("filled", [0.0, None])
+    async def test_a_lost_order_found_closed_without_a_fill_is_sold_again_under_a_new_client_id(self, filled):
+        stack, _ = _liquidating_stack(crypto=2.0)
+        execute = stack.execution.execute_market_order
+        sent_ids = []
+
+        async def answer_lost_once(side, pair, quantity, price, client_order_id):
+            sent_ids.append(client_order_id)
+            order = await execute(side, pair, quantity, price, client_order_id)
+            if len(sent_ids) == 1:
+                held = stack.execution.orders[order.identifier]
+                held.status, held.filled, held.remaining = OrderStatus.CLOSED, filled, held.amount
+                raise OrderOutcomeUnknownError("the answer never came")
+            return order
+
+        stack.execution.execute_market_order = answer_lost_once
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        first, second = sent_ids
+        assert second != first
+        assert stack.balances.crypto_balance == 0.0
         assert len(stack.journal) == 0
         assert stack.manager._liquidated
 

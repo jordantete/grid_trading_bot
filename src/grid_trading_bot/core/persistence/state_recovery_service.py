@@ -15,7 +15,14 @@ from grid_trading_bot.core.order_handling.balance_tracker import _QUANTIZE_EXP, 
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
-from grid_trading_bot.core.order_handling.order import ENDED_UNFILLED_STATUSES, Order, OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.order import (
+    ENDED_UNFILLED_STATUSES,
+    FINAL_STATUSES,
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+)
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.placement_journal import (
     PendingPlacement,
@@ -75,9 +82,6 @@ class _Reconciliation:
 
 def _optional_decimal(value: str | None) -> Decimal | None:
     return None if value is None else Decimal(value)
-
-
-_FINAL_STATUSES = ENDED_UNFILLED_STATUSES | {OrderStatus.CLOSED}
 
 
 def _quantized(value: Decimal) -> Decimal:
@@ -424,7 +428,7 @@ class StateRecoveryService:
         """
         if exchange_order is not None and (
             exchange_order.status is OrderStatus.OPEN
-            or (not exchange_order.filled and exchange_order.status not in _FINAL_STATUSES)
+            or (not exchange_order.filled and exchange_order.status not in FINAL_STATUSES)
         ):
             raise OrderOutcomeUnknownError(
                 f"Pending {entry.purpose.value} {entry.client_order_id} is {exchange_order.status.value} on the "

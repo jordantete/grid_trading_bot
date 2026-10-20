@@ -30,6 +30,7 @@ class OrderStatus(Enum):
 
 
 ENDED_UNFILLED_STATUSES = frozenset({OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED})
+FINAL_STATUSES = ENDED_UNFILLED_STATUSES | {OrderStatus.CLOSED}
 
 
 class Order:
