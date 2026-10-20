@@ -17,8 +17,15 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
+from grid_trading_bot.core.order_handling.placement_journal import (
+    PendingPlacement,
+    PlacementPurpose,
+    new_client_order_id,
+)
 from grid_trading_bot.core.order_handling.pnl_ledger import PnlLedger
 from grid_trading_bot.core.persistence.run_files import RunFiles
+from grid_trading_bot.core.persistence.serializers import compute_config_hash, pending_placement_to_dict
 from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
 from grid_trading_bot.core.services import live_exchange_service
 from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
@@ -73,6 +80,9 @@ def _violations(snapshot) -> list[str]:
     open_orders = [o for o in snapshot.orders if o["status"] == "open"]
     needed_fiat = sum(o["price"] * o["remaining"] for o in open_orders if o["side"] == "buy")
     needed_crypto = sum(o["remaining"] for o in open_orders if o["side"] == "sell")
+    entries = [e for e in snapshot.pending_placements if e["order_type"] == "limit"]
+    needed_fiat += sum(e["price"] * e["quantity"] for e in entries if e["side"] == "buy")
+    needed_crypto += sum(e["quantity"] for e in entries if e["side"] == "sell")
     balance = snapshot.balance_state
     reserved_fiat = float(balance["reserved_fiat"])
     reserved_crypto = float(balance["reserved_crypto"])
@@ -87,6 +97,7 @@ def _violations(snapshot) -> list[str]:
         for o in open_orders
         if o["grid_level_price"] is not None
     }
+    holding |= {(e["level_price"], f"waiting_for_{e['side']}_fill") for e in entries}
     if waiting != holding:
         problems.append(f"waiting levels {sorted(waiting)} but open orders on {sorted(holding)}")
     return problems
@@ -193,6 +204,11 @@ def _saved(tmp_path):
     )
 
 
+def _saved_entries(tmp_path) -> list[str]:
+    with closing(sqlite3.connect(_database(tmp_path))) as database:
+        return [row[0] for row in database.execute("SELECT client_order_id FROM pending_placements")]
+
+
 def _expected_realized_pnl(executions) -> float:
     ledger = PnlLedger()
     position = Decimal("0")
@@ -220,17 +236,20 @@ async def test_a_restart_resumes_the_saved_state_and_books_every_fill_once(tmp_p
 
     buy_90 = exchange.order_at(90.0, "buy")
     buy_80 = exchange.order_at(80.0, "buy")
+    cancelled_sell = exchange.order_at(120.0, "sell")
     exchange.fill(buy_90["id"])
     exchange.fill(buy_80["id"], buy_80["amount"] * 0.4)
-    exchange.cancel(exchange.order_at(120.0, "sell")["id"])
+    exchange.cancel(cancelled_sell["id"])
     exchange.remove(exchange.order_at(110.0, "sell")["id"])
 
     second = Running(_bot(config_path))
-    await second.until(lambda: exchange.has_open(110.0, "sell"))
+    # The sell of buy 90 takes the level the vanished sell freed; the cancelled 120 sell is re-placed.
+    await second.until(lambda: exchange.has_open(110.0, "sell") and exchange.has_open(120.0, "sell"))
+    assert exchange.order_at(120.0, "sell")["id"] != cancelled_sell["id"]
     assert _saved(tmp_path).filled[buy_80["id"]] == pytest.approx(buy_80["amount"] * 0.4)
     exchange.fill(buy_80["id"])
-    await second.until(lambda: exchange.has_open(120.0, "sell"))
-    exchange.fill(exchange.order_at(110.0, "sell")["id"])
+    await second.until(lambda: len([o for o in exchange.open_orders("sell") if o["price"] == 110.0]) == 2)
+    exchange.fill(exchange.order_at(120.0, "sell")["id"])
     await second.until(lambda: exchange.has_open(100.0, "buy"))
     await second.stop()
 
@@ -322,3 +341,40 @@ async def test_an_unreachable_exchange_defers_the_start_and_keeps_the_state(tmp_
     assert bot.stop_request.kind is StopKind.EXCHANGE_UNAVAILABLE
     assert bot.stop_request.exit_code == 75
     assert _dump(tmp_path) == saved_before
+
+
+async def test_a_sent_placement_found_on_the_exchange_is_adopted_after_a_restart(tmp_path, exchange, checks):
+    config_path = _config(tmp_path)
+    await _armed_then_stopped(exchange, config_path)
+    # A buy for the free 110 level reached the exchange, but the bot stopped before its next full save.
+    config_hash = compute_config_hash(ConfigManager(str(config_path), ConfigValidator()))
+    entry = PendingPlacement(
+        client_order_id=new_client_order_id(config_hash),
+        order_type=OrderType.LIMIT,
+        side=OrderSide.BUY,
+        quantity=0.2,
+        price=110.0,
+        purpose=PlacementPurpose.GRID,
+        level_price=110.0,
+        sent=True,
+        created_at=1,
+    )
+    order_id = exchange.add_open_order("buy", 110.0, 0.2)
+    exchange.update(lambda data: data["orders"][order_id].update(clientOrderId=entry.client_order_id))
+    repository = SQLiteStateRepository(str(_database(tmp_path)))
+    repository.initialize()
+    repository.save_pending(pending_placement_to_dict(entry))
+    repository.close()
+
+    second = Running(_bot(config_path))
+    await second.until(lambda: second.bot.order_book.get_order(order_id) is not None)
+    await second.stop()
+
+    saved = _saved(tmp_path)
+    assert order_id in saved.open_ids
+    assert saved.open_ids == {order["id"] for order in exchange.open_orders()}
+    assert _saved_entries(tmp_path) == []
+    totals = exchange.totals()
+    assert saved.fiat_total == pytest.approx(totals["USDT"], abs=1e-6)
+    assert saved.crypto_total == pytest.approx(totals["BTC"], abs=1e-6)
+    assert checks.problems == []

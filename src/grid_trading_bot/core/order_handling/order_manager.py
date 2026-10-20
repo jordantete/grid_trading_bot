@@ -653,6 +653,15 @@ class OrderManager:
             finally:
                 await self._save_state()
 
+    async def place_replacements_for_recovered_ends(self, ended: list[tuple[Order, GridLevel]]) -> None:
+        """Re-places each order cancelled or expired while the bot was down, on its level, for its unfilled quantity."""
+        async with self._locked():
+            try:
+                for order, grid_level in ended:
+                    await self._replace_on_level(order, grid_level)
+            finally:
+                await self._save_state()
+
     async def perform_initial_purchase(self, current_price: float) -> bool:
         """
         Buys, once, the crypto the grid's sells need. Returns whether the purchase is done; it is not while the

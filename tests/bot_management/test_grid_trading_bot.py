@@ -660,6 +660,34 @@ class TestStrategyStatePersistenceWiring:
             60.0, bot.order_manager.checkpoint
         )
 
+    def test_recovery_restores_into_the_order_managers_journal(self, bot):
+        assert bot.state_recovery_service.journal is bot.order_manager.journal
+
+    @pytest.mark.asyncio
+    async def test_orders_ended_while_down_are_replaced_after_the_recovered_pairs(self, bot):
+        _prepare_startup(bot)
+        calls = []
+        bot.state_recovery_service.attempt_recovery = AsyncMock(
+            return_value=RecoveryResult(
+                RecoveryOutcome.RESUMED,
+                initial_purchase_done=True,
+                grid_orders_initialized=True,
+                orders_filled_while_down=[("filled", "level")],
+                ended_while_down=[("ended", "level")],
+            )
+        )
+        bot.order_manager.place_paired_orders_for_recovered_fills = AsyncMock(
+            side_effect=lambda _fills: calls.append("pairs")
+        )
+        bot.order_manager.place_replacements_for_recovered_ends = AsyncMock(
+            side_effect=lambda _ended: calls.append("replacements")
+        )
+
+        await bot.run()
+
+        assert calls == ["pairs", "replacements"]
+        bot.order_manager.place_replacements_for_recovered_ends.assert_awaited_once_with([("ended", "level")])
+
 
 def _record_shutdown(bot, calls, run_files=None):
     bot.reconciliation_service = None

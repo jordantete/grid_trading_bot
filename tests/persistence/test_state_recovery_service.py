@@ -9,6 +9,7 @@ from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.placement_journal import new_client_order_id
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
 from grid_trading_bot.core.persistence.state_recovery_service import (
     RecoveryOutcome,
@@ -133,6 +134,7 @@ def mock_repository():
     repo.load_grid_levels.return_value = []
     repo.load_all_orders.return_value = []
     repo.load_balance_state.return_value = None
+    repo.load_pending_placements.return_value = []
     return repo
 
 
@@ -456,6 +458,93 @@ class TestStateRecoveryService:
         assert local_order.status == OrderStatus.CANCELED
         mock_order_book.remove_open_order.assert_called_once_with(local_order)
         mock_grid_manager.rollback_order_placement.assert_called_once_with(gl, OrderSide.BUY, False)
+        assert result.ended_while_down == [(local_order, gl)]
+
+    async def test_an_order_rejected_while_down_is_freed_and_not_replaced(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+        mock_order_book,
+        mock_grid_manager,
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        local_order = _make_exchange_order(
+            identifier="rejected-1", status=OrderStatus.OPEN, side=OrderSide.BUY, price=2950.0, remaining=1.0
+        )
+        mock_order_book.get_open_orders.return_value = [local_order]
+        gl = MagicMock()
+        mock_order_book.get_grid_level_for_order.return_value = gl
+        service.order_execution_strategy.get_order = AsyncMock(
+            return_value=_make_exchange_order(
+                identifier="rejected-1", status=OrderStatus.REJECTED, side=OrderSide.BUY, price=2950.0
+            )
+        )
+
+        result = await service.attempt_recovery()
+
+        assert result.ended_while_down == []
+        assert any("rejected-1" in line for line in result.not_replaced)
+        mock_grid_manager.rollback_order_placement.assert_called_once_with(gl, OrderSide.BUY, False)
+
+    async def test_an_orphan_carrying_this_bots_prefix_is_reported_as_its_own(
+        self,
+        service,
+        mock_repository,
+        mock_config_manager,
+        mock_order_book,
+        mock_exchange_service,
+        mock_notification_handler,
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        known = _make_exchange_order(identifier="known-1", status=OrderStatus.OPEN)
+        mock_order_book.get_open_orders.return_value = [known]
+        service.order_execution_strategy.get_order = AsyncMock(
+            return_value=_make_exchange_order(identifier="known-1", status=OrderStatus.OPEN)
+        )
+        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager))
+        mock_exchange_service.fetch_open_orders = AsyncMock(
+            return_value=[
+                {"id": "known-1", "side": "buy", "price": 2900.0, "amount": 1.0},
+                {"id": "own-1", "clientOrderId": own_client_id, "side": "sell", "price": 3000.0, "amount": 0.5},
+                {"id": "other-1", "clientOrderId": "web_123", "side": "buy", "price": 2800.0, "amount": 2.0},
+            ]
+        )
+
+        result = await service.attempt_recovery()
+
+        assert result.orphan_orders_found == 2
+        alerts = [
+            call.kwargs["error_details"]
+            for call in mock_notification_handler.async_send_notification.await_args_list
+            if call.args[0] is NotificationType.ERROR_OCCURRED
+        ]
+        assert len(alerts) == 1
+        assert "own-1" in alerts[0]
+        assert "other-1" not in alerts[0]
+
+    async def test_the_recovery_notification_lists_a_ghost_with_its_level(
+        self, service, mock_repository, mock_config_manager, mock_order_book, mock_notification_handler
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        mock_order_book.get_open_orders.return_value = [
+            _make_exchange_order(identifier="ghost-3", side=OrderSide.SELL, price=3050.0, remaining=0.5)
+        ]
+        gl = MagicMock()
+        gl.price = 3050.0
+        mock_order_book.get_grid_level_for_order.return_value = gl
+        service.order_execution_strategy.get_order = AsyncMock(return_value=None)
+
+        result = await service.attempt_recovery()
+
+        assert result.ended_while_down == []
+        [details] = [
+            call.kwargs["recovery_details"]
+            for call in mock_notification_handler.async_send_notification.await_args_list
+            if call.args[0] is NotificationType.STATE_RECOVERY_COMPLETE
+        ]
+        assert "ghost-3" in details
+        assert "3050.0" in details
 
     async def test_order_canceled_while_bot_down_on_stacked_level(
         self,

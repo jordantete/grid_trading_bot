@@ -162,6 +162,7 @@ class GridTradingBot:
                     order_execution_strategy=order_execution_strategy,
                     notification_handler=self.notification_handler,
                     trading_pair=trading_pair,
+                    journal=journal,
                 )
 
             self.order_manager = OrderManager(
@@ -272,8 +273,8 @@ class GridTradingBot:
 
             if not refused:
                 self._state_ready = True
-                # Placed even when a stop arrived during recovery: recovery already took these fills out of the open
-                # orders, so a final checkpoint without their pairs would lose them.
+                # Placed even when a stop arrived during recovery: recovery already took these orders out of the open
+                # orders, so a final checkpoint without their successors would lose them.
                 if recovery_result and recovery_result.orders_filled_while_down:
                     self.logger.info(
                         f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
@@ -282,6 +283,11 @@ class GridTradingBot:
                     await self.order_manager.place_paired_orders_for_recovered_fills(
                         recovery_result.orders_filled_while_down
                     )
+                if recovery_result and recovery_result.ended_while_down:
+                    self.logger.info(
+                        f"Re-placing {len(recovery_result.ended_while_down)} orders that ended while bot was down."
+                    )
+                    await self.order_manager.place_replacements_for_recovered_ends(recovery_result.ended_while_down)
             self._starting = False
 
             # _start_trading does not yield before strategy.run, so this one check covers everything it starts.

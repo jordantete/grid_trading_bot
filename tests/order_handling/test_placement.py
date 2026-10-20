@@ -1,4 +1,5 @@
 import asyncio
+from decimal import Decimal
 import logging
 import re
 from unittest.mock import AsyncMock
@@ -1563,3 +1564,60 @@ class TestLiquidation:
         assert _market_sells(stack) == []
         assert "execute_market_order" not in stack.execution.calls
         assert not stack.manager._liquidated
+
+
+async def _ended_while_down(stack, price, side):
+    """Settles the order at `price` the way recovery does for an order the exchange cancelled while the bot was down."""
+    exchange_view = stack.execution.end(stack.execution.order_at(price, side).identifier, OrderStatus.CANCELED)
+    local = stack.book.get_order(exchange_view.identifier)
+    grid_level = stack.book.get_grid_level_for_order(local)
+    local.apply_update(exchange_view)
+    stack.book.remove_open_order(local)
+    await stack.balances.record_execution(local, 0.0)
+    stack.grid.rollback_order_placement(grid_level, side, False)
+    return local, grid_level
+
+
+class TestReplacementsForRecoveredEnds:
+    async def test_each_order_ended_while_down_is_replaced_on_its_level(self):
+        stack = build_stack()
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+        ended = await _ended_while_down(stack, 90.0, OrderSide.BUY)
+
+        await stack.manager.place_replacements_for_recovered_ends([ended])
+
+        replacement = stack.execution.order_at(90.0, OrderSide.BUY)
+        assert replacement.identifier != ended[0].identifier
+        assert replacement.amount == pytest.approx(ended[0].remaining)
+        assert stack.book.get_order(replacement.identifier).is_open()
+        assert reserved_matches_open_orders(stack)
+
+    async def test_a_refused_replacement_alerts_and_leaves_the_level_free(self):
+        stack = build_stack()
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+        ended = await _ended_while_down(stack, 90.0, OrderSide.BUY)
+        stack.balances._balance = Decimal("0")
+
+        await stack.manager.place_replacements_for_recovered_ends([ended])
+
+        assert not stack.execution.open_orders(OrderSide.BUY) or all(
+            order.price != 90.0 for order in stack.execution.open_orders(OrderSide.BUY)
+        )
+        assert len(stack.journal) == 0
+        assert stack.grid.grid_levels[90.0].state == stack.grid.grid_levels[90.0].home_state
+        failures = [
+            call
+            for call in stack.notifications.async_send_notification.await_args_list
+            if call.args and call.args[0] is NotificationType.ORDER_FAILED
+        ]
+        assert len(failures) == 1
+
+    async def test_no_replacement_once_the_positions_are_closed(self):
+        stack = build_stack()
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+        ended = await _ended_while_down(stack, 90.0, OrderSide.BUY)
+        stack.manager._positions_closed = True
+
+        await stack.manager.place_replacements_for_recovered_ends([ended])
+
+        assert all(order.price != 90.0 for order in stack.execution.open_orders(OrderSide.BUY))
