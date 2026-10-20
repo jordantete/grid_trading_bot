@@ -1249,6 +1249,44 @@ def _market_sells(stack) -> list[float]:
     ]
 
 
+def _stop_loss_report(stack) -> str:
+    [details] = [
+        call.kwargs["order_details"]
+        for call in stack.notifications.async_send_notification.await_args_list
+        if call.args and call.args[0] is NotificationType.STOP_LOSS_TRIGGERED
+    ]
+    return details
+
+
+class TestStopLossReport:
+    async def test_a_full_sale_reports_the_position_liquidated(self):
+        stack, _ = _liquidating_stack(crypto=2.0)
+
+        await stack.manager.execute_take_profit_or_stop_loss_order(ARMING_PRICE, stop_loss_order=True)
+
+        assert "position liquidated" in _stop_loss_report(stack)
+
+    async def test_a_liquidation_stopped_on_dust_reports_what_is_left(self):
+        stack, _ = _liquidating_stack(crypto=0.001)
+        stack.manager.set_market_constraints(MarketConstraints(min_amount=None, min_cost=1000.0))
+
+        await stack.manager.execute_take_profit_or_stop_loss_order(ARMING_PRICE, stop_loss_order=True)
+
+        report = _stop_loss_report(stack)
+        assert "position liquidated" not in report
+        assert "liquidation stopped with 0.001 BTC left" in report
+
+    async def test_an_exchange_holding_less_than_the_books_is_alerted_and_reported(self):
+        stack, _ = _liquidating_stack(crypto=2.0)
+        stack.manager.exchange_balance = AsyncMock(return_value=0.0)
+        stack.execution.market_order_failures = [OrderRejectedError("insufficient balance")]
+
+        await stack.manager.execute_take_profit_or_stop_loss_order(ARMING_PRICE, stop_loss_order=True)
+
+        assert any("the books still show 2.0 BTC" in alert for alert in _liquidation_alerts(stack))
+        assert "liquidation stopped with 2.0 BTC left" in _stop_loss_report(stack)
+
+
 class TestLiquidation:
     async def test_a_liquidation_sells_the_free_crypto_and_books_it(self):
         stack, clock = _liquidating_stack(crypto=2.0)

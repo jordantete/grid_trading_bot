@@ -108,6 +108,7 @@ class TestTakeProfitStopLoss:
 
         async def liquidated(**_kwargs):
             manager._liquidated = True
+            manager.balance_tracker.crypto_balance = 0.0
 
         manager.close_positions = AsyncMock(side_effect=liquidated)
 

@@ -967,9 +967,9 @@ class OrderManager:
                 return None
         if quantity <= 0:
             if self.balance_tracker.crypto_balance > 0:
-                self.logger.warning(
-                    f"The exchange holds no more free {self._base_currency}; the books still show "
-                    f"{self.balance_tracker.crypto_balance}."
+                self._stop_liquidation(
+                    f"Liquidation stopped: the exchange holds no more free {self._base_currency}; the books still "
+                    f"show {self.balance_tracker.crypto_balance} {self._base_currency}."
                 )
             else:
                 self.logger.info("No crypto balance left to liquidate.")
@@ -1045,7 +1045,13 @@ class OrderManager:
 
         event = "Take profit" if take_profit_order else "Stop loss"
         await self.close_positions(liquidate=True, current_price=current_price)
-        outcome = "position liquidated" if self._liquidated else "liquidation incomplete (see the liquidation alerts)"
+        left = self.balance_tracker.crypto_balance
+        if not self._liquidated:
+            outcome = "liquidation incomplete (see the liquidation alerts)"
+        elif left > 0:
+            outcome = f"liquidation stopped with {left} {self._base_currency} left (see the liquidation alerts)"
+        else:
+            outcome = "position liquidated"
         await self.notification_handler.async_send_notification(
             NotificationType.TAKE_PROFIT_TRIGGERED if take_profit_order else NotificationType.STOP_LOSS_TRIGGERED,
             order_details=f"{event} at {current_price}: open orders cancelled, {outcome}.",
