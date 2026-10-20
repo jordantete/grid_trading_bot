@@ -101,8 +101,22 @@ class TestLiveExchangeService:
         service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
 
         assert service.is_paper_trading_activated is True
-        expected_sandbox_url = "https://testnet.binance.vision/api"
-        assert mock_exchange_instance.urls["api"] == expected_sandbox_url, "Sandbox URL not correctly set for Binance."
+        mock_exchange_instance.set_sandbox_mode.assert_called_once_with(True)
+
+    @pytest.mark.asyncio
+    async def test_a_paper_binance_signs_spot_requests_on_the_testnet(self, config_manager, setup_env_vars):
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
+        try:
+            api = service.exchange.urls["api"]
+
+            assert isinstance(api, dict)
+            assert api["public"].startswith("https://testnet.binance.vision/")
+            assert api["private"].startswith("https://testnet.binance.vision/")
+            assert service.exchange.sign("ping", "public", "GET", {})["url"] == (
+                "https://testnet.binance.vision/api/v3/ping"
+            )
+        finally:
+            await service.exchange.close()
 
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_unsupported_exchange_raises_error(self, mock_getattr, config_manager, setup_env_vars):
@@ -723,10 +737,10 @@ class TestLiveExchangeService:
     @pytest.mark.parametrize(
         ("exchange_name", "expected_url"),
         [
-            ("binance", "https://testnet.binance.vision/api"),
+            ("binance", None),  # binance and bybit use set_sandbox_mode
             ("kraken", "https://api.demo-futures.kraken.com"),
             ("bitmex", "https://testnet.bitmex.com"),
-            ("bybit", None),  # bybit uses set_sandbox_mode
+            ("bybit", None),
             ("unknown", None),
         ],
     )
@@ -750,7 +764,7 @@ class TestLiveExchangeService:
 
         LiveExchangeService(config_manager, is_paper_trading_activated=True)
 
-        if exchange_name == "bybit":
+        if exchange_name in ("binance", "bybit"):
             mock_exchange_instance.set_sandbox_mode.assert_called_once_with(True)
         elif expected_url:
             assert mock_exchange_instance.urls["api"] == expected_url

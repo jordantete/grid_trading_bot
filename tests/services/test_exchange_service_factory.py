@@ -61,7 +61,7 @@ class TestExchangeServiceFactory:
 
         assert isinstance(service, LiveExchangeService), "Expected a LiveExchangeService instance"
         assert service.is_paper_trading_activated is True
-        assert mock_exchange_instance.urls["api"] == "https://testnet.binance.vision/api"
+        mock_exchange_instance.set_sandbox_mode.assert_called_once_with(True)
 
     def test_invalid_trading_mode(self, config_manager):
         config_manager.get_trading_mode.return_value = "invalid_mode"
