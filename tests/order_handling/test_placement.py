@@ -437,3 +437,56 @@ class TestRecoveredFills:
 
         assert [o.price for o in armed.execution.open_orders(OrderSide.SELL)] == [120.0]
         assert len(armed.journal) == 0
+
+
+def _order_manager_warnings(caplog):
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "OrderManager" and record.levelno == logging.WARNING
+    ]
+
+
+class TestGridRoundSummary:
+    async def test_a_round_with_unfunded_levels_logs_one_warning_and_sends_one_alert(self, caplog):
+        caplog.set_level(logging.INFO)
+        stack = build_stack(fiat=10.0, store=RecordingStore())
+
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+
+        assert _order_manager_warnings(caplog) == [
+            "Grid placement left 3 buy and 0 sell levels unfunded: [80.0, 90.0, 100.0]"
+        ]
+        assert _sent(stack).count(NotificationType.ORDER_FAILED) == 1
+        assert _errors(caplog) == []
+
+    async def test_an_exchange_refusal_counts_in_the_round_summary(self, caplog):
+        caplog.set_level(logging.INFO)
+        stack = build_stack(store=RecordingStore())
+        stack.execution.fail_next_limit_order = OrderRejectedError("insufficient balance")
+
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+
+        assert _order_manager_warnings(caplog) == ["Grid placement left 1 buy and 0 sell levels unfunded: [80.0]"]
+        assert _sent(stack).count(NotificationType.ORDER_FAILED) == 1
+
+    async def test_a_fully_funded_round_reports_nothing(self, caplog):
+        caplog.set_level(logging.INFO)
+        stack = build_stack(store=RecordingStore())
+
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+
+        assert not any("unfunded" in message for message in _order_manager_warnings(caplog))
+        assert NotificationType.ORDER_FAILED not in _sent(stack)
+
+    async def test_a_regrid_round_reports_its_own_unfunded_levels(self, caplog):
+        caplog.set_level(logging.INFO)
+        stack = build_stack(fiat=10.0, store=RecordingStore())
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+        caplog.clear()
+
+        assert await stack.manager.regrid(ARMING_PRICE, lambda: None) is True
+
+        assert _order_manager_warnings(caplog) == [
+            "Grid placement left 3 buy and 0 sell levels unfunded: [80.0, 90.0, 100.0]"
+        ]

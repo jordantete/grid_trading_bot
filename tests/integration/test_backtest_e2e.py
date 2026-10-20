@@ -143,6 +143,34 @@ def _assert_value_change_splits_into_realized_and_unrealized(bot, result):
     return snapshot
 
 
+def _error_records(caplog):
+    return [f"{record.name}: {record.getMessage()}" for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+def _assert_reserved_matches_open_orders(bot):
+    balances = bot.balance_tracker
+    order_manager = bot.strategy.order_manager
+    open_orders = order_manager.order_book.get_open_orders()
+    open_buys = sum(o.price * o.remaining for o in open_orders if o.side == OrderSide.BUY)
+    open_sells = sum(o.remaining for o in open_orders if o.side == OrderSide.SELL)
+    assert len(order_manager.journal) == 0
+    assert balances.reserved_fiat == pytest.approx(open_buys, abs=1e-6)
+    assert balances.reserved_crypto == pytest.approx(open_sells, abs=1e-6)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("strategy_type", "spacing"), SCENARIOS)
+async def test_backtest_logs_no_error_and_reserves_exactly_its_open_orders(
+    strategy_type, spacing, run_backtest_bot, caplog
+):
+    """A refused order is an expected outcome, never an ERROR, and the reservations equal what the open orders need."""
+    caplog.set_level(logging.WARNING)
+    bot, _ = await run_backtest_bot(strategy_type, spacing)
+
+    assert _error_records(caplog) == []
+    _assert_reserved_matches_open_orders(bot)
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize(("strategy_type", "spacing"), SCENARIOS)
 async def test_backtest_value_change_splits_into_realized_and_unrealized(strategy_type, spacing, run_backtest_bot):
@@ -340,6 +368,19 @@ async def test_atr_scenario_completes_without_error(run_backtest_bot):
     assert "performance_summary" in result
     assert "orders" in result
     assert len(result["orders"]) > 0, "No trades were executed during backtest"
+
+
+@pytest.mark.integration
+async def test_atr_scenario_logs_no_error_and_reports_unfunded_levels_once_per_round(run_backtest_bot, caplog):
+    """Each regrid that cannot fund every level says so once, at WARNING, instead of one ERROR per level."""
+    caplog.set_level(logging.WARNING)
+    bot, _ = await _run_atr_scenario(run_backtest_bot)
+
+    assert _error_records(caplog) == []
+    summaries = [record for record in caplog.records if "levels unfunded" in record.getMessage()]
+    assert summaries
+    assert all(record.levelno == logging.WARNING for record in summaries)
+    _assert_reserved_matches_open_orders(bot)
 
 
 @pytest.mark.integration

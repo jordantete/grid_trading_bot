@@ -147,10 +147,11 @@ class OrderManager:
                 await self._save_state()
 
     async def _place_initial_orders(self, current_price: float) -> None:
+        unfunded: list[tuple[OrderSide, float]] = []
         for grid_level, side in self.grid_manager.get_initial_order_plan(current_price):
             if self._positions_closed:
                 self.logger.info("Positions are closed; skipping the remaining initial grid orders.")
-                return
+                break
             if not self.grid_manager.can_place_order(grid_level, side):
                 continue
             total_balance_value = self.balance_tracker.get_total_balance_value(current_price)
@@ -158,7 +159,8 @@ class OrderManager:
             try:
                 await self._submit_limit(side, grid_level, quantity, PlacementPurpose.GRID)
             except OrderRefusedError as e:
-                self.logger.warning(f"Initial {side.value} order at {grid_level.price} not placed: {e}")
+                self.logger.info(f"Initial {side.value} order at {grid_level.price} not placed: {e}")
+                unfunded.append((side, grid_level.price))
             except Exception as e:
                 self.logger.error(
                     f"Error while placing initial {side.value} order at {grid_level.price}: {e}", exc_info=True
@@ -167,6 +169,16 @@ class OrderManager:
                     NotificationType.ERROR_OCCURRED,
                     error_details=f"Error while placing initial {side.value} order: {e!s}",
                 )
+        if unfunded:
+            self._report_unfunded(unfunded)
+
+    def _report_unfunded(self, unfunded: list[tuple[OrderSide, float]]) -> None:
+        """Reports, once per grid round, the levels the balances or the exchange left without an order."""
+        buys = sum(1 for side, _ in unfunded if side == OrderSide.BUY)
+        prices = sorted(price for _, price in unfunded)
+        details = f"Grid placement left {buys} buy and {len(unfunded) - buys} sell levels unfunded: {prices}"
+        self.logger.warning(details)
+        self._notify(NotificationType.ORDER_FAILED, error_details=details)
 
     async def cancel_open_grid_orders(self) -> bool:
         """
