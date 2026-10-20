@@ -61,6 +61,7 @@ class OrderManager:
         self._lock = asyncio.Lock()
         self._outbox: list[tuple[NotificationType, dict[str, Any]]] = []
         self._positions_closed = False
+        self._resolving_for_cancel = False
 
     def set_market_constraints(self, constraints: MarketConstraints) -> None:
         self.market_constraints = constraints
@@ -219,14 +220,18 @@ class OrderManager:
                 await self._save_state()
 
     async def _cancel_open_grid_orders(self) -> bool:
-        for entry in [entry for entry in self.journal.limit_entries() if entry.sent]:
-            try:
-                await self._resolve_sent_entry(entry)
-            except DataFetchError as e:
-                self.logger.error(
-                    f"Could not look up placement {entry.client_order_id}; aborting bulk cancellation: {e}"
-                )
-                return False
+        self._resolving_for_cancel = True
+        try:
+            for entry in [entry for entry in self.journal.limit_entries() if entry.sent]:
+                try:
+                    await self._resolve_sent_entry(entry)
+                except DataFetchError as e:
+                    self.logger.error(
+                        f"Could not look up placement {entry.client_order_id}; aborting bulk cancellation: {e}"
+                    )
+                    return False
+        finally:
+            self._resolving_for_cancel = False
         open_orders = set(self.order_book.get_open_orders())
         pairs = [
             (order, grid_level)
@@ -420,6 +425,10 @@ class OrderManager:
                 self._report_refusal(entry.purpose, entry.level_price, e)
         except DataFetchError as e:
             self.logger.warning(f"Could not look up placement {entry.client_order_id}; retried at the next poll: {e}")
+        except Exception as e:
+            details = f"Retry of placement {entry.client_order_id} failed: {e}"
+            self.logger.error(details, exc_info=True)
+            self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
 
     async def _resolve_sent_entry(self, entry: PendingPlacement) -> Order | None:
         """
@@ -537,6 +546,9 @@ class OrderManager:
         if self._positions_closed:
             self.logger.info(f"Positions are closed; not re-placing ended order {local.identifier}.")
             return
+        if self._resolving_for_cancel:
+            self.logger.info(f"Orders are being cancelled; not re-placing ended order {local.identifier}.")
+            return
         await self._replace_on_level(local, grid_level)
 
     async def _settle_fill(self, local: Order, update: Order) -> None:
@@ -577,6 +589,9 @@ class OrderManager:
         """
         self.logger.info(f"{order.side.value.capitalize()} order completed at grid level {grid_level}.")
         self.grid_manager.complete_order(grid_level, order.side, self._level_busy(grid_level))
+        if self._resolving_for_cancel:
+            self.logger.info(f"Orders are being cancelled; no paired order placed for {order.identifier}.")
+            return
         await self._place_paired_order(order, grid_level)
 
     async def _place_paired_order(self, filled_order: Order, grid_level: GridLevel) -> None:

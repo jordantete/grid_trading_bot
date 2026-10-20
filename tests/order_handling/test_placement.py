@@ -657,6 +657,44 @@ class TestRetries:
         assert len(armed.store.saves) == saves_before
         assert armed.execution.calls == calls_before
 
+    async def test_an_entry_that_fails_does_not_stop_the_retry_of_the_next(self, monkeypatch, caplog):
+        store = RecordingStore()
+        stack = build_stack(store=store)
+        real_execute = stack.execution.execute_limit_order
+        placements = []
+
+        async def first_two_not_placed(*args):
+            placements.append(args)
+            if len(placements) <= 2:
+                raise OrderNotPlacedError("exchange down")
+            return await real_execute(*args)
+
+        stack.execution.execute_limit_order = first_two_not_placed
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+        first, second = stack.journal.limit_entries()
+        real_adopt = order_manager_module.adopt_order
+        adoptions = []
+
+        def fail_first(*args):
+            adoptions.append(args)
+            if len(adoptions) == 1:
+                raise RuntimeError("book broken")
+            return real_adopt(*args)
+
+        monkeypatch.setattr(order_manager_module, "adopt_order", fail_first)
+        saves_before = len(store.saves)
+
+        await stack.manager.retry_pending_placements()
+
+        assert stack.journal.limit_entries() == [first]
+        assert first.sent
+        assert stack.book.get_order(stack.execution.client_ids[second.client_order_id]).is_open()
+        assert stack.grid.grid_levels[second.level_price].state == GridCycleState.WAITING_FOR_BUY_FILL
+        assert reserved_matches_open_orders(stack)
+        assert _sent(stack).count(NotificationType.ERROR_OCCURRED) == 1
+        assert any("book broken" in message for message in _errors(caplog))
+        assert len(store.saves) == saves_before + 1
+
 
 class TestBulkCancelResolvesSentEntries:
     async def test_a_regrid_resolves_a_sent_entry_before_rebuilding(self):
@@ -716,3 +754,83 @@ class TestBulkCancelResolvesSentEntries:
         assert len(stack.journal) == 0
         assert stack.balances.reserved_fiat == pytest.approx(0.0, abs=1e-6)
         assert stack.balances.reserved_crypto == pytest.approx(0.0, abs=1e-6)
+
+    @staticmethod
+    def _watch_regrid(stack):
+        """Records the journal size, the open and total exchange orders at rebuild, and the sent flag of each drop."""
+        dropped_sent = []
+        real_drop = stack.manager._drop_entry
+
+        async def drop(entry):
+            dropped_sent.append(entry.sent)
+            await real_drop(entry)
+
+        stack.manager._drop_entry = drop
+        at_rebuild = []
+
+        def rebuild():
+            at_rebuild.append((len(stack.journal), len(stack.execution.open_orders()), len(stack.execution.orders)))
+
+        return rebuild, at_rebuild, dropped_sent
+
+    async def test_a_regrid_books_a_sent_entry_found_filled_without_placing_its_paired_order(self):
+        stack, _entry, held = await _arm_with_one_lost_placement(OrderOutcomeUnknownError("timeout"))
+        amount = stack.execution.orders[held].amount
+        stack.execution.fill(held)
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+        orders_before = len(stack.execution.orders)
+        rebuild, at_rebuild, dropped_sent = self._watch_regrid(stack)
+        crypto_at_rebuild = []
+
+        assert await stack.manager.regrid(
+            ARMING_PRICE, lambda: (rebuild(), crypto_at_rebuild.append(stack.balances.get_adjusted_crypto_balance()))
+        )
+
+        assert at_rebuild == [(0, 0, orders_before)]
+        assert crypto_at_rebuild == [pytest.approx(crypto_before + amount * 0.999)]
+        assert True not in dropped_sent
+        assert NotificationType.ORDER_FILLED in _sent(stack)
+        assert reserved_matches_open_orders(stack)
+
+    async def test_a_regrid_settles_a_sent_entry_found_cancelled_without_a_replacement(self):
+        stack, _entry, held = await _arm_with_one_lost_placement(OrderOutcomeUnknownError("timeout"))
+        stack.execution.end(held, OrderStatus.CANCELED)
+        orders_before = len(stack.execution.orders)
+        rebuild, at_rebuild, dropped_sent = self._watch_regrid(stack)
+
+        assert await stack.manager.regrid(ARMING_PRICE, rebuild)
+
+        assert at_rebuild == [(0, 0, orders_before)]
+        assert True not in dropped_sent
+        assert NotificationType.ORDER_CANCELLED in _sent(stack)
+        assert reserved_matches_open_orders(stack)
+
+    async def test_a_bulk_cancel_transitions_the_level_of_a_sent_entry_found_filled(self):
+        stack, entry, held = await _arm_with_one_lost_placement(OrderOutcomeUnknownError("timeout"))
+        stack.execution.fill(held)
+        orders_before = len(stack.execution.orders)
+
+        assert await stack.manager.cancel_open_grid_orders() is True
+
+        assert len(stack.execution.orders) == orders_before
+        assert stack.grid.grid_levels[entry.level_price].state == GridCycleState.READY_TO_BUY
+        assert len(stack.journal) == 0
+        assert stack.balances.reserved_fiat == pytest.approx(0.0, abs=1e-6)
+        assert stack.balances.reserved_crypto == pytest.approx(0.0, abs=1e-6)
+
+    async def test_the_pipeline_places_again_once_a_bulk_cancel_stopped_on_a_failed_lookup(self):
+        stack, _entry, held = await _arm_with_one_lost_placement(OrderOutcomeUnknownError("timeout"))
+        real_find = stack.execution.find_order
+        stack.execution.fill(held)
+
+        async def unreachable(_client_order_id, _pair):
+            raise DataFetchError("exchange down")
+
+        stack.execution.find_order = unreachable
+        assert await stack.manager.cancel_open_grid_orders() is False
+        stack.execution.find_order = real_find
+
+        await stack.manager.retry_pending_placements()
+
+        assert stack.book.get_order(stack.execution.order_at(110.0, OrderSide.SELL).identifier).is_open()
+        assert len(stack.journal) == 0
