@@ -405,9 +405,15 @@ class GridTradingBot:
         return self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
 
     async def _exchange_free_base(self) -> float:
-        """The base currency free on the exchange, which a liquidation the exchange refused falls back on."""
-        balances = await self.exchange_service.get_balance()
-        return float(balances.get("free", {}).get(self.config_manager.get_base_currency(), 0.0))
+        """
+        The base currency free on the exchange, which a liquidation the exchange refused falls back on. Raises
+        DataFetchError when the exchange does not report it.
+        """
+        base = self.config_manager.get_base_currency()
+        free = (await self.exchange_service.get_balance() or {}).get("free") or {}
+        if free.get(base) is None:
+            raise DataFetchError(f"The exchange reported no free {base} balance.")
+        return float(free[base])
 
     async def request_stop(self, request: StopRequest) -> None:
         """Asks the bot to stop through STOP_BOT, so every component sees the same request."""

@@ -1388,6 +1388,33 @@ class TestLiquidation:
         assert stack.balances.crypto_balance == pytest.approx(0.5)
         assert stack.manager._liquidated
 
+    @pytest.mark.parametrize("read_error", [TypeError("must be real number, not NoneType"), DataFetchError("down")])
+    async def test_a_failing_balance_read_after_a_refusal_keeps_the_liquidation_going(self, read_error):
+        stack, clock = _liquidating_stack(crypto=2.0)
+        stack.manager.exchange_balance = AsyncMock(side_effect=read_error)
+        stack.execution.market_order_failures = [OrderRejectedError("insufficient balance")]
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert _market_sells(stack) == [2.0]
+        assert clock.sleeps == [1]
+        assert stack.manager._liquidated
+
+    async def test_an_unexpected_error_of_an_attempt_is_a_failed_attempt_retried_with_an_alert(self, caplog):
+        stack, clock = _liquidating_stack(crypto=2.0)
+        stack.execution.market_order_failures = [RuntimeError("boom"), RuntimeError("boom")]
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert _market_sells(stack) == [2.0]
+        assert clock.sleeps == [1, 2]
+        assert stack.manager._liquidated
+        assert len(_liquidation_alerts(stack)) == 1
+        assert any(
+            record.levelno == logging.ERROR and record.exc_info and "attempt 1" in record.getMessage()
+            for record in caplog.records
+        )
+
     async def test_the_first_attempt_runs_even_when_already_interrupted(self):
         stack, _ = _liquidating_stack(crypto=2.0)
         stack.manager.interrupt_liquidation()

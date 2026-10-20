@@ -883,9 +883,9 @@ class OrderManager:
 
     async def _liquidate(self, current_price: float | None) -> None:
         """
-        Sells the free crypto at market until none is left. A transient failure is retried after a growing delay, a
-        refusal re-reads the exchange balance first, and a remainder under the exchange minimum stops with an alert.
-        Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL seconds.
+        Sells the free crypto at market until none is left. A failed attempt, whatever it raised, is retried after a
+        growing delay, a refusal re-reads the exchange balance first, and a remainder under the exchange minimum stops
+        with an alert. Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL seconds.
         """
         failures = 0
         last_alert_at: float | None = None
@@ -904,6 +904,9 @@ class OrderManager:
                     sold = await self._liquidation_attempt(current_price, exchange_cap)
                 except (DataFetchError, OrderRefusedError) as e:
                     error = e
+                except Exception as e:
+                    error = e
+                    self.logger.error(f"Liquidation attempt {failures + 1} raised: {e}", exc_info=True)
                 finally:
                     await self._save_state()
             if error is None:
@@ -997,7 +1000,9 @@ class OrderManager:
             return await self.exchange_balance()
         except DataFetchError as e:
             self.logger.warning(f"Could not read the exchange balance for the next liquidation attempt: {e}")
-            return fallback
+        except Exception as e:
+            self.logger.error(f"Reading the exchange balance for the next attempt failed: {e}", exc_info=True)
+        return fallback
 
     async def _pause(self, delay: float) -> None:
         """Waits `delay` seconds, or until the liquidation is interrupted."""
@@ -1017,10 +1022,7 @@ class OrderManager:
 
     async def _send_liquidation_alert(self, details: str) -> None:
         self.logger.error(details)
-        await self.notification_handler.async_send_notification(
-            NotificationType.ERROR_OCCURRED,
-            error_details=details,
-        )
+        await self._send([(NotificationType.ERROR_OCCURRED, {"error_details": details})])
 
     async def execute_take_profit_or_stop_loss_order(
         self,

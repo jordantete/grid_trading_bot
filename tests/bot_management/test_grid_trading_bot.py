@@ -1425,3 +1425,17 @@ class TestLiquidationBalanceWiring(BotFixtures):
         bot.exchange_service.get_balance = AsyncMock(return_value={"free": {"BTC": 1.25, "USDT": 10.0}})
 
         assert await bot.order_manager.exchange_balance() == 1.25
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("balances", [{"free": {"BTC": None, "USDT": 10.0}}, {"free": {"USDT": 10.0}}, {}])
+    async def test_a_free_base_the_exchange_does_not_report_is_unreadable_not_zero(
+        self, config_manager, notification_handler, mock_event_bus, balances
+    ):
+        config_manager.get_trading_mode.return_value = TradingMode.LIVE
+        config_manager.get_base_currency.return_value = "BTC"
+        config_manager.get_quote_currency.return_value = "USDT"
+        bot = GridTradingBot("config.json", config_manager, notification_handler, mock_event_bus, no_plot=True)
+        bot.exchange_service.get_balance = AsyncMock(return_value=balances)
+
+        with pytest.raises(DataFetchError):
+            await bot.order_manager.exchange_balance()
