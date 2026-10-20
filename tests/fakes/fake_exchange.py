@@ -5,7 +5,9 @@ each fill receives.
 """
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+import fcntl
 import json
 from pathlib import Path
 import time
@@ -185,10 +187,21 @@ class ExchangeState:
         return json.loads(self.path.read_text())
 
     def update(self, change: Callable[[dict[str, Any]], Any]) -> Any:
-        data = self.read()
-        result = change(data)
-        self._write(data)
+        """Reads, changes and writes the file under an exclusive lock, so the bot and the test never lose a write."""
+        with self._locked():
+            data = self.read()
+            result = change(data)
+            self._write(data)
         return result
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        with self.path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
     def _write(self, data: dict[str, Any]) -> None:
         temporary = self.path.with_suffix(".tmp")

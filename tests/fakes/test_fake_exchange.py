@@ -1,6 +1,8 @@
 """The fake exchange answers the order calls LiveExchangeService makes the way ccxt does."""
 
 import asyncio
+import multiprocessing
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -181,3 +183,22 @@ async def test_a_lookup_without_an_order_id_or_a_client_id_finds_nothing(fake, s
 
     with pytest.raises(ccxt.OrderNotFound):
         await fake.fetch_order(None, PAIR, params=params)
+
+
+def _add_orders(path: str, count: int) -> None:
+    state = ExchangeState(Path(path))
+    for _ in range(count):
+        state.add_open_order("buy", 1.0, 0.001)
+
+
+def test_updates_from_several_processes_never_lose_one_another(state):
+    workers = [
+        multiprocessing.get_context("spawn").Process(target=_add_orders, args=(str(state.path), 50)) for _ in range(4)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=60)
+
+    assert [worker.exitcode for worker in workers] == [0] * 4
+    assert len(state.read()["orders"]) == 200
