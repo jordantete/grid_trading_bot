@@ -385,6 +385,21 @@ class TestGridTradingStrategy:
         order_manager.perform_initial_purchase.assert_called_once_with(15100)
         order_manager.initialize_grid_orders.assert_called_once_with(15100)
 
+    @pytest.mark.asyncio
+    async def test_initialize_grid_orders_once_waits_for_an_initial_purchase_not_done(self, setup_strategy):
+        create_strategy, _, _, grid_manager, order_manager, _, _, _, _ = setup_strategy
+        strategy = create_strategy()
+
+        grid_manager.is_within_grid_range.return_value = True
+        order_manager.perform_initial_purchase = AsyncMock(return_value=False)
+        order_manager.initialize_grid_orders = AsyncMock()
+
+        result = await strategy._initialize_grid_orders_once(current_price=15100, grid_orders_initialized=False)
+
+        assert result is False
+        assert strategy.armed is False
+        order_manager.initialize_grid_orders.assert_not_called()
+
     def test_get_formatted_orders(self, setup_strategy):
         create_strategy, _, _, _, _, _, trading_performance_analyzer, _, _ = setup_strategy
         strategy = create_strategy()

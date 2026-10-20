@@ -5,10 +5,9 @@ import pytest
 
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
-from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError, OrderExecutionFailedError
-from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
-from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 
@@ -33,92 +32,6 @@ def _mock_order(
 
 
 class TestOrderManager:
-    # ── perform_initial_purchase ────────────────────────────────────────
-
-    @pytest.mark.asyncio
-    async def test_perform_initial_purchase(self, setup_order_manager):
-        manager, grid_manager, _, _, _, order_execution_strategy, _ = setup_order_manager
-        grid_manager.get_initial_order_quantity.return_value = 0.01
-        order_execution_strategy.execute_market_order = AsyncMock(return_value=Mock())
-
-        await manager.perform_initial_purchase(50000)
-
-        order_execution_strategy.execute_market_order.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_perform_initial_purchase_zero_quantity(self, setup_order_manager):
-        manager, grid_manager, _, balance_tracker, _, order_execution_strategy, _ = setup_order_manager
-        grid_manager.get_initial_order_quantity.return_value = 0
-        balance_tracker.balance = 1000
-        balance_tracker.crypto_balance = 0
-
-        await manager.perform_initial_purchase(50000)
-
-        order_execution_strategy.execute_market_order.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_perform_initial_purchase_backtest_updates_balances_once(self, setup_order_manager):
-        manager, grid_manager, _, balance_tracker, _, order_execution_strategy, _ = setup_order_manager
-        manager.trading_mode = TradingMode.BACKTEST
-        mock_order = Mock(timestamp=1234567890)
-        grid_manager.get_initial_order_quantity.return_value = 0.01
-        order_execution_strategy.execute_market_order = AsyncMock(return_value=mock_order)
-
-        await manager.perform_initial_purchase(50000)
-
-        balance_tracker.update_after_initial_purchase.assert_awaited_once_with(initial_order=mock_order)
-
-    @pytest.mark.asyncio
-    async def test_perform_initial_purchase_live_calls_update_balance(self, setup_order_manager):
-        manager, grid_manager, _, balance_tracker, _, order_execution_strategy, _ = setup_order_manager
-        mock_order = Mock(timestamp=1234567890)
-        grid_manager.get_initial_order_quantity.return_value = 0.01
-        order_execution_strategy.execute_market_order = AsyncMock(return_value=mock_order)
-        balance_tracker.update_after_initial_purchase = AsyncMock()
-
-        await manager.perform_initial_purchase(50000)
-
-        balance_tracker.update_after_initial_purchase.assert_awaited_once_with(initial_order=mock_order)
-
-    @pytest.mark.asyncio
-    async def test_perform_initial_purchase_execution_failed(self, setup_order_manager):
-        manager, grid_manager, _, _, _, order_execution_strategy, notification_handler = setup_order_manager
-        grid_manager.get_initial_order_quantity.return_value = 0.01
-        order_execution_strategy.execute_market_order = AsyncMock(
-            side_effect=OrderExecutionFailedError(
-                "Purchase failed",
-                OrderSide.BUY,
-                OrderType.MARKET,
-                "BTC/USD",
-                0.01,
-                50000,
-            ),
-        )
-        notification_handler.async_send_notification = AsyncMock()
-
-        await manager.perform_initial_purchase(50000)
-
-        notification_handler.async_send_notification.assert_awaited_with(
-            NotificationType.ORDER_FAILED,
-            error_details="Error while performing initial purchase. Purchase failed",
-        )
-
-    @pytest.mark.asyncio
-    async def test_perform_initial_purchase_generic_exception(self, setup_order_manager):
-        manager, grid_manager, _, _, _, order_execution_strategy, notification_handler = setup_order_manager
-        grid_manager.get_initial_order_quantity.return_value = 0.01
-        order_execution_strategy.execute_market_order = AsyncMock(
-            side_effect=DataFetchError("Network error"),
-        )
-        notification_handler.async_send_notification = AsyncMock()
-
-        await manager.perform_initial_purchase(50000)
-
-        notification_handler.async_send_notification.assert_awaited_with(
-            NotificationType.ORDER_FAILED,
-            error_details="Error while performing initial purchase. Network error",
-        )
-
     # ── execute_take_profit_or_stop_loss_order ──────────────────────────
 
     @pytest.mark.asyncio
@@ -191,18 +104,6 @@ class TestMarketConstraintsEnforcement:
         grid_manager.get_order_size_for_grid_level.return_value = 1.0  # notional ~100 > 50
 
         manager.validate_grid_feasibility(current_price=100.0)  # must not raise
-
-    # ── perform_initial_purchase dust guard ──────────────────────────────
-
-    @pytest.mark.asyncio
-    async def test_initial_purchase_skipped_when_dust(self, setup_order_manager):
-        manager, grid_manager, _, _, _, order_execution_strategy, _ = setup_order_manager
-        manager.set_market_constraints(MarketConstraints(min_amount=None, min_cost=1000.0))
-        grid_manager.get_initial_order_quantity.return_value = 0.1
-
-        await manager.perform_initial_purchase(current_price=100.0)
-
-        order_execution_strategy.execute_market_order.assert_not_called()
 
 
 class TestClosePositions:
@@ -334,17 +235,6 @@ class TestTakeProfitStopLoss:
 
 
 class TestNoNewOrderOnceClosed:
-    @pytest.mark.asyncio
-    async def test_initial_purchase_sends_nothing(self, setup_order_manager):
-        manager, grid_manager, _, _, _, order_execution_strategy, _ = setup_order_manager
-        grid_manager.get_initial_order_quantity.return_value = 0.01
-        order_execution_strategy.execute_market_order = AsyncMock()
-        manager._positions_closed = True
-
-        await manager.perform_initial_purchase(50000)
-
-        order_execution_strategy.execute_market_order.assert_not_awaited()
-
     @pytest.mark.asyncio
     async def test_initialize_grid_orders_sends_nothing(self, setup_order_manager):
         manager, grid_manager, order_validator, _, _, order_execution_strategy, _ = setup_order_manager

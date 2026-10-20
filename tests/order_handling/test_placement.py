@@ -834,3 +834,176 @@ class TestBulkCancelResolvesSentEntries:
 
         assert stack.book.get_order(stack.execution.order_at(110.0, OrderSide.SELL).identifier).is_open()
         assert len(stack.journal) == 0
+
+
+class TestInitialPurchase:
+    @staticmethod
+    def _market_orders(stack):
+        return [o for o in stack.execution.orders.values() if o.order_type == OrderType.MARKET]
+
+    @staticmethod
+    def _quantity(stack):
+        return stack.grid.get_initial_order_quantity(2700.0, 0.0, ARMING_PRICE)
+
+    async def test_the_purchase_buys_once_and_books_the_net_crypto(self):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        quantity = self._quantity(stack)
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        [order] = self._market_orders(stack)
+        assert order.amount == pytest.approx(quantity)
+        assert stack.balances.crypto_balance == pytest.approx(quantity * 0.999)
+        assert stack.balances.balance == pytest.approx(2700.0 - quantity * ARMING_PRICE)
+        assert stack.manager.arming.initial_purchase_done is True
+        assert len(stack.journal) == 0
+        assert stack.book.get_order(order.identifier) is not None
+
+    async def test_a_purchase_with_nothing_to_buy_is_done_without_an_order(self):
+        stack = build_stack(store=RecordingStore())
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        assert self._market_orders(stack) == []
+        assert stack.manager.arming.initial_purchase_done is True
+
+    async def test_an_unreachable_exchange_leaves_the_purchase_to_do(self):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        stack.execution.market_order_failures = [OrderNotPlacedError("exchange down")]
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is False
+
+        assert stack.manager.arming.initial_purchase_done is False
+        assert self._market_orders(stack) == []
+        assert stack.balances.crypto_balance == 0.0
+        [entry] = stack.journal.entries()
+        assert (entry.purpose, entry.order_type, entry.sent) == (
+            PlacementPurpose.INITIAL_PURCHASE,
+            OrderType.MARKET,
+            False,
+        )
+        assert _sent(stack).count(NotificationType.ORDER_PENDING) == 1
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        assert len(self._market_orders(stack)) == 1
+        assert len(stack.journal) == 0
+        assert stack.manager.arming.initial_purchase_done is True
+        assert _sent(stack).count(NotificationType.ORDER_PENDING) == 1
+
+    async def test_an_unknown_outcome_is_looked_up_before_buying_again(self):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        stack.execution.market_order_failures = [OrderOutcomeUnknownError("timeout")]
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is False
+        [entry] = stack.journal.entries()
+        assert entry.sent
+        # The exchange had executed it under the entry's client id; only the answer was lost.
+        await stack.execution.execute_market_order(
+            OrderSide.BUY, "BTC/USDT", entry.quantity, ARMING_PRICE, entry.client_order_id
+        )
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        assert len(self._market_orders(stack)) == 1
+        assert stack.balances.crypto_balance == pytest.approx(entry.quantity * 0.999)
+        assert len(stack.journal) == 0
+
+    async def test_a_partial_leg_buys_the_rest_in_a_new_leg(self):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        quantity = self._quantity(stack)
+        stack.execution.partial_market_fill = 0.5
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        first, second = self._market_orders(stack)
+        assert first.filled == pytest.approx(quantity * 0.5)
+        assert second.amount == pytest.approx(quantity * 0.5)
+        assert stack.balances.crypto_balance == pytest.approx(quantity * 0.999)
+        assert len(stack.journal) == 0
+
+    async def test_legs_stop_after_three(self, caplog):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        quantity = self._quantity(stack)
+        real_execute = stack.execution.execute_market_order
+
+        async def half_fill(*args):
+            stack.execution.partial_market_fill = 0.5
+            return await real_execute(*args)
+
+        stack.execution.execute_market_order = half_fill
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        assert len(self._market_orders(stack)) == 3
+        assert stack.balances.crypto_balance == pytest.approx(quantity * (0.5 + 0.25 + 0.125) * 0.999)
+        assert any(
+            "stopped after 3 legs" in record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+        )
+        assert len(stack.journal) == 0
+
+    async def test_an_exchange_refusal_marks_the_purchase_done_with_an_alert(self):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        stack.execution.market_order_failures = [OrderRejectedError("insufficient balance")]
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        assert stack.balances.crypto_balance == 0.0
+        assert len(stack.journal) == 0
+        assert stack.manager.arming.initial_purchase_done is True
+        assert NotificationType.ORDER_FAILED in _sent(stack)
+
+    async def test_a_purchase_under_the_exchange_minimum_is_done_with_an_alert(self):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        stack.manager.set_market_constraints(MarketConstraints(min_amount=None, min_cost=100_000.0))
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        assert self._market_orders(stack) == []
+        assert NotificationType.ORDER_FAILED in _sent(stack)
+
+    async def test_no_purchase_once_the_positions_are_closed(self):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        stack.manager._positions_closed = True
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        assert self._market_orders(stack) == []
+
+    async def test_the_entry_is_saved_as_sent_before_the_market_order_goes_out(self):
+        store = RecordingStore()
+        stack = build_stack(crypto=0.0, store=store)
+        seen = []
+        real_save_pending = store.save_pending
+
+        async def save_pending(entry):
+            seen.append((entry.purpose, entry.sent, len(self._market_orders(stack))))
+            return await real_save_pending(entry)
+
+        store.save_pending = save_pending
+
+        await stack.manager.perform_initial_purchase(ARMING_PRICE)
+
+        assert seen == [(PlacementPurpose.INITIAL_PURCHASE, True, 0)]
+
+    async def test_a_failed_save_sends_nothing_and_leaves_the_purchase_to_do(self):
+        store = RecordingStore()
+        store.fail_pending = True
+        stack = build_stack(crypto=0.0, store=store)
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is False
+
+        assert self._market_orders(stack) == []
+        assert stack.manager.arming.initial_purchase_done is False
+
+    async def test_an_unexpected_error_keeps_the_purchase_to_do_and_alerts_once(self):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        stack.execution.market_order_failures = [RuntimeError("boom"), RuntimeError("boom")]
+
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is False
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is False
+        assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        assert len(self._market_orders(stack)) == 1
+        assert _sent(stack).count(NotificationType.ERROR_OCCURRED) == 1

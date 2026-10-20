@@ -30,6 +30,8 @@ from .state_store import ArmingFlags, StateStore
 
 
 class OrderManager:
+    MAX_MARKET_LEGS = 3
+
     def __init__(
         self,
         grid_manager: GridManager,
@@ -638,85 +640,138 @@ class OrderManager:
             finally:
                 await self._save_state()
 
-    async def perform_initial_purchase(
-        self,
-        current_price: float,
-    ) -> None:
+    async def perform_initial_purchase(self, current_price: float) -> bool:
         """
-        Handles the initial crypto purchase for grid trading strategy if required.
-
-        Args:
-            current_price: The current price of the trading pair.
+        Buys, once, the crypto the grid's sells need. Returns whether the purchase is done; it is not while the
+        exchange cannot take or confirm the order, and the caller tries again at its next tick.
         """
         async with self._locked():
             if self.arming.initial_purchase_done:
                 self.logger.info("Initial purchase already done; skipping it.")
-                return
+                return True
+            done = False
             try:
                 if self._positions_closed:
                     self.logger.info("Positions are closed; skipping the initial purchase.")
-                    return
-                await self._buy_initial_position(current_price)
+                    done = True
+                else:
+                    done = await self._buy_initial_position(current_price)
+                return done
             finally:
-                self.arming = replace(self.arming, initial_purchase_done=True)
+                if done:
+                    self.arming = replace(self.arming, initial_purchase_done=True)
                 await self._save_state()
 
-    async def _buy_initial_position(self, current_price: float) -> None:
-        initial_quantity = self.grid_manager.get_initial_order_quantity(
-            current_fiat_balance=self.balance_tracker.balance,
-            current_crypto_balance=self.balance_tracker.crypto_balance,
-            current_price=current_price,
-        )
+    async def _buy_initial_position(self, current_price: float) -> bool:
+        entry = next((e for e in self.journal.entries() if e.purpose is PlacementPurpose.INITIAL_PURCHASE), None)
+        if entry is None:
+            quantity = self.grid_manager.get_initial_order_quantity(
+                current_fiat_balance=self.balance_tracker.balance,
+                current_crypto_balance=self.balance_tracker.crypto_balance,
+                current_price=current_price,
+            )
+            if quantity <= 0:
+                self.logger.warning("Initial purchase quantity is zero or negative. Skipping initial purchase.")
+                return True
+            if self.market_constraints is not None:
+                violation = self.market_constraints.violation(quantity, current_price)
+                if violation:
+                    self.logger.warning(f"Skipping initial purchase: {violation}")
+                    self._notify(NotificationType.ORDER_FAILED, error_details=f"Initial purchase skipped: {violation}")
+                    return True
+            entry = self._new_market_entry(OrderSide.BUY, quantity, current_price, PlacementPurpose.INITIAL_PURCHASE)
 
-        if initial_quantity <= 0:
-            self.logger.warning("Initial purchase quantity is zero or negative. Skipping initial purchase.")
-            return
-
-        if self.market_constraints is not None:
-            violation = self.market_constraints.violation(initial_quantity, current_price)
-            if violation:
-                self.logger.warning(f"Skipping initial purchase: {violation}")
+        for _ in range(self.MAX_MARKET_LEGS):
+            self.logger.info(f"Performing initial crypto purchase: {entry.quantity} at price {current_price}.")
+            try:
+                order = await self._send_market_entry(entry)
+            except OrderRefusedError as e:
+                self.journal.remove(entry.client_order_id)
+                self.logger.warning(f"Initial purchase refused: {e}")
                 self._notify(
-                    NotificationType.ORDER_FAILED,
-                    error_details=f"Initial purchase skipped: {violation}",
+                    NotificationType.ORDER_FAILED, error_details=f"Error while performing initial purchase. {e}"
                 )
-                return
+                return True
+            except DataFetchError as e:
+                self.logger.warning(f"Initial purchase not done yet; retried at the next tick: {e}")
+                if entry.attempts == 1:
+                    self._notify(
+                        NotificationType.ORDER_PENDING, error_details=f"Initial purchase of {entry.quantity}: {e}"
+                    )
+                return False
+            except Exception as e:
+                self.logger.error(f"Unexpected error during the initial purchase: {e}", exc_info=True)
+                if entry.attempts == 1:
+                    self._notify(
+                        NotificationType.ERROR_OCCURRED, error_details=f"Error while performing initial purchase: {e}"
+                    )
+                return False
+            self.journal.remove(entry.client_order_id)
+            if not order.filled:
+                self.logger.warning("The initial purchase leg filled nothing; retried at the next tick.")
+                return False
+            await self._book_initial_purchase(order)
+            remaining = entry.quantity - order.filled
+            if self._is_dust(remaining, current_price):
+                return True
+            entry = self._new_market_entry(OrderSide.BUY, remaining, current_price, PlacementPurpose.INITIAL_PURCHASE)
 
-        self.logger.info(f"Performing initial crypto purchase: {initial_quantity} at price {current_price}.")
+        self.journal.remove(entry.client_order_id)
+        self.logger.warning(
+            f"Initial purchase stopped after {self.MAX_MARKET_LEGS} legs; {entry.quantity} left unbought."
+        )
+        return True
 
+    def _new_market_entry(
+        self, side: OrderSide, quantity: float, price: float, purpose: PlacementPurpose
+    ) -> PendingPlacement:
+        entry = PendingPlacement(
+            client_order_id=new_client_order_id(self.config_hash),
+            order_type=OrderType.MARKET,
+            side=side,
+            quantity=self.order_execution_strategy.round_amount(self.trading_pair, quantity),
+            price=price,
+            purpose=purpose,
+            created_at=int(time.time() * 1000),
+        )
+        self.journal.add(entry)
+        return entry
+
+    async def _send_market_entry(self, entry: PendingPlacement) -> Order:
+        """
+        Sends one market leg through the journal, looking it up first when an earlier send's outcome is unknown.
+        Raises DataFetchError when the order is not placed or its outcome stays unknown, OrderRefusedError on a refusal.
+        """
+        if entry.sent:
+            found = await self.order_execution_strategy.find_order(entry.client_order_id, self.trading_pair)
+            if found is not None:
+                return found
+            entry.sent = False
+        entry.sent = True
+        if self.state_store is not None and not await self.state_store.save_pending(entry):
+            entry.sent = False
+            raise OrderNotPlacedError(f"Placement {entry.client_order_id} could not be saved before sending.")
+        entry.attempts += 1
         try:
-            buy_order = await self.order_execution_strategy.execute_market_order(
-                OrderSide.BUY,
-                self.trading_pair,
-                initial_quantity,
-                current_price,
-                client_order_id=new_client_order_id(self.config_hash),
+            return await self.order_execution_strategy.execute_market_order(
+                entry.side, self.trading_pair, entry.quantity, entry.price, entry.client_order_id
             )
-            self.logger.info(f"Initial crypto purchase completed. Order details: {buy_order}")
-            self.order_book.add_order(buy_order)
-            self._notify(
-                NotificationType.ORDER_PLACED,
-                order_details=f"Initial purchase done: {buy_order!s}",
-            )
+        except OrderNotPlacedError:
+            entry.sent = False
+            raise
 
-            await self.balance_tracker.update_after_initial_purchase(initial_order=buy_order)
+    async def _book_initial_purchase(self, order: Order) -> None:
+        # A leg whose remainder was cancelled is final for what it filled; the next leg buys the rest.
+        order.status = OrderStatus.CLOSED
+        self.logger.info(f"Initial crypto purchase completed. Order details: {order}")
+        self.order_book.add_order(order)
+        self._notify(NotificationType.ORDER_PLACED, order_details=f"Initial purchase done: {order!s}")
+        await self.balance_tracker.update_after_initial_purchase(initial_order=order)
 
-        except OrderExecutionFailedError as e:
-            self.logger.error(f"Failed while executing initial purchase - {e!s}", exc_info=True)
-            self._notify(
-                NotificationType.ORDER_FAILED,
-                error_details=f"Error while performing initial purchase. {e}",
-            )
-
-        except (DataFetchError, OrderRefusedError, ValueError) as e:
-            self.logger.error(
-                f"Failed to perform initial purchase at current_price: {current_price} - error: {e}",
-                exc_info=True,
-            )
-            self._notify(
-                NotificationType.ORDER_FAILED,
-                error_details=f"Error while performing initial purchase. {e}",
-            )
+    def _is_dust(self, quantity: float, price: float) -> bool:
+        if quantity <= 0:
+            return True
+        return self.market_constraints is not None and self.market_constraints.violation(quantity, price) is not None
 
     async def close_positions(self, liquidate: bool, current_price: float | None = None) -> None:
         """

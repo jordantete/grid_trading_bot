@@ -366,7 +366,9 @@ class GridTradingStrategy(TradingStrategyInterface):
             self.logger.info(
                 f"Current price {current_price} is within the grid range. Will perform initial purchase",
             )
-            await self.order_manager.perform_initial_purchase(current_price)
+            if not await self.order_manager.perform_initial_purchase(current_price):
+                self.logger.info("Initial purchase not done yet; the grid waits for it.")
+                return False
         else:
             self.logger.info("Skipping initial purchase (recovered from persisted state).")
         self.logger.info("Initial purchase done, will initialize grid orders")
