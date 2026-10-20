@@ -934,9 +934,10 @@ class OrderManager:
 
     async def _liquidation_attempt(self, current_price: float | None, exchange_cap: float | None) -> float | None:
         """
-        One market sell, under the lock: a leg whose outcome is unknown is looked up first, otherwise a new leg sells
-        the free crypto. Returns the quantity sold, or None once nothing more can be sold. Raises DataFetchError while
-        the outcome is unknown or the order was not placed, OrderRefusedError on a refusal.
+        One market sell, under the lock: a leg whose outcome is unknown is looked up first, otherwise the leg a failed
+        attempt left, or a new one, sells the free crypto. Returns the quantity sold, or None once nothing more can be
+        sold. Raises DataFetchError while the outcome is unknown or the order was not placed, OrderRefusedError on a
+        refusal.
         """
         entry = next((e for e in self.journal.entries() if e.purpose is PlacementPurpose.LIQUIDATION), None)
         if entry is None or not entry.sent:
