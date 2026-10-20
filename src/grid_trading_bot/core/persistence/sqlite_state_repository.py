@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS pending_placements (
     purpose TEXT NOT NULL,
     level_price REAL,
     source_level_price REAL,
+    source_order_id TEXT,
     sent INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
@@ -305,8 +306,8 @@ class SQLiteStateRepository(StateRepositoryInterface):
         self._conn.execute(
             """INSERT OR REPLACE INTO pending_placements
                (client_order_id, order_type, side, quantity, price, purpose,
-                level_price, source_level_price, sent, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                level_price, source_level_price, source_order_id, sent, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 row["client_order_id"],
                 row["order_type"],
@@ -316,6 +317,7 @@ class SQLiteStateRepository(StateRepositoryInterface):
                 row["purpose"],
                 row.get("level_price"),
                 row.get("source_level_price"),
+                row.get("source_order_id"),
                 1 if row["sent"] else 0,
                 row["created_at"],
             ),

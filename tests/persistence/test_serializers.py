@@ -321,6 +321,7 @@ class TestPendingPlacementSerialization:
             "purpose": PlacementPurpose.PAIRED,
             "level_price": 105.0,
             "source_level_price": 95.0,
+            "source_order_id": "o-42",
             "sent": True,
             "created_at": 1700000000000,
         }
@@ -355,6 +356,7 @@ class TestPendingPlacementSerialization:
             purpose=PlacementPurpose.INITIAL_PURCHASE,
             level_price=None,
             source_level_price=None,
+            source_order_id=None,
             sent=False,
         )
 

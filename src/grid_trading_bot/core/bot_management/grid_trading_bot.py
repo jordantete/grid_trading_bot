@@ -262,6 +262,8 @@ class GridTradingBot:
                         f"State recovered: skip_initial_purchase={skip_initial_purchase}, "
                         f"skip_grid_init={skip_grid_init}"
                     )
+                    if recovery_result.liquidation_in_progress:
+                        await self._halt_for_interrupted_liquidation()
                 elif recovery_result.outcome is RecoveryOutcome.NO_STATE:
                     refused = not await self._start_fresh()
                 else:
@@ -274,8 +276,10 @@ class GridTradingBot:
             if not refused:
                 self._state_ready = True
                 # Placed even when a stop arrived during recovery: recovery already took these orders out of the open
-                # orders, so a final checkpoint without their successors would lose them.
-                if recovery_result and recovery_result.orders_filled_while_down:
+                # orders, so a final checkpoint without their successors would lose them. After an interrupted
+                # liquidation the bot halts and cancels the grid, so it places none.
+                resume_grid = recovery_result is not None and not recovery_result.liquidation_in_progress
+                if resume_grid and recovery_result.orders_filled_while_down:
                     self.logger.info(
                         f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
                         f"orders filled while bot was down."
@@ -283,7 +287,7 @@ class GridTradingBot:
                     await self.order_manager.place_paired_orders_for_recovered_fills(
                         recovery_result.orders_filled_while_down
                     )
-                if recovery_result and recovery_result.ended_while_down:
+                if resume_grid and recovery_result.ended_while_down:
                     self.logger.info(
                         f"Re-placing {len(recovery_result.ended_while_down)} orders that ended while bot was down."
                     )
@@ -345,6 +349,21 @@ class GridTradingBot:
             exchange_service=self.exchange_service,
         )
         return True
+
+    async def _halt_for_interrupted_liquidation(self) -> None:
+        """Halts instead of resuming the grid: the liquidation the bot was running when it stopped may be unfinished."""
+        await self._attempt(
+            "interrupted liquidation alert",
+            lambda: self.notification_handler.async_send_notification(
+                NotificationType.ERROR_OCCURRED,
+                error_details=(
+                    "A liquidation was in progress when the bot stopped. What it sold is booked, but the position "
+                    "may still be open on the exchange: check it and sell what is left by hand. The bot halts "
+                    "instead of resuming the grid."
+                ),
+            ),
+        )
+        await self._stop(StopRequest(StopKind.RISK, "a liquidation was in progress when the bot stopped"))
 
     async def _refuse_start(self, result: RecoveryResult) -> None:
         """Stops before trading when the saved state cannot be resumed; the database is left as it is."""

@@ -31,6 +31,8 @@ class PendingPlacement:
     purpose: PlacementPurpose
     level_price: float | None = None
     source_level_price: float | None = None
+    # The filled (PAIRED) or ended (REPLACEMENT) order this placement follows, so a restart does not follow it twice.
+    source_order_id: str | None = None
     sent: bool = False
     created_at: int = 0
     attempts: int = 0

@@ -292,6 +292,7 @@ class OrderManager:
         quantity: float,
         purpose: PlacementPurpose,
         source_level: GridLevel | None = None,
+        source_order_id: str | None = None,
     ) -> Order | None:
         """
         Places one limit order on `grid_level` through the journal: rounds and checks it, reserves its funds, holds
@@ -320,6 +321,7 @@ class OrderManager:
             purpose=purpose,
             level_price=grid_level.price,
             source_level_price=source_level.price if source_level is not None else None,
+            source_order_id=source_order_id,
             created_at=int(time.time() * 1000),
         )
         self.journal.add(entry)
@@ -463,7 +465,9 @@ class OrderManager:
         """Re-places an order that ended unfilled on its level, for the quantity it did not fill."""
         quantity = order.remaining if order.remaining and order.remaining > 0 else order.amount
         try:
-            await self._submit_limit(order.side, grid_level, quantity, PlacementPurpose.REPLACEMENT)
+            await self._submit_limit(
+                order.side, grid_level, quantity, PlacementPurpose.REPLACEMENT, source_order_id=order.identifier
+            )
         except OrderRefusedError as e:
             self._report_refusal(PlacementPurpose.REPLACEMENT, grid_level.price, e)
         except Exception as e:
@@ -624,7 +628,9 @@ class OrderManager:
         if target is None:
             return
         try:
-            await self._submit_limit(side, target, quantity, PlacementPurpose.PAIRED, grid_level)
+            await self._submit_limit(
+                side, target, quantity, PlacementPurpose.PAIRED, grid_level, source_order_id=filled_order.identifier
+            )
         except OrderRefusedError as e:
             self._report_refusal(PlacementPurpose.PAIRED, target.price, e)
 

@@ -688,6 +688,37 @@ class TestStrategyStatePersistenceWiring:
         assert calls == ["pairs", "replacements"]
         bot.order_manager.place_replacements_for_recovered_ends.assert_awaited_once_with([("ended", "level")])
 
+    @pytest.mark.asyncio
+    async def test_an_interrupted_liquidation_halts_the_bot_after_the_recovery(self, bot):
+        _prepare_startup(bot)
+        bot.state_recovery_service.attempt_recovery = AsyncMock(
+            return_value=RecoveryResult(
+                RecoveryOutcome.RESUMED,
+                initial_purchase_done=True,
+                grid_orders_initialized=True,
+                orders_filled_while_down=[("filled", "level")],
+                liquidation_in_progress=True,
+            )
+        )
+        bot.order_manager.place_paired_orders_for_recovered_fills = AsyncMock()
+        bot.order_manager.close_positions = AsyncMock()
+
+        await bot.run()
+
+        assert bot.stop_request.kind is StopKind.RISK
+        assert bot.stop_request.reason == "a liquidation was in progress when the bot stopped"
+        bot.strategy.run.assert_not_awaited()
+        bot.order_manager.place_paired_orders_for_recovered_fills.assert_not_awaited()
+        bot.order_manager.close_positions.assert_awaited_once_with(liquidate=False)
+        bot.order_manager.checkpoint.assert_awaited()
+        alerts = [
+            call.kwargs["error_details"]
+            for call in bot.notification_handler.async_send_notification.await_args_list
+            if call.args and call.args[0] is NotificationType.ERROR_OCCURRED
+        ]
+        assert len(alerts) == 1
+        assert "may still be open on the exchange" in alerts[0]
+
 
 def _record_shutdown(bot, calls, run_files=None):
     bot.reconciliation_service = None

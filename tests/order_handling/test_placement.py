@@ -379,6 +379,7 @@ class TestPairedOrders:
 
         [entry] = armed.journal.limit_entries()
         assert (entry.level_price, entry.source_level_price) == (110.0, 100.0)
+        assert entry.source_order_id == buy.identifier
         assert entry.quantity == pytest.approx(buy.amount * 0.999)
         assert armed.grid.grid_levels[110.0].state == GridCycleState.WAITING_FOR_SELL_FILL
         assert reserved_matches_open_orders(armed)
@@ -394,6 +395,7 @@ class TestReplacements:
 
         [entry] = armed.journal.limit_entries()
         assert (entry.level_price, entry.purpose, entry.sent) == (90.0, PlacementPurpose.REPLACEMENT, False)
+        assert entry.source_order_id == buy.identifier
         assert entry.quantity == pytest.approx(buy.amount)
         assert armed.grid.grid_levels[90.0].state == GridCycleState.WAITING_FOR_BUY_FILL
         assert reserved_matches_open_orders(armed)

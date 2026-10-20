@@ -11,7 +11,7 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
-from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
+from grid_trading_bot.core.order_handling.balance_tracker import _QUANTIZE_EXP, BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
@@ -29,9 +29,6 @@ from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
 from .serializers import compute_config_hash, dict_to_order, dict_to_pending_placement
 from .state_repository_interface import StateRepositoryInterface
-
-# The balance tracker's precision, so a restored reservation matches the releases that later consume it.
-_QUANTIZE_EXP = Decimal("1e-8")
 
 
 class RecoveryOutcome(Enum):
@@ -53,6 +50,7 @@ class RecoveryResult:
     orders_filled_while_down: list[tuple[Order, GridLevel]] = field(default_factory=list)
     ended_while_down: list[tuple[Order, GridLevel]] = field(default_factory=list)
     not_replaced: list[str] = field(default_factory=list)
+    liquidation_in_progress: bool = False
     balance_source: str = "db"
     strategy_state: dict | None = None
 
@@ -71,10 +69,15 @@ class _Reconciliation:
     ended_while_down: list[tuple[Order, GridLevel]] = field(default_factory=list)
     not_replaced: list[str] = field(default_factory=list)
     initial_purchase_found: bool = False
+    # Orders whose paired order or replacement a restored placement already is.
+    followed: set[str] = field(default_factory=set)
 
 
 def _optional_decimal(value: str | None) -> Decimal | None:
     return None if value is None else Decimal(value)
+
+
+_FINAL_STATUSES = ENDED_UNFILLED_STATUSES | {OrderStatus.CLOSED}
 
 
 def _quantized(value: Decimal) -> Decimal:
@@ -157,7 +160,7 @@ class StateRecoveryService:
 
         # Step 3: Restore orders + OrderBook, then the placements no save resolved
         self._restore_orders()
-        self._restore_journal()
+        liquidation_in_progress = self._restore_journal()
 
         # Step 4: Reconcile with exchange (updates statuses, completes grid states for filled orders, resolves the
         # placements already sent)
@@ -186,6 +189,7 @@ class StateRecoveryService:
             orders_filled_while_down=reconciliation.filled_while_down,
             ended_while_down=reconciliation.ended_while_down,
             not_replaced=reconciliation.not_replaced,
+            liquidation_in_progress=liquidation_in_progress,
             balance_source=balance_source,
             strategy_state=strategy_state,
         )
@@ -271,11 +275,20 @@ class StateRecoveryService:
 
         self.logger.info(f"Restored {len(saved_orders)} orders.")
 
-    def _restore_journal(self) -> None:
-        """Reloads the placements no save resolved; one aimed at a level the grid no longer has is dropped."""
+    def _restore_journal(self) -> bool:
+        """
+        Reloads the placements no save resolved; one aimed at a level the grid no longer has is dropped. Returns whether
+        a liquidation was in progress: an unsent liquidation leg sold nothing, so it is dropped.
+        """
+        liquidation_in_progress = False
         rows = self.repository.load_pending_placements()
         for row in rows:
             entry = dict_to_pending_placement(row)
+            if entry.purpose is PlacementPurpose.LIQUIDATION:
+                liquidation_in_progress = True
+                if not entry.sent:
+                    self.logger.warning(f"Dropping unsent liquidation leg {entry.client_order_id}.")
+                    continue
             if entry.order_type is OrderType.LIMIT:
                 grid_level = self.grid_manager.grid_levels.get(entry.level_price)
                 if grid_level is None:
@@ -290,15 +303,19 @@ class StateRecoveryService:
             self.journal.add(entry)
         if rows:
             self.logger.info(f"Restored {len(self.journal)} pending placement(s).")
+        return liquidation_in_progress
 
     # ── Step 4: Exchange Reconciliation ──────────────────────────────────
 
     async def _reconcile_with_exchange(self, config_hash: str) -> _Reconciliation:
-        reconciliation = _Reconciliation()
+        reconciliation = _Reconciliation(
+            followed={entry.source_order_id for entry in self.journal.entries() if entry.source_order_id is not None}
+        )
         open_orders = self.order_book.get_open_orders()
 
         if not open_orders and not len(self.journal):
             self.logger.info("No open orders to reconcile.")
+            await self._check_orphans(config_hash, reconciliation)
             return reconciliation
 
         for order in open_orders:
@@ -337,7 +354,13 @@ class StateRecoveryService:
         return reconciliation
 
     def _note_ended(self, order: Order, reconciliation: _Reconciliation) -> None:
-        """Queues an order cancelled or expired while down for its re-placement; a rejected one is only reported."""
+        """
+        Queues an order cancelled or expired while down for its re-placement, unless a restored placement already
+        re-places it; a rejected one is only reported.
+        """
+        if order.identifier in reconciliation.followed:
+            self.logger.info(f"Order {order.identifier} is already re-placed by a pending placement.")
+            return
         grid_level = self.order_book.get_grid_level_for_order(order)
         if order.status is OrderStatus.REJECTED or grid_level is None:
             level_text = f" at level {grid_level.price}" if grid_level is not None else ""
@@ -359,7 +382,10 @@ class StateRecoveryService:
             grid_level = self.order_book.get_grid_level_for_order(order)
             if grid_level:
                 self.grid_manager.complete_order(grid_level, order.side, self._level_busy(grid_level))
-                reconciliation.filled_while_down.append((order, grid_level))
+                if order.identifier in reconciliation.followed:
+                    self.logger.info(f"Order {order.identifier} is already paired by a pending placement.")
+                else:
+                    reconciliation.filled_while_down.append((order, grid_level))
             reconciliation.executions.append((order, newly_filled))
             reconciliation.reconciled += 1
         elif view.status in ENDED_UNFILLED_STATUSES:
@@ -398,7 +424,7 @@ class StateRecoveryService:
         """
         if exchange_order is not None and (
             exchange_order.status is OrderStatus.OPEN
-            or (not exchange_order.filled and exchange_order.status not in ENDED_UNFILLED_STATUSES)
+            or (not exchange_order.filled and exchange_order.status not in _FINAL_STATUSES)
         ):
             raise OrderOutcomeUnknownError(
                 f"Pending {entry.purpose.value} {entry.client_order_id} is {exchange_order.status.value} on the "
@@ -420,39 +446,44 @@ class StateRecoveryService:
 
     async def _check_orphans(self, config_hash: str, reconciliation: _Reconciliation) -> None:
         """Counts the open exchange orders no saved state covers, and alerts about those this bot placed."""
-        own_prefix = client_order_id_prefix(config_hash)
         try:
             exchange_open_orders = await self.exchange_service.fetch_open_orders(self.trading_pair)
-            local_ids = {o.identifier for o in self.order_book.get_open_orders()}
-            journal_ids = {entry.client_order_id for entry in self.journal.entries()}
-            own = []
-            for remote in exchange_open_orders:
-                if remote["id"] in local_ids or remote.get("clientOrderId") in journal_ids:
-                    continue
-                reconciliation.orphans += 1
-                if str(remote.get("clientOrderId") or "").startswith(own_prefix):
-                    own.append(remote)
-                    self.logger.warning(
-                        f"Orphan of this bot on exchange: {remote['id']} "
-                        f"(side={remote.get('side')}, price={remote.get('price')}). Not auto-adopting."
-                    )
-                else:
-                    self.logger.warning(
-                        f"Orphan order on exchange: {remote['id']} "
-                        f"(side={remote.get('side')}, price={remote.get('price')}). "
-                        f"Not auto-adopting."
-                    )
-            if own:
-                listed = ", ".join(f"{o['id']} ({o.get('side')} at {o.get('price')})" for o in own)
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ERROR_OCCURRED,
-                    error_details=(
-                        f"{len(own)} order(s) placed by this bot are open on the exchange but in no saved state: "
-                        f"{listed}. They are not adopted: cancel them on the exchange, or leave them if you meant to."
-                    ),
-                )
         except Exception as e:
             self.logger.warning(f"Failed to fetch exchange open orders for orphan check: {e}")
+            return
+        own_prefix = client_order_id_prefix(config_hash)
+        local_ids = {o.identifier for o in self.order_book.get_open_orders()}
+        journal_ids = {entry.client_order_id for entry in self.journal.entries()}
+        own = []
+        for remote in exchange_open_orders:
+            if remote.get("id") in local_ids or remote.get("clientOrderId") in journal_ids:
+                continue
+            reconciliation.orphans += 1
+            if str(remote.get("clientOrderId") or "").startswith(own_prefix):
+                own.append(remote)
+                self.logger.warning(
+                    f"Orphan of this bot on exchange: {remote.get('id')} "
+                    f"(side={remote.get('side')}, price={remote.get('price')}). Not auto-adopting."
+                )
+            else:
+                self.logger.warning(
+                    f"Orphan order on exchange: {remote.get('id')} "
+                    f"(side={remote.get('side')}, price={remote.get('price')}). "
+                    f"Not auto-adopting."
+                )
+        if not own:
+            return
+        listed = ", ".join(f"{o.get('id')} ({o.get('side')} at {o.get('price')})" for o in own)
+        try:
+            await self.notification_handler.async_send_notification(
+                NotificationType.ERROR_OCCURRED,
+                error_details=(
+                    f"{len(own)} order(s) placed by this bot are open on the exchange but in no saved state: "
+                    f"{listed}. They are not adopted: cancel them on the exchange, or leave them if you meant to."
+                ),
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to send the alert about this bot's orphan orders ({listed}): {e}")
 
     # ── Step 5: Balance Restoration ──────────────────────────────────────
 

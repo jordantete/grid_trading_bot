@@ -67,6 +67,7 @@ def pending_placement_to_dict(entry: PendingPlacement) -> dict[str, Any]:
         "purpose": entry.purpose.value,
         "level_price": entry.level_price,
         "source_level_price": entry.source_level_price,
+        "source_order_id": entry.source_order_id,
         "sent": entry.sent,
         "created_at": entry.created_at,
     }
@@ -82,6 +83,7 @@ def dict_to_pending_placement(row: dict[str, Any]) -> PendingPlacement:
         purpose=PlacementPurpose(row["purpose"]),
         level_price=row.get("level_price"),
         source_level_price=row.get("source_level_price"),
+        source_order_id=row.get("source_order_id"),
         sent=bool(row["sent"]),
         created_at=row["created_at"],
     )

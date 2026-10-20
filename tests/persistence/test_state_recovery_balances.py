@@ -98,16 +98,25 @@ async def _restarted(repository, before, exchange_balances, trading_mode="live")
 CONFIG_HASH = "3f2a9c1d"
 
 
-def _limit_entry(level_price=110.0, quantity=0.5, side=OrderSide.SELL, source_level_price=100.0, sent=True):
+def _limit_entry(
+    level_price=110.0,
+    quantity=0.5,
+    side=OrderSide.SELL,
+    source_level_price=100.0,
+    sent=True,
+    purpose=PlacementPurpose.PAIRED,
+    source_order_id=None,
+):
     return PendingPlacement(
         client_order_id=new_client_order_id(CONFIG_HASH),
         order_type=OrderType.LIMIT,
         side=side,
         quantity=quantity,
         price=level_price,
-        purpose=PlacementPurpose.PAIRED,
+        purpose=purpose,
         level_price=level_price,
         source_level_price=source_level_price,
+        source_order_id=source_order_id,
         sent=sent,
         created_at=1,
     )
@@ -270,6 +279,7 @@ class TestJournalRecovery:
         assert after.grid.grid_levels[100.0].paired_sell_level is after.grid.grid_levels[110.0]
         assert len(after.journal) == 0
         assert reserved_matches_open_orders(after)
+        assert not result.liquidation_in_progress
 
     async def test_a_sent_entry_found_filled_is_booked_once_and_paired_after_the_restart(self, repository):
         before = await _armed_and_saved(repository)
@@ -458,6 +468,7 @@ class TestJournalRecovery:
         assert after.balances.total_fees == pytest.approx(fees_before + ARMING_PRICE * FEE)
         assert before.execution.calls.count("execute_market_order") == 1
         assert len(after.journal) == 0
+        assert result.liquidation_in_progress
 
     async def test_a_market_entry_still_open_on_the_exchange_defers_the_recovery(self, repository):
         before = await _armed_and_saved(repository, initial_purchase_done=False, grid_orders_initialized=False)
@@ -495,6 +506,93 @@ class TestJournalRecovery:
         assert "Attempted to release" not in caplog.text
         assert after.balances.reserved_fiat == 0
         assert after.balances.get_adjusted_fiat_balance() == pytest.approx(10.0)
+
+    async def test_an_unsent_liquidation_is_reported_and_dropped(self, repository):
+        before = await _armed_and_saved(repository)
+        entry = _market_entry(PlacementPurpose.LIQUIDATION, OrderSide.SELL, 1.0)
+        entry.sent = False
+        _saved_entry(repository, entry)
+        balances, _, crypto = _exchange_balances(before, [])
+
+        after, result, _ = await _restarted(repository, before, balances)
+
+        assert result.outcome is RecoveryOutcome.RESUMED
+        assert result.liquidation_in_progress
+        assert len(after.journal) == 0
+        assert "execute_market_order" not in before.execution.calls
+        assert after.balances.get_adjusted_crypto_balance() == pytest.approx(crypto)
+
+    async def test_a_market_entry_closed_without_a_fill_is_dropped(self, repository):
+        before = await _armed_and_saved(repository, initial_purchase_done=False, grid_orders_initialized=False)
+        entry = _saved_entry(repository, _market_entry(PlacementPurpose.INITIAL_PURCHASE, OrderSide.BUY, 1.0))
+        bought = await before.execution.execute_market_order(
+            OrderSide.BUY, "BTC/USDT", 1.0, ARMING_PRICE, client_order_id=entry.client_order_id
+        )
+        closed = before.execution.orders[bought.identifier]
+        closed.filled, closed.remaining = 0.0, 1.0
+        balances, _, _ = _exchange_balances(before, [])
+
+        after, result, _ = await _restarted(repository, before, balances)
+
+        assert result.outcome is RecoveryOutcome.RESUMED
+        assert not result.initial_purchase_done
+        assert after.book.get_order(bought.identifier) is None
+        assert len(after.journal) == 0
+
+
+class TestJournalledSuccessors:
+    @pytest.mark.parametrize("sent", [True, False])
+    async def test_a_fill_whose_pair_is_journalled_is_not_paired_again(self, repository, sent):
+        before = await _armed_and_saved(repository)
+        buy = before.execution.order_at(100.0, OrderSide.BUY)
+        before.execution.fill(buy.identifier)
+        # The pair of the 100 buy was written, and maybe sent, then the bot stopped before the full save.
+        entry = _saved_entry(
+            repository, _limit_entry(quantity=buy.amount * (1 - FEE), sent=sent, source_order_id=buy.identifier)
+        )
+        if sent:
+            await _landed(before, entry)
+        balances, _, crypto = _exchange_balances(before, [(OrderSide.BUY, buy.amount, 100.0)])
+
+        after, result, _ = await _restarted(repository, before, balances)
+        await after.manager.place_paired_orders_for_recovered_fills(result.orders_filled_while_down)
+        await after.manager.retry_pending_placements()
+
+        assert result.orders_filled_while_down == []
+        assert [o.price for o in before.execution.open_orders(OrderSide.SELL)].count(110.0) == 1
+        assert after.balances.get_adjusted_crypto_balance() == pytest.approx(crypto)
+        assert len(after.journal) == 0
+        assert reserved_matches_open_orders(after)
+
+    @pytest.mark.parametrize("sent", [True, False])
+    async def test_an_end_whose_replacement_is_journalled_is_not_replaced_again(self, repository, sent):
+        before = await _armed_and_saved(repository)
+        sell = before.execution.order_at(120.0, OrderSide.SELL)
+        before.execution.end(sell.identifier, OrderStatus.CANCELED)
+        entry = _saved_entry(
+            repository,
+            _limit_entry(
+                level_price=120.0,
+                quantity=sell.amount,
+                source_level_price=None,
+                sent=sent,
+                purpose=PlacementPurpose.REPLACEMENT,
+                source_order_id=sell.identifier,
+            ),
+        )
+        if sent:
+            await _landed(before, entry)
+        balances, _, _ = _exchange_balances(before, [])
+
+        after, result, _ = await _restarted(repository, before, balances)
+        await after.manager.place_replacements_for_recovered_ends(result.ended_while_down)
+        await after.manager.retry_pending_placements()
+
+        assert result.ended_while_down == []
+        assert [o.price for o in before.execution.open_orders(OrderSide.SELL)].count(120.0) == 1
+        assert after.grid.grid_levels[120.0].state == GridCycleState.WAITING_FOR_SELL_FILL
+        assert len(after.journal) == 0
+        assert reserved_matches_open_orders(after)
 
 
 class TestPaperJournalRecovery:

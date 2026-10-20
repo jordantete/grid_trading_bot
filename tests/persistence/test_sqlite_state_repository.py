@@ -502,6 +502,7 @@ def _pending_row(**overrides):
         "purpose": "paired",
         "level_price": 95.0,
         "source_level_price": 105.0,
+        "source_order_id": "o-42",
         "sent": True,
         "created_at": 1700000000000,
     }
@@ -573,7 +574,13 @@ class TestPendingPlacements:
         assert [row["client_order_id"] for row in repo.load_pending_placements()] == ["ga", "gb"]
 
     def test_a_market_entry_has_no_level(self, repo):
-        row = _pending_row(order_type="market", purpose="initial_purchase", level_price=None, source_level_price=None)
+        row = _pending_row(
+            order_type="market",
+            purpose="initial_purchase",
+            level_price=None,
+            source_level_price=None,
+            source_order_id=None,
+        )
 
         repo.save_pending(row)
 

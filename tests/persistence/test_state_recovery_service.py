@@ -523,6 +523,41 @@ class TestStateRecoveryService:
         assert "own-1" in alerts[0]
         assert "other-1" not in alerts[0]
 
+    async def test_the_orphan_check_runs_without_open_orders(
+        self, service, mock_repository, mock_config_manager, mock_exchange_service, mock_notification_handler
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager))
+        mock_exchange_service.fetch_open_orders = AsyncMock(
+            return_value=[{"id": "own-2", "clientOrderId": own_client_id, "side": "sell", "price": 3000.0}]
+        )
+
+        result = await service.attempt_recovery()
+
+        assert result.orphan_orders_found == 1
+        alerts = [
+            call
+            for call in mock_notification_handler.async_send_notification.await_args_list
+            if call.args[0] is NotificationType.ERROR_OCCURRED
+        ]
+        assert len(alerts) == 1
+
+    async def test_a_failed_orphan_alert_is_not_reported_as_a_failed_fetch(
+        self, service, mock_repository, mock_config_manager, mock_exchange_service, mock_notification_handler, caplog
+    ):
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager))
+        mock_exchange_service.fetch_open_orders = AsyncMock(
+            return_value=[{"id": "own-3", "clientOrderId": own_client_id, "side": "sell", "price": 3000.0}]
+        )
+        mock_notification_handler.async_send_notification = AsyncMock(side_effect=[RuntimeError("smtp down"), None])
+
+        result = await service.attempt_recovery()
+
+        assert result.outcome is RecoveryOutcome.RESUMED
+        assert "smtp down" in caplog.text
+        assert "Failed to fetch" not in caplog.text
+
     async def test_the_recovery_notification_lists_a_ghost_with_its_level(
         self, service, mock_repository, mock_config_manager, mock_order_book, mock_notification_handler
     ):
