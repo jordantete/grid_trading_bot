@@ -1,8 +1,14 @@
 from dataclasses import dataclass
 from enum import Enum
 import secrets
+from typing import TYPE_CHECKING
 
-from .order import OrderSide, OrderType
+from .order import Order, OrderSide, OrderStatus, OrderType
+
+if TYPE_CHECKING:
+    from ..grid_management.grid_level import GridLevel
+    from ..grid_management.grid_manager import GridManager
+    from .order_book import OrderBook
 
 
 class PlacementPurpose(Enum):
@@ -77,3 +83,28 @@ def client_order_id_prefix(config_hash: str) -> str:
 def new_client_order_id(config_hash: str) -> str:
     """A fresh id for one placement: the config's prefix, then 16 random hex characters."""
     return client_order_id_prefix(config_hash) + secrets.token_hex(8)
+
+
+def adopt_order(
+    entry: PendingPlacement,
+    order: Order,
+    grid_manager: "GridManager",
+    order_book: "OrderBook",
+) -> "GridLevel | None":
+    """
+    Puts an order the exchange holds for `entry` into the book, open with nothing booked, on the entry's level and
+    paired with its source level. What the order already filled reaches the pipeline as an update.
+    """
+    order.status = OrderStatus.OPEN
+    order.filled = 0.0
+    order.remaining = order.amount
+    grid_level = grid_manager.grid_levels.get(entry.level_price) if entry.level_price is not None else None
+    if grid_level is not None:
+        grid_manager.mark_order_pending(grid_level, order)
+    order_book.add_order(order, grid_level)
+    source_level = (
+        grid_manager.grid_levels.get(entry.source_level_price) if entry.source_level_price is not None else None
+    )
+    if grid_level is not None and source_level is not None:
+        grid_manager.pair_grid_levels(source_level, grid_level, pairing_type=order.side.value)
+    return grid_level

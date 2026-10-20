@@ -259,6 +259,12 @@ class GridManager:
             grid_level.state = GridCycleState.WAITING_FOR_SELL_FILL
             self.logger.info(f"Sell order placed and marked as pending at grid level {grid_level.price}.")
 
+    def mark_level_pending(self, grid_level: GridLevel, side: OrderSide) -> None:
+        """Holds a level for a placement not yet on the exchange, so no other order targets it."""
+        grid_level.state = (
+            GridCycleState.WAITING_FOR_BUY_FILL if side == OrderSide.BUY else GridCycleState.WAITING_FOR_SELL_FILL
+        )
+
     def complete_order(
         self,
         grid_level: GridLevel,

@@ -252,6 +252,26 @@ class TestGridManager:
         assert grid_level.state == GridCycleState.WAITING_FOR_SELL_FILL
         assert order in grid_level.orders
 
+    def test_mark_level_pending_holds_a_buy_level_without_an_order(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]
+
+        grid_manager.mark_level_pending(grid_level, OrderSide.BUY)
+
+        assert grid_level.state == GridCycleState.WAITING_FOR_BUY_FILL
+        assert grid_level.orders == []
+        assert not grid_manager.can_place_order(grid_level, OrderSide.BUY)
+
+    def test_mark_level_pending_holds_a_sell_level_without_an_order(self, grid_manager):
+        grid_manager.initialize_grids_and_levels()
+        grid_level = grid_manager.grid_levels[grid_manager.sorted_sell_grids[0]]
+
+        grid_manager.mark_level_pending(grid_level, OrderSide.SELL)
+
+        assert grid_level.state == GridCycleState.WAITING_FOR_SELL_FILL
+        assert grid_level.orders == []
+        assert not grid_manager.can_place_order(grid_level, OrderSide.SELL)
+
     def test_complete_order_simple_grid_buy_frees_the_level(self, grid_manager):
         grid_manager.initialize_grids_and_levels()
         grid_level = grid_manager.grid_levels[grid_manager.sorted_buy_grids[0]]

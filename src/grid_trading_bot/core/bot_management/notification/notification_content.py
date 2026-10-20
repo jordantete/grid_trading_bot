@@ -21,6 +21,10 @@ class NotificationType(Enum):
         title="Order Placement Failed",
         message=("Failed to place order:\n{error_details}"),
     )
+    ORDER_PENDING = NotificationContent(
+        title="Order Placement Pending",
+        message="An order could not be placed yet; the bot retries it at every poll:\n{error_details}",
+    )
     ORDER_CANCELLED = NotificationContent(
         title="Order Cancellation",
         message=("Order has been cancelled:\n{order_details}"),

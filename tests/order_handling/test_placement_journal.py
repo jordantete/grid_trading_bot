@@ -1,10 +1,14 @@
 import re
 
-from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
+from tests.fakes.trading_stack import build_stack
+
+from grid_trading_bot.core.grid_management.grid_level import GridCycleState
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.placement_journal import (
     PendingPlacement,
     PlacementJournal,
     PlacementPurpose,
+    adopt_order,
     client_order_id_prefix,
     new_client_order_id,
 )
@@ -128,3 +132,46 @@ class TestPlacementJournal:
         journal.clear()
 
         assert journal.entries() == []
+
+
+class TestAdoptOrder:
+    async def test_an_adopted_order_rests_on_its_level_paired_with_its_source(self):
+        stack = build_stack()
+        entry = PendingPlacement(
+            client_order_id="g3f2a9c1d0000000000000001",
+            order_type=OrderType.LIMIT,
+            side=OrderSide.SELL,
+            quantity=1.0,
+            price=110.0,
+            purpose=PlacementPurpose.PAIRED,
+            level_price=110.0,
+            source_level_price=100.0,
+        )
+        order = await stack.execution.execute_limit_order(OrderSide.SELL, "BTC/USDT", 1.0, 110.0, entry.client_order_id)
+        order.status, order.filled, order.remaining = OrderStatus.CLOSED, 1.0, 0.0
+
+        level = adopt_order(entry, order, stack.grid, stack.book)
+
+        assert level is stack.grid.grid_levels[110.0]
+        assert (order.status, order.filled, order.remaining) == (OrderStatus.OPEN, 0.0, 1.0)
+        assert stack.book.get_order(order.identifier).is_open()
+        assert stack.book.get_grid_level_for_order(order) is level
+        assert level.state == GridCycleState.WAITING_FOR_SELL_FILL
+        assert order in level.orders
+        assert stack.grid.grid_levels[100.0].paired_sell_level is level
+        assert level.paired_buy_level is stack.grid.grid_levels[100.0]
+
+    async def test_an_order_without_a_level_enters_the_book_as_a_non_grid_order(self):
+        stack = build_stack()
+        entry = PendingPlacement(
+            client_order_id="g3f2a9c1d0000000000000002",
+            order_type=OrderType.MARKET,
+            side=OrderSide.BUY,
+            quantity=1.0,
+            price=115.0,
+            purpose=PlacementPurpose.INITIAL_PURCHASE,
+        )
+        order = await stack.execution.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 95.0, entry.client_order_id)
+
+        assert adopt_order(entry, order, stack.grid, stack.book) is None
+        assert order in stack.book.non_grid_orders
