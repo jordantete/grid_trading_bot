@@ -24,6 +24,7 @@ src/grid_trading_bot/
 │   │   ├── order_manager.py        # Order orchestration
 │   │   ├── balance_tracker.py      # Fiat/crypto balances
 │   │   ├── order_book.py           # Order-to-grid mapping
+│   │   ├── placement_journal.py    # Placements not yet resolved
 │   │   └── execution_strategy/     # Backtest vs live execution
 │   ├── persistence/                # State persistence (live and paper)
 │   │   ├── state_persistence_service.py  # State snapshots in one transaction
@@ -75,8 +76,8 @@ flowchart TD
 
 Two factories select implementations based on the configured `TradingMode`:
 
-- **`ExchangeServiceFactory`** — Returns `BacktestExchangeService` or `LiveExchangeService`
-- **`OrderExecutionStrategyFactory`** — Returns instant (backtest) or retrying (live) execution
+- **`ExchangeServiceFactory`**: returns `BacktestExchangeService` or `LiveExchangeService`
+- **`OrderExecutionStrategyFactory`**: returns instant (backtest) or idempotent (live) execution; every live order carries a `clientOrderId` that is looked up when the answer of the exchange is lost
 
 ### Event Bus
 
@@ -89,6 +90,12 @@ Decoupled communication via a publish/subscribe system, now reduced to the shutd
 ### Fill Pipeline
 
 Order updates do not travel on the event bus. The order tracker (live and paper trading) and the order simulator (backtest) hand each exchange view of an order to `OrderManager.apply_order_update`. Under its lock, it books the newly filled quantity, moves the grid level, places the paired order (or re-places a cancelled or expired one; a rejected one is not re-placed), then saves the state. The fill notification goes out once the lock is released.
+
+### Placement Journal
+
+Every order the bot places goes through one helper in `OrderManager` and a `PlacementJournal` (`core/order_handling/placement_journal.py`). The helper rounds the quantity and the price to the exchange precision, reserves the funds, marks the grid level as busy, writes the entry to the `pending_placements` table, then sends the order with its `clientOrderId`. An accepted order enters the order book and leaves the journal. An entry whose send failed for a transient reason stays, with its funds reserved, and the order tracker retries the journal at the end of every poll; an entry whose outcome is unknown is looked up by its `clientOrderId` before it is sent again. A refusal drops the entry and releases its funds. The reserved amounts always equal what the open orders and the journal entries hold.
+
+The tracker applies the fills of one poll in the order the price reaches them (buys from the highest price down, then sells from the lowest up), as the backtest simulator does. Exceptions derive from `GridBotError`: a `DataFetchError` is a transient exchange failure and is retried, an `OrderRefusedError` (the bot's own checks or the exchange refusing the order) is expected and logged at WARNING.
 
 ### State Machine
 
@@ -124,8 +131,8 @@ The strategy handles:
 | Mode | Exchange Service | Execution Strategy | Additional Tasks |
 |------|-----------------|-------------------|-----------------|
 | `backtest` | `BacktestExchangeService` (CSV/CCXT OHLCV) | Instant fill | None |
-| `paper_trading` | `LiveExchangeService` (sandbox APIs) | Retry with backoff | BotController, HealthCheck, StatePersistence |
-| `live` | `LiveExchangeService` (production APIs) | Retry with backoff | BotController, HealthCheck, StatePersistence, ReconciliationService |
+| `paper_trading` | `LiveExchangeService` (sandbox APIs) | Idempotent, looked up by `clientOrderId` | BotController, HealthCheck, StatePersistence |
+| `live` | `LiveExchangeService` (production APIs) | Idempotent, looked up by `clientOrderId` | BotController, HealthCheck, StatePersistence, ReconciliationService |
 
 In live and paper modes, the bot runs three concurrent async tasks:
 
@@ -159,12 +166,13 @@ A resume works as follows:
 1. **Config compatibility**. The DB name carries a hash of `grid_strategy`, `exchange`, `pair` and `trading_settings.timeframe`; `risk_management` is not part of it
 2. **Grid level restoration**. Overlays saved states and paired-level references onto freshly computed grid levels
 3. **Order restoration**. Reconstructs Order objects from DB, repopulates the OrderBook
-4. **Exchange reconciliation**. For each locally-open order, fetches current status from exchange:
+4. **Exchange reconciliation**. Each journal entry that may have been sent is looked up by its `clientOrderId` first: found open, it is adopted into the book; found filled, it is booked like a fill made while the bot was down; never received, it is sent again at the first poll. Then, for each locally-open order, the bot fetches its current status from the exchange:
     - Filled (fully or partly) while bot was down → books each fill once, with its fee, and places the paired order
-    - Cancelled, expired or rejected on exchange → frees the level and releases reserved funds
-    - Not found → marks as ghost, releases funds
-    - Orphan orders on exchange (not in local book) → logged as warnings, not auto-adopted
-5. **Balance restoration**. Live: the exchange balance is authoritative and DB reserved amounts are overlaid. Paper: the virtual balances come from the DB and the fills are booked on them
+    - Cancelled or expired on exchange → frees the level, releases the reserved funds, and re-places the order on its level right after the recovery
+    - Rejected on exchange → frees the level and releases the funds; listed in the recovery notification, not re-placed
+    - Not found → marked as ghost, funds released, listed with its level in the recovery notification, not re-placed (its fate is unknown)
+    - Orphan orders on exchange (neither in the local book nor in the journal) → logged as warnings, not auto-adopted; one carrying the bot's `clientOrderId` prefix also sends an alert
+5. **Balance restoration**. Live: the balances come from the exchange, and the reserved amounts are recomputed from the open orders and the journal entries. Paper: the virtual balances come from the DB, the reserved amounts are recomputed from the open orders and the journal entries, and the fills are booked on them
 
 ### Configuration
 

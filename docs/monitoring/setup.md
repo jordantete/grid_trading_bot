@@ -47,7 +47,7 @@ The service is defined for 24/7 operation on a VPS:
 - **`restart: on-failure`**: a halted bot exits with 0 and stays down; a crash, a lost feed or a reboot relaunches it. See [Going Live](../usage/going-live.md#running-unattended-docker)
 - **`./data` volume** — the SQLite state survives restarts, and the recovery service reconciles it with the exchange on startup
 - **`./logs` volume** — the bot writes its logs where Alloy tails them, so they show up in Grafana automatically
-- **Default SIGTERM and a 30 second grace period**: `docker compose stop` keeps the open orders, writes a final checkpoint and exits with 143
+- **Default SIGTERM and a 60 second grace period**: `docker compose stop` keeps the open orders, writes a final checkpoint and exits with 143
 
 By default the bot runs with `config/config.json`, which is a **backtest** configuration: it runs once and exits with 0, so the restart policy does not run it again. For a long-running deployment, point the service at a live configuration via the `BOT_CONFIG` variable in your `.env` file:
 

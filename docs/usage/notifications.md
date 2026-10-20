@@ -29,7 +29,8 @@ See the [Environment Variables](../configuration/environment-variables.md) page 
 |------|-------|---------|
 | `ORDER_FILLED` | Order Filled | After each fill, sent by `OrderManager` once its lock is released |
 | `ORDER_PLACED` | Order Placement Successful | When an order is successfully placed |
-| `ORDER_FAILED` | Order Placement Failed | When an order placement fails |
+| `ORDER_PENDING` | Order Placement Pending | Once per placement, at its first transient failure (network error, exchange unavailable); the bot retries it at every order poll |
+| `ORDER_FAILED` | Order Placement Failed | When a placement is refused (insufficient balance, under the exchange minimum, refused by the exchange), and once per grid placement round that leaves levels unfunded |
 | `ORDER_CANCELLED` | Order Cancellation | When an order is cancelled |
 
 ### Strategy Notifications
@@ -43,9 +44,9 @@ See the [Environment Variables](../configuration/environment-variables.md) page 
 
 | Type | Title | Trigger |
 |------|-------|---------|
-| `ERROR_OCCURRED` | Error Occurred | When an unexpected error occurs in the bot |
+| `ERROR_OCCURRED` | Error Occurred | When an unexpected error occurs; when a liquidation fails (first failure, then every 10 minutes), stops on a remainder under the exchange minimum, or is interrupted by the shutdown; when an open order carrying the bot's `clientOrderId` prefix is unknown at restart |
 | `HEALTH_CHECK_ALERT` | Health Check Alert | When the health check detects an issue |
-| `STATE_RECOVERY_COMPLETE` | State Recovery Complete | After a successful state recovery on restart |
+| `STATE_RECOVERY_COMPLETE` | State Recovery Complete | After a successful state recovery on restart; lists the rejected and ghost orders that were not re-placed |
 | `BOT_HALTED` | Bot Halted | When the bot halts. The text asks you to check the exchange for orders left open before running `resume` |
 | `BOT_SUSPENDED` | Bot Suspended | When the bot stops with its open orders kept; the next start resumes them |
 | `START_REFUSED_HALTED` | Start Refused | Once, when a start is refused because the config is halted |

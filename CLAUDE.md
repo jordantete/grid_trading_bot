@@ -64,10 +64,10 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 
 - **`core/bot_management/`** — Bot lifecycle: `GridTradingBot` (orchestrator), `EventBus` (pub/sub, `STOP_BOT` only), `BotController` (CLI), `HealthCheck`, `NotificationHandler` (Apprise alerts)
 - **`core/grid_management/`** — `GridManager` computes grid levels (arithmetic/geometric spacing), `GridLevel` waits in its home (free) state, moves to `WAITING_FOR_*_FILL` while it holds orders, and returns home when the last one fills or is cancelled; each `GridStrategy` plans the initial orders and picks the level of every paired order
-- **`core/order_handling/`** — `OrderManager` orchestrates order placement and pairing (buy fill → place sell above, sell fill → place buy below). `BalanceTracker` tracks fiat/crypto with reserved amounts. `OrderBook` maps orders to grid levels
-- **`core/persistence/`** — SQLite state persistence (live and paper trading): `StatePersistenceService` (one-transaction snapshots saved by `OrderManager` after every order operation; alerts, then halts after 3 failed writes in a row), `StateRecoveryService` (resumes, refuses or defers a start; never deletes the database), `SQLiteStateRepository` (WAL-mode SQLite backend), `Serializers` (Order/GridLevel/Balance ↔ dict). DB path: `data/{BASE}_{QUOTE}/state_{config_hash[:8]}.db`
+- **`core/order_handling/`** — `OrderManager` orchestrates order placement and pairing (buy fill → place sell above, sell fill → place buy below) through one placement helper and a `PlacementJournal` (each placement written to the database before it is sent, then retried at every poll until it is placed or refused). `BalanceTracker` tracks fiat/crypto with reserved amounts and books fees in the currency received. `OrderBook` maps orders to grid levels
+- **`core/persistence/`** — SQLite state persistence (live and paper trading): `StatePersistenceService` (one-transaction snapshots saved by `OrderManager` after every order operation; alerts, then halts after 3 failed writes in a row), `StateRecoveryService` (resumes, refuses or defers a start; never deletes the database), the `pending_placements` journal (schema v4), `SQLiteStateRepository` (WAL-mode SQLite backend), `Serializers` (Order/GridLevel/Balance ↔ dict). DB path: `data/{BASE}_{QUOTE}/state_{config_hash[:8]}.db`
 - **`core/services/`** — Exchange abstraction via `ExchangeInterface` ABC. `BacktestExchangeService` reads CSV/CCXT OHLCV data. `LiveExchangeService` uses CCXT Pro WebSockets
-- **`core/order_handling/execution_strategy/`** — `OrderExecutionStrategyInterface` ABC. Backtest variant is instant; live variant has retry logic with exponential backoff and slippage handling
+- **`core/order_handling/execution_strategy/`** — `OrderExecutionStrategyInterface` ABC. Backtest variant is instant; live variant sends a `clientOrderId` with every order and, after a lost answer, looks the order up by that id before reporting it placed, not placed or unknown
 - **`core/validation/`** — `OrderValidator` for order quantity/price validation
 
 ### Strategy Layer
@@ -84,7 +84,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 ### Key Design Patterns
 
 - **Factory Pattern**: `ExchangeServiceFactory` and `OrderExecutionStrategyFactory` select implementations based on `TradingMode`
-- **Event Bus**: carries `STOP_BOT` only. Order updates go through `OrderManager.apply_order_update` (balance, level, paired order, save, in that order)
+- **Event Bus**: carries `STOP_BOT` only. Order updates go through `OrderManager.apply_order_update` (balance, level, paired order, save, in that order), and every placement through `OrderManager._submit_limit` and the `PlacementJournal`
 - **State Machine**: `GridLevel` transitions through `GridCycleState` enum states as orders are placed and filled
 - **Strategy Pattern**: `TradingStrategyInterface` ABC; currently one implementation (`GridTradingStrategy`) with two modes (`simple_grid`, `hedged_grid`)
 

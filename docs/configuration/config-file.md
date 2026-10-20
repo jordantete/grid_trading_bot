@@ -96,6 +96,8 @@ cheaper in the config and distorts backtest results.
 Both keys default to `trading_fee`, so an existing single-rate config keeps behaving exactly
 as before.
 
+Fees are charged in the currency received: a buy pays its fee in the base currency, so the bot books the filled quantity minus the fee as crypto received and sizes the sell that follows on that net quantity; a sell pays it in the quote currency. This matches Binance spot without BNB fee payment and OKX, in every trading mode, backtests included. In live and paper trading, a fee the exchange reports on the order replaces the configured rate.
+
 #### Post-only orders
 
 `post_only` sends grid limit orders as maker-only: the exchange **rejects** an order that
@@ -104,9 +106,8 @@ orders, which cross by definition.
 
 A rejection is treated as an expected market condition, not a failure. The bot:
 
-- releases the funds it had reserved for the order;
-- leaves the grid level exactly as it was, so the next `initialize_grid_orders` — triggered
-  by a regrid or a trailing-stop move — retries it;
+- keeps the placement in its journal, with the grid level and the funds held for it;
+- retries it at every order poll (`execution.order_polling_interval`) until the exchange accepts it;
 - logs at `INFO` and sends no failure notification;
 - does not count the rejection toward the circuit breaker's failure threshold.
 
@@ -164,7 +165,7 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 |-----------|------|---------|-------|-------------|
 | `max_retries` | int | `3` | 1–20 | Maximum retry attempts for failed orders (live/paper). |
 | `retry_delay` | float | `1.0` | 0.1–60.0 | Delay in seconds between retries. |
-| `max_slippage` | float | `0.01` | 0.0001–0.1 | Maximum acceptable slippage for live/paper execution (e.g., `0.01` = 1%). |
+| `max_slippage` | float | `0.01` | 0.0001–0.1 | Accepted for compatibility, no longer used: a market order is sent as one leg, and the initial purchase and the liquidation retry it without adjusting a price. |
 | `backtest_slippage` | float | `0.0` | 0.0–0.1 | Fixed slippage applied to simulated fills (e.g., `0.001` = 0.1%). Buys fill higher, sells fill lower. |
 | `backtest_min_amount` | float | none | 0 or more | Minimum order quantity in the base currency (backtest only). When set, the backtest applies it like the exchange's minimum in live: it checks that the grid is feasible at arming, skips the initial purchase and grid orders that fall below it, and skips the final liquidation if the position is too small. Absent means no minimum. |
 | `backtest_min_cost` | float | none | 0 or more | Minimum order value in the quote currency (backtest only). Applied the same way as `backtest_min_amount`. Absent means no minimum. |

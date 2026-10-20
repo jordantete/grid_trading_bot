@@ -5,7 +5,7 @@ This page walks through moving a strategy from backtesting to real (or paper) mo
 A ready-to-use starting point is provided at [`config/config.live.example.json`](https://github.com/jordantete/grid_trading_bot/blob/master/config/config.live.example.json). It targets `paper_trading` mode with persistence, dynamic ATR-based grid spacing, and an ATR trailing stop already enabled.
 
 !!! warning "Validate the strategy in paper trading first"
-    Live trading stays on `simple_grid` until the fills of one poll are ordered like the backtest (tracked separately). Validate `hedged_grid` in paper trading first. Neither strategy has run with real capital yet, so go live with a small amount before scaling up.
+    Neither `simple_grid` nor `hedged_grid` has run with real capital yet. Validate the strategy in paper trading, then go live with a small amount before scaling up.
 
 ## 1. Prerequisites
 
@@ -28,6 +28,13 @@ To create Binance API keys:
 
 !!! tip "Use the testnet first"
     Binance provides a free testnet with fake funds at [testnet.binance.vision](https://testnet.binance.vision). Create a separate API key/secret pair there and use them for `paper_trading` mode — the bot automatically points sandbox-capable exchanges (including Binance) at their testnet REST endpoint when `trading_mode` is `paper_trading`.
+
+### Fees
+
+The bot books each fee in the currency the exchange takes it in: a buy pays its fee in the base currency (the account receives the filled quantity minus the fee), a sell pays it in the quote currency. This is how Binance spot without BNB fee payment and OKX charge. The sell placed after a buy is sized on the crypto actually received, so it never asks for more than the account holds. When the exchange reports the fee on the order (OKX does), the bot books that amount; otherwise it applies `maker_fee` or `taker_fee` from the config. A fee paid in a third currency (BNB on Binance) changes neither balance and is logged.
+
+!!! note "Fees on the Binance testnet"
+    If the testnet charges no fee, the testnet account ends up holding slightly more crypto than the bot books: a little dust per buy, harmless. Paper trading runs no balance reconciliation, so nothing alerts on it. Set `maker_fee` and `taker_fee` to `0` in the paper config to keep the bot's balances equal to the testnet's.
 
 ## 2. Recommended path
 
@@ -56,7 +63,7 @@ Every way the bot ends has a fixed effect on the open orders, the position and t
 | Trigger | Open orders | Position | Halt recorded | Exit code |
 |---------|-------------|----------|---------------|-----------|
 | `stop` or `quit` command, or SIGUSR1 | Cancelled | Kept | Yes | 0 |
-| Take-profit, stop-loss or trailing stop | Cancelled | Liquidated at market | Yes | 0 |
+| Take-profit, stop-loss or trailing stop | Cancelled | Liquidated at market, retried until it sells (see [Liquidation](#liquidation)) | Yes | 0 |
 | Grid infeasible (order below the exchange minimum) | Nothing placed | None | Yes | 0 |
 | SIGINT or SIGTERM (`docker stop`, reboot) | Kept | Kept | No | 130 (SIGINT) or 143 (SIGTERM) |
 | Ticker feed lost after its retries | Kept | Kept | No | 75 |
@@ -65,6 +72,18 @@ Every way the bot ends has a fixed effect on the open orders, the position and t
 A config error at start exits with 78 and nothing starts. Starting a config that another process already runs exits with 1.
 
 Every path writes a final checkpoint of the state, once the saved state was loaded. A stop requested while the bot is still starting runs as soon as startup ends.
+
+A take-profit, stop-loss or trailing stop that fires while a SIGTERM or a SIGINT is already stopping the bot turns that stop into a halt: halt marker, "Bot Halted", exit 0.
+
+### Liquidation
+
+A take-profit, stop-loss or trailing stop cancels the grid, then sells the free crypto at market and retries until the sale goes through:
+
+- after a network error, an exchange outage or an open circuit breaker, it tries again after 1, 2, 4, 8 and 16 seconds, then every 30 seconds;
+- after a refusal (insufficient balance, invalid order), it reads the free balance on the exchange and sells that amount;
+- when what is left is under the exchange minimum at the current price, it stops and alerts ("Liquidation stopped: X left, under the exchange minimum").
+
+An alert goes out at the first failure, then every 10 minutes with the number of attempts and the position still open. A SIGTERM or a `stop` during the retries ends them after the current attempt: the position stays open, the alert says how much ("Liquidation interrupted by the shutdown, X still open"), and the bot is halted like after any take-profit or stop-loss. Sell what is left by hand before running `resume`.
 
 ### Halts and `resume`
 
@@ -103,7 +122,7 @@ docker compose run --rm bot resume --config ${BOT_CONFIG:-config/config.json}
 docker compose --profile bot up -d bot
 ```
 
-The compose file sets `restart: on-failure`. A halted bot exits with 0 and stays down, while a crash, a lost feed or a reboot relaunches it. The container gets the default SIGTERM and a 30 second grace period, and has no `stdin_open`: the command listener only runs in an interactive terminal.
+The compose file sets `restart: on-failure`. A halted bot exits with 0 and stays down, while a crash, a lost feed or a reboot relaunches it. The container gets the default SIGTERM and a 60 second grace period (`stop_grace_period: 60s`): the slowest stop waits 20 seconds for the price update in progress and 10 seconds for the order poll in progress, then cancels the orders of a halt and writes the final checkpoint, which waits at most 5 seconds for the order lock. The container has no `stdin_open`: the command listener only runs in an interactive terminal.
 
 `on-failure` looks at the exit code only. A container stopped by `docker compose stop` exits with 143, so the Docker daemon relaunches it after a daemon restart or a host reboot. To keep a suspended bot down across reboots, remove it with `docker compose down bot`, or halt it with SIGUSR1. The manual Docker check run before go-live confirms this behavior.
 
@@ -120,13 +139,15 @@ The `resume` example passes `${BOT_CONFIG:-config/config.json}`, the same config
 
 ## 5. Crash / restart behavior
 
-When `persistence.enabled` is `true` (the default) and `trading_mode` is `live` or `paper_trading`, the bot saves its whole state to SQLite, in one transaction, at the end of every order operation: each fill with its paired order, each cancelled, expired or rejected order, the initial purchase, the grid placement, a regrid, a bulk cancellation. It also saves every `persistence.checkpoint_interval_seconds` (default `60`, for the trailing-stop ratchet) and at shutdown. In a saved state, each fill has its paired order placed, or the placement failure reported ("Order Placement Failed").
+When `persistence.enabled` is `true` (the default) and `trading_mode` is `live` or `paper_trading`, the bot saves its whole state to SQLite, in one transaction, at the end of every order operation: each fill with its paired order, each cancelled, expired or rejected order, the initial purchase, the grid placement, a regrid, a bulk cancellation. It also saves every `persistence.checkpoint_interval_seconds` (default `60`, for the trailing-stop ratchet) and at shutdown. In a saved state, each fill has its paired order placed, waiting in the placement journal, or refused with an "Order Placement Failed" alert.
 
-If a write fails, the bot alerts ("Checkpoint Failed") and keeps trading; the next write that succeeds sends "Checkpoint Restored". After 3 failed writes in a row it halts (orders cancelled, halt marker, exit 0), so no restart ever resumes a stale state.
+If a write fails, the bot alerts ("Checkpoint Failed") and keeps trading; the next write that succeeds sends "Checkpoint Restored". After 3 failed writes in a row it halts (orders cancelled, halt marker, exit 0). A SIGTERM or a crash after one or two failed writes resumes the last state written, without the operations those writes missed: the reconciliation at restart books the fills and cancellations made since, and no placement is sent before its journal entry is written, so the exchange holds no order the saved state cannot find. The trailing-stop ratchet resumes from its last saved value.
 
 A halted config refuses to start until [`resume`](#halts-and-resume) is run, and two processes cannot run the same config: the lock file `bot_<hash8>.lock` sits next to the state database.
 
 On restart, the bot loads the saved state, reconciles every open order with the exchange (filled, partly filled, cancelled, expired, rejected, or gone from the exchange) and resumes: it re-places the paired orders of the fills made while it was down, and counts each fill once, including one partly filled before the stop. Live trading takes its balances from the exchange; paper trading resumes its virtual balances from the database and books the fills on them.
+
+Every order goes through a placement journal (the `pending_placements` table) before it is sent, with a `clientOrderId` drawn once: `g`, the first 8 characters of the config hash, then 16 random characters. When the answer of the exchange is lost (timeout, network error), the bot looks the order up by that id before it reports the order placed or not, so a lost answer never places an order twice. A placement that fails for a transient reason stays in the journal with its funds reserved and is retried at every order poll; its first failure sends "Order Placement Pending". A refusal (insufficient balance, under the exchange minimum, refused by the exchange) leaves the journal with an "Order Placement Failed" alert. At restart, the bot looks up each journal entry that may have been sent and adopts the order it finds, re-places the orders cancelled or expired while it was down (a rejected order is reported, not re-placed), and reports an open order that carries its `clientOrderId` prefix but that it does not know as an orphan of this bot, without adopting it.
 
 The saved state belongs to the grid: the database name contains a hash of `grid_strategy`, `exchange` (name and trading mode), `pair` and `trading_settings.timeframe`. Changing `risk_management` (TP, SL, trailing stop) keeps it. A grid, pair, exchange or timeframe change starts from a new database, and the open-orders check of a fresh start then refuses to trade over the orders the previous grid left open.
 
@@ -171,4 +192,4 @@ See [Monitoring Setup](../monitoring/setup.md) and [Grafana Dashboard](../monito
 ## 7. Known limits
 
 - **Order fills are detected via REST polling** (`execution.order_polling_interval`, default 15s) — there is no WebSocket order stream. Fills can take up to one polling interval to be detected.
-- **Liquidation below the exchange's minimum notional is skipped.** If the remaining crypto position is too small to sell at market (dust), it is left on the exchange account rather than causing the shutdown to fail; a notification is sent instead.
+- **Dust is left on the account.** A liquidation stops when what is left is under the exchange's minimum order size at the current price; the remainder stays on the exchange account and an alert says how much.
