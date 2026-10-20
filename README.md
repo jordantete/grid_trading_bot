@@ -47,7 +47,7 @@ Define a price range and number of grid levels. The bot places layered buy and s
 | ------------------------- | ------------------------------------------------------------------------------- |
 | **Backtesting**           | Simulate strategies on historical OHLCV data (CSV or fetched via CCXT)          |
 | **Paper Trading**         | Test against real market data using exchange sandbox APIs                       |
-| **Live Trading**          | Execute real trades with retry logic, exponential backoff, and circuit breakers |
+| **Live Trading**          | Execute real trades with lookup by client id, journal retries, circuit breakers, and a liquidation that backs off up to 30 s |
 | **Grid Strategies**       | Simple grid and hedged grid with arithmetic or geometric spacing                |
 | **Risk Management**       | Configurable take-profit, stop-loss, and slippage controls                      |
 | **Performance Analytics** | ROI, max drawdown, Sharpe ratio, interactive Plotly charts                      |

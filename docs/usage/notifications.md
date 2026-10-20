@@ -44,7 +44,7 @@ See the [Environment Variables](../configuration/environment-variables.md) page 
 
 | Type | Title | Trigger |
 |------|-------|---------|
-| `ERROR_OCCURRED` | Error Occurred | When an unexpected error occurs; when a liquidation fails (first failure, then every 10 minutes), stops on a remainder under the exchange minimum, or is interrupted by the shutdown; when an open order carrying the bot's `clientOrderId` prefix is unknown at restart |
+| `ERROR_OCCURRED` | Error Occurred | When an unexpected error occurs; when a liquidation fails (first failure, then every 10 minutes), stops on a remainder under the exchange minimum, or is interrupted by the shutdown; when an open order carrying the bot's `clientOrderId` prefix is unknown at restart; when a liquidation was in progress at restart (the position may still be open, the bot halts) |
 | `HEALTH_CHECK_ALERT` | Health Check Alert | When the health check detects an issue |
 | `STATE_RECOVERY_COMPLETE` | State Recovery Complete | After a successful state recovery on restart; lists the rejected and ghost orders that were not re-placed |
 | `BOT_HALTED` | Bot Halted | When the bot halts. The text asks you to check the exchange for orders left open before running `resume` |

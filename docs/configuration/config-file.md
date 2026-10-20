@@ -163,8 +163,8 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 
 | Parameter | Type | Default | Range | Description |
 |-----------|------|---------|-------|-------------|
-| `max_retries` | int | `3` | 1–20 | Maximum retry attempts for failed orders (live/paper). |
-| `retry_delay` | float | `1.0` | 0.1–60.0 | Delay in seconds between retries. |
+| `max_retries` | int | `3` | 1–20 | Maximum attempts to cancel an order (live/paper). Placements are not retried here: a placement that failed for a transient reason is retried by the placement journal at every order poll. |
+| `retry_delay` | float | `1.0` | 0.1–60.0 | Delay in seconds between cancellation attempts. |
 | `max_slippage` | float | `0.01` | 0.0001–0.1 | Accepted for compatibility, no longer used: a market order is sent as one leg, and the initial purchase and the liquidation retry it without adjusting a price. |
 | `backtest_slippage` | float | `0.0` | 0.0–0.1 | Fixed slippage applied to simulated fills (e.g., `0.001` = 0.1%). Buys fill higher, sells fill lower. |
 | `backtest_min_amount` | float | none | 0 or more | Minimum order quantity in the base currency (backtest only). When set, the backtest applies it like the exchange's minimum in live: it checks that the grid is feasible at arming, skips the initial purchase and grid orders that fall below it, and skips the final liquidation if the position is too small. Absent means no minimum. |
