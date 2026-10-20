@@ -7,6 +7,7 @@ from tests.fakes.trading_stack import ARMING_PRICE, build_stack, reserved_matche
 
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
+from grid_trading_bot.core.order_handling import order_manager as order_manager_module
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.placement_journal import PlacementPurpose
@@ -240,6 +241,28 @@ class TestSubmitLimit:
 
         assert len(stack.execution.open_orders()) == 1
         assert len(stack.journal) == 0
+
+    async def test_an_order_that_cannot_be_adopted_keeps_its_sent_entry_and_reservation(self, monkeypatch):
+        stack = build_stack(store=RecordingStore())
+        real_adopt = order_manager_module.adopt_order
+        calls = []
+
+        def fail_first(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                raise RuntimeError("book broken")
+            return real_adopt(*args)
+
+        monkeypatch.setattr(order_manager_module, "adopt_order", fail_first)
+
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+
+        [entry] = stack.journal.limit_entries()
+        assert (entry.level_price, entry.sent) == (80.0, True)
+        assert stack.book.get_order(stack.execution.client_ids[entry.client_order_id]) is None
+        assert len(stack.book.get_open_orders()) == 3
+        assert reserved_matches_open_orders(stack)
+        assert NotificationType.ERROR_OCCURRED in _sent(stack)
 
 
 class TestPairedOrders:

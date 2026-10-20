@@ -334,8 +334,8 @@ class OrderManager:
 
     def _adopt(self, entry: PendingPlacement, order: Order) -> Order:
         """Moves an order the exchange holds for `entry` from the journal into the book."""
-        self.journal.remove(entry.client_order_id)
         adopt_order(entry, order, self.grid_manager, self.order_book)
+        self.journal.remove(entry.client_order_id)
         if entry.attempts > 1:
             self.logger.info(f"Placement {entry.client_order_id} placed after {entry.attempts} attempts.")
         if entry.purpose is PlacementPurpose.PAIRED:
@@ -488,6 +488,9 @@ class OrderManager:
             await self._handle_order_completion(local, grid_level)
         except Exception as e:
             self.logger.error(f"Error while handling filled order {local.identifier}: {e}", exc_info=True)
+            # Send errors never reach this clause, so what does is a bug that must fail a backtest run.
+            if self.trading_mode == TradingMode.BACKTEST:
+                raise
             self._notify(
                 NotificationType.ERROR_OCCURRED,
                 error_details=f"Failed handling filled order {local.identifier}: {e}",

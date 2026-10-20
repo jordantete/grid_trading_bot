@@ -164,6 +164,38 @@ class TestFills:
         assert [save.consistent for save in store.observed] == [True]
         assert NotificationType.ORDER_FAILED in _sent(stack)
 
+    async def test_an_unexpected_pairing_error_in_live_keeps_the_fill_booked_alerts_and_saves(self, stack):
+        store = _observing_store(stack)
+        stack.manager.state_store = store
+        sent = []
+
+        async def record(content, **_kwargs):
+            sent.append((content, stack.manager._lock.locked()))
+
+        stack.notifications.async_send_notification.side_effect = record
+        stack.grid.complete_order = Mock(side_effect=RuntimeError("boom"))
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+        crypto_before = stack.balances.get_adjusted_crypto_balance()
+        orders_before = len(stack.execution.orders)
+
+        await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
+
+        assert stack.book.get_order(buy.identifier).is_filled()
+        assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.999)
+        assert len(stack.execution.orders) == orders_before
+        assert len(stack.journal) == 0
+        assert len(store.saves) == 1
+        assert (NotificationType.ERROR_OCCURRED, False) in sent
+
+    async def test_an_unexpected_pairing_error_fails_a_backtest(self):
+        stack = build_stack(trading_mode="backtest")
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+        stack.grid.complete_order = Mock(side_effect=RuntimeError("boom"))
+        buy = stack.execution.order_at(100.0, OrderSide.BUY)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
+
     @pytest.mark.parametrize("error", [OrderNotPlacedError("exchange down"), DataFetchError("exchange unavailable")])
     async def test_a_paired_placement_the_exchange_cannot_take_yet_waits_in_the_journal(self, stack, error):
         store = _observing_store(stack)
