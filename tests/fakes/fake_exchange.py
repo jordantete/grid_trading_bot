@@ -17,6 +17,25 @@ PAIR = "BTC/USDT"
 BASE = "BTC"
 QUOTE = "USDT"
 
+_ERRORS = {
+    "network": ccxt.NetworkError,
+    "timeout": ccxt.RequestTimeout,
+    "insufficient_funds": ccxt.InsufficientFunds,
+    "duplicate": ccxt.DuplicateOrderId,
+}
+
+
+def _take_failure(data: dict, method: str) -> dict | None:
+    """Consumes one scripted failure of `method`, dropping it once its count is spent."""
+    failure = data["failures"].get(method)
+    if failure is None:
+        return None
+    if failure["times"] is not None:
+        failure["times"] -= 1
+        if failure["times"] <= 0:
+            del data["failures"][method]
+    return dict(failure)
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -109,6 +128,20 @@ def _cancel(data: dict, order: dict) -> None:
     order["status"] = "canceled"
 
 
+def _fill(data: dict, order_id: str, quantity: float | None) -> None:
+    order = data["orders"][order_id]
+    filled = order["remaining"] if quantity is None or quantity >= order["remaining"] else quantity
+    fee, currency = _execute(data, order["side"], filled, order["price"], from_locked=True)
+    _report_fee(data, order, fee, currency)
+    if filled == order["remaining"]:
+        order["filled"], order["remaining"], order["status"] = order["amount"], 0.0, "closed"
+    else:
+        order["filled"] += filled
+        order["remaining"] = order["amount"] - order["filled"]
+    order["average"] = order["price"]
+    order["lastTradeTimestamp"] = _now_ms()
+
+
 class ExchangeState:
     """The JSON file the fake exchange works on, with the helpers tests use to act on it."""
 
@@ -125,6 +158,8 @@ class ExchangeState:
         fee: float = 0.001,
         order_delay: float | None = None,
         fail_feed_after: int | None = None,
+        response_delay: float | None = None,
+        cancel_delay: float | None = None,
         report_fees: bool = False,
     ) -> "ExchangeState":
         state = cls(path)
@@ -135,7 +170,9 @@ class ExchangeState:
                 "order_delay": order_delay,
                 "fail_feed_after": fail_feed_after,
                 "report_fees": report_fees,
-                "failing": [],
+                "failures": {},
+                "response_delay": response_delay,
+                "cancel_delay": cancel_delay,
                 "next_id": 1,
                 "orders": {},
                 "executions": [],
@@ -170,20 +207,7 @@ class ExchangeState:
         return any(o["price"] == price for o in self.open_orders(side))
 
     def fill(self, order_id: str, quantity: float | None = None) -> None:
-        def change(data):
-            order = data["orders"][order_id]
-            filled = order["remaining"] if quantity is None or quantity >= order["remaining"] else quantity
-            fee, currency = _execute(data, order["side"], filled, order["price"], from_locked=True)
-            _report_fee(data, order, fee, currency)
-            if filled == order["remaining"]:
-                order["filled"], order["remaining"], order["status"] = order["amount"], 0.0, "closed"
-            else:
-                order["filled"] += filled
-                order["remaining"] = order["amount"] - order["filled"]
-            order["average"] = order["price"]
-            order["lastTradeTimestamp"] = _now_ms()
-
-        self.update(change)
+        self.update(lambda data: _fill(data, order_id, quantity))
 
     def cancel(self, order_id: str) -> None:
         self.update(lambda data: _cancel(data, data["orders"][order_id]))
@@ -200,9 +224,33 @@ class ExchangeState:
     def add_open_order(self, side: str, price: float, amount: float) -> str:
         return self.update(lambda data: _open(data, "limit", side, amount, price)["id"])
 
-    def fail(self, method: str) -> None:
-        """Makes every later call to `method` raise a ccxt NetworkError."""
-        self.update(lambda data: data["failing"].append(method))
+    _SCENARIO_FIELDS = frozenset({"price", "order_delay", "response_delay", "cancel_delay"})
+
+    def fail(self, method: str, times: int | None = None, error: str = "network", after_accept: bool = False) -> None:
+        """
+        Makes the next `times` calls to `method` raise the ccxt error named by `error`, every later call when `times`
+        is None. With `after_accept`, `create_order` creates the order before raising, as an answer lost on the way.
+        """
+        if error not in _ERRORS:
+            raise ValueError(f"unknown error {error!r}, expected one of {sorted(_ERRORS)}")
+        failure = {"times": times, "error": error, "after_accept": after_accept}
+        self.update(lambda data: data["failures"].__setitem__(method, failure))
+
+    def set_scenario(self, **fields) -> None:
+        """Changes fields a running bot reads at every call, such as the price of the next tick."""
+        unknown = set(fields) - self._SCENARIO_FIELDS
+        if unknown:
+            raise ValueError(f"not settable: {sorted(unknown)}")
+        self.update(lambda data: data.update(fields))
+
+    def fill_all(self, order_ids: list[str]) -> None:
+        """Fills several open orders in one write, so a single poll of the bot sees them all filled."""
+
+        def change(data):
+            for order_id in order_ids:
+                _fill(data, order_id, None)
+
+        self.update(change)
 
     def totals(self) -> dict[str, float]:
         return {asset: amounts["free"] + amounts["used"] for asset, amounts in self.read()["balances"].items()}
@@ -231,10 +279,15 @@ class FakeExchange:
             with self.calls_path.open("a") as calls:
                 calls.write(json.dumps({"method": method, **details}) + "\n")
 
+    def _failure(self, method: str) -> dict | None:
+        """The scripted failure of this call to `method`, consumed from the exchange file; None when it succeeds."""
+        if method not in self._state.read()["failures"]:
+            return None
+        return self._state.update(lambda data: _take_failure(data, method))
+
     @staticmethod
-    def _raise_if_failing(data: dict, method: str) -> None:
-        if method in data["failing"]:
-            raise ccxt.NetworkError(f"scripted {method} failure")
+    def _error(failure: dict, method: str) -> Exception:
+        return _ERRORS[failure["error"]](f"scripted {method} failure")
 
     def set_sandbox_mode(self, _enabled: bool) -> None:
         pass
@@ -252,9 +305,10 @@ class FakeExchange:
         return f"{price:.2f}"
 
     async def fetch_balance(self):
-        data = self._state.read()
-        self._raise_if_failing(data, "fetch_balance")
-        balances = data["balances"]
+        failure = self._failure("fetch_balance")
+        if failure is not None:
+            raise self._error(failure, "fetch_balance")
+        balances = self._state.read()["balances"]
         return {
             "free": {asset: amounts["free"] for asset, amounts in balances.items()},
             "used": {asset: amounts["used"] for asset, amounts in balances.items()},
@@ -280,33 +334,72 @@ class FakeExchange:
         delay = self._state.read()["order_delay"]
         if delay:
             await asyncio.sleep(delay)
-        order = self._state.update(
-            lambda data: _open(
-                data,
-                order_type,
-                side,
-                float(amount),
-                float(price) if price is not None else data["price"],
-                client_order_id,
+        failure = self._failure("create_order")
+        if failure is not None and not failure["after_accept"]:
+            self._record(
+                "create_order_failed",
+                type=order_type,
+                side=side,
+                client_order_id=client_order_id,
+                error=failure["error"],
             )
+            raise self._error(failure, "create_order")
+
+        def place(data):
+            if client_order_id is not None and any(
+                o.get("clientOrderId") == client_order_id and o["status"] == "open" for o in data["orders"].values()
+            ):
+                return None
+            price_used = float(price) if price is not None else data["price"]
+            order = _open(data, order_type, side, float(amount), price_used, client_order_id)
+            return dict(order)
+
+        order = self._state.update(place)
+        if order is None:
+            self._record(
+                "create_order_failed", type=order_type, side=side, client_order_id=client_order_id, error="duplicate"
+            )
+            raise ccxt.DuplicateOrderId(f"fake exchange: an open order already has client id {client_order_id}")
+        self._record(
+            "create_order",
+            id=order["id"],
+            type=order_type,
+            side=side,
+            price=order["price"],
+            client_order_id=client_order_id,
+            answer_lost=failure is not None,
         )
-        self._record("create_order", id=order["id"], type=order_type, side=side, client_order_id=client_order_id)
-        return dict(order)
+        if failure is not None:
+            raise self._error(failure, "create_order")
+        response_delay = self._state.read()["response_delay"]
+        if response_delay:
+            await asyncio.sleep(response_delay)
+        return order
 
     async def fetch_order(self, order_id, _pair, params=None):
-        data = self._state.read()
-        self._raise_if_failing(data, "fetch_order")
-        client_order_id = (params or {}).get("clientOrderId")
-        if order_id is None and client_order_id is not None:
-            for order in data["orders"].values():
-                if order["clientOrderId"] == client_order_id:
-                    return dict(order)
-            raise ccxt.OrderNotFound(f"fake exchange: no order with client order id {client_order_id}")
-        if order_id not in data["orders"]:
+        failure = self._failure("fetch_order")
+        if failure is not None:
+            raise self._error(failure, "fetch_order")
+        orders = self._state.read()["orders"]
+        if order_id is None:
+            client_order_id = (params or {}).get("clientOrderId")
+            matches = [order for order in orders.values() if order.get("clientOrderId") == client_order_id]
+            self._record("fetch_order_by_client_id", client_order_id=client_order_id, found=bool(matches))
+            if not matches:
+                raise ccxt.OrderNotFound(f"fake exchange: no order with client id {client_order_id}")
+            return dict(matches[-1])
+        if order_id not in orders:
             raise ccxt.OrderNotFound(f"fake exchange: order {order_id} does not exist")
-        return dict(data["orders"][order_id])
+        return dict(orders[order_id])
 
     async def cancel_order(self, order_id, _pair):
+        delay = self._state.read()["cancel_delay"]
+        if delay:
+            await asyncio.sleep(delay)
+        failure = self._failure("cancel_order")
+        if failure is not None:
+            raise self._error(failure, "cancel_order")
+
         def change(data):
             _cancel(data, data["orders"][order_id])
             return dict(data["orders"][order_id])
@@ -316,9 +409,10 @@ class FakeExchange:
         return order
 
     async def fetch_open_orders(self, _pair):
-        data = self._state.read()
-        self._raise_if_failing(data, "fetch_open_orders")
-        return [dict(order) for order in data["orders"].values() if order["status"] == "open"]
+        failure = self._failure("fetch_open_orders")
+        if failure is not None:
+            raise self._error(failure, "fetch_open_orders")
+        return [dict(order) for order in self._state.read()["orders"].values() if order["status"] == "open"]
 
     async def fetch_ohlcv(self, *_args, **_kwargs):
         return []
