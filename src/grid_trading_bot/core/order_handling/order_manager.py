@@ -11,7 +11,12 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.exceptions import OrderRefusedError
-from grid_trading_bot.core.services.exceptions import DataFetchError, OrderNotPlacedError, PostOnlyRejectedError
+from grid_trading_bot.core.services.exceptions import (
+    DataFetchError,
+    OrderNotPlacedError,
+    OrderOutcomeUnknownError,
+    PostOnlyRejectedError,
+)
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 from ..grid_management.grid_level import GridLevel
@@ -679,7 +684,14 @@ class OrderManager:
                     self.logger.warning(f"Skipping initial purchase: {violation}")
                     self._notify(NotificationType.ORDER_FAILED, error_details=f"Initial purchase skipped: {violation}")
                     return True
-            entry = self._new_market_entry(OrderSide.BUY, quantity, current_price, PlacementPurpose.INITIAL_PURCHASE)
+            try:
+                entry = self._new_market_entry(
+                    OrderSide.BUY, quantity, current_price, PlacementPurpose.INITIAL_PURCHASE
+                )
+            except OrderRefusedError as e:
+                self.logger.warning(f"Skipping initial purchase: {e}")
+                self._notify(NotificationType.ORDER_FAILED, error_details=f"Initial purchase skipped: {e}")
+                return True
 
         for _ in range(self.MAX_MARKET_LEGS):
             self.logger.info(f"Performing initial crypto purchase: {entry.quantity} at price {current_price}.")
@@ -714,7 +726,13 @@ class OrderManager:
             remaining = entry.quantity - order.filled
             if self._is_dust(remaining, current_price):
                 return True
-            entry = self._new_market_entry(OrderSide.BUY, remaining, current_price, PlacementPurpose.INITIAL_PURCHASE)
+            try:
+                entry = self._new_market_entry(
+                    OrderSide.BUY, remaining, current_price, PlacementPurpose.INITIAL_PURCHASE
+                )
+            except OrderRefusedError as e:
+                self.logger.warning(f"Initial purchase remainder {remaining} is dust for the exchange: {e}")
+                return True
 
         self.journal.remove(entry.client_order_id)
         self.logger.warning(
@@ -740,12 +758,19 @@ class OrderManager:
     async def _send_market_entry(self, entry: PendingPlacement) -> Order:
         """
         Sends one market leg through the journal, looking it up first when an earlier send's outcome is unknown.
+        A found order is returned only once it is closed and filled; a lookup counts as an attempt.
         Raises DataFetchError when the order is not placed or its outcome stays unknown, OrderRefusedError on a refusal.
         """
         if entry.sent:
+            entry.attempts += 1
             found = await self.order_execution_strategy.find_order(entry.client_order_id, self.trading_pair)
-            if found is not None:
-                return found
+            if found is not None and found.status == OrderStatus.OPEN:
+                raise OrderOutcomeUnknownError(f"Market order {entry.client_order_id} is still open on the exchange.")
+            if found is not None and found.filled:
+                settled = copy.copy(found)
+                settled.status = OrderStatus.CLOSED
+                settled.average = found.average or found.price or entry.price
+                return settled
             entry.sent = False
         entry.sent = True
         if self.state_store is not None and not await self.state_store.save_pending(entry):
