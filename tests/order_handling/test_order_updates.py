@@ -533,6 +533,7 @@ class TestClientOrderIds:
 
     async def test_a_liquidation_the_exchange_refuses_is_reported(self, stack):
         stack.execution.market_order_failures = [OrderRejectedError("insufficient funds")]
+        stack.manager.interrupt_liquidation()
 
         await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
 

@@ -174,6 +174,8 @@ class GridTradingBot:
                 journal=journal,
                 config_hash=compute_config_hash(self.config_manager),
             )
+            if self._is_live_or_paper():
+                self.order_manager.exchange_balance = self._exchange_free_base
 
             self.order_status_tracker = OrderStatusTracker(
                 order_book=order_book,
@@ -372,6 +374,11 @@ class GridTradingBot:
 
     def _is_live_or_paper(self) -> bool:
         return self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
+
+    async def _exchange_free_base(self) -> float:
+        """The base currency free on the exchange, which a liquidation the exchange refused falls back on."""
+        balances = await self.exchange_service.get_balance()
+        return float(balances.get("free", {}).get(self.config_manager.get_base_currency(), 0.0))
 
     async def request_stop(self, request: StopRequest) -> None:
         """Asks the bot to stop through STOP_BOT, so every component sees the same request."""

@@ -335,16 +335,16 @@ class BalanceTracker:
 
     async def update_after_liquidation(self, order: Order) -> None:
         """
-        Updates balances after a liquidation market sell (TP/SL/trailing/shutdown).
-        Mirror of update_after_initial_purchase: closed market orders never enter the
-        open-order tracking, so no fill update ever reaches the order pipeline for them.
+        Books what a liquidation market sell (TP/SL/trailing) sold, whether the leg closed or was cancelled after a
+        partial fill. Mirror of update_after_initial_purchase: market orders never enter the open-order tracking, so no
+        fill update ever reaches the order pipeline for them.
 
         Args:
-            order: The CLOSED market SELL order.
+            order: The market SELL order, with `filled` above zero.
         """
         async with self._lock:
-            if order.status != OrderStatus.CLOSED:
-                raise ValueError(f"Order {order.identifier} is not CLOSED. Cannot update balances.")
+            if not order.filled or order.filled <= 0:
+                raise ValueError(f"Liquidation order {order.identifier} sold nothing. Cannot update balances.")
 
             fill_price = order.average if order.average is not None else order.price
             d_filled = self._to_decimal(order.filled)

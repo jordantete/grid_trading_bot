@@ -488,6 +488,40 @@ class TestUpdateAfterLiquidation:
         assert bt.balance == pytest.approx(2.0 * 99.0 - fee)
         assert bt.crypto_balance == 0.0
 
+    async def test_a_leg_cancelled_after_a_partial_fill_books_what_it_sold(self, balance_tracker_with_crypto):
+        bt = balance_tracker_with_crypto
+        order = _make_order(
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.CANCELED,
+            price=100.0,
+            average=99.0,
+            amount=2.0,
+            filled=0.5,
+            remaining=1.5,
+        )
+
+        await bt.update_after_liquidation(order)
+
+        fee = bt.fee_calculator.calculate_fee(0.5 * 99.0, Liquidity.TAKER)
+        assert bt.crypto_balance == pytest.approx(1.5)
+        assert bt.balance == pytest.approx(0.5 * 99.0 - fee)
+
+    async def test_a_liquidation_that_sold_nothing_is_refused(self, balance_tracker_with_crypto):
+        order = _make_order(
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.CANCELED,
+            price=100.0,
+            average=None,
+            amount=2.0,
+            filled=0.0,
+            remaining=2.0,
+        )
+
+        with pytest.raises(ValueError, match="sold nothing"):
+            await balance_tracker_with_crypto.update_after_liquidation(order)
+
 
 class TestBalanceTrackerLiquidityAwareFees:
     """

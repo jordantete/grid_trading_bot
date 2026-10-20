@@ -1283,3 +1283,18 @@ class TestShutdownSequence(BotFixtures):
         await bot.run()
 
         assert bot.stop_request.kind is StopKind.CRASH
+
+
+class TestLiquidationBalanceWiring(BotFixtures):
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("trading_mode", [TradingMode.LIVE, TradingMode.PAPER_TRADING])
+    async def test_a_refused_liquidation_reads_the_free_base_on_the_exchange(
+        self, config_manager, notification_handler, mock_event_bus, trading_mode
+    ):
+        config_manager.get_trading_mode.return_value = trading_mode
+        config_manager.get_base_currency.return_value = "BTC"
+        config_manager.get_quote_currency.return_value = "USDT"
+        bot = GridTradingBot("config.json", config_manager, notification_handler, mock_event_bus, no_plot=True)
+        bot.exchange_service.get_balance = AsyncMock(return_value={"free": {"BTC": 1.25, "USDT": 10.0}})
+
+        assert await bot.order_manager.exchange_balance() == 1.25

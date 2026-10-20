@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 import copy
 from dataclasses import replace
@@ -36,6 +36,8 @@ from .state_store import ArmingFlags, StateStore
 
 class OrderManager:
     MAX_MARKET_LEGS = 3
+    LIQUIDATION_BACKOFF = (1, 2, 4, 8, 16, 30)
+    LIQUIDATION_ALERT_INTERVAL = 600.0
 
     def __init__(
         self,
@@ -69,6 +71,11 @@ class OrderManager:
         self._outbox: list[tuple[NotificationType, dict[str, Any]]] = []
         self._positions_closed = False
         self._resolving_for_cancel = False
+        self._liquidated = False
+        self._liquidation_interrupted = asyncio.Event()
+        self._clock: Callable[[], float] = time.monotonic
+        self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+        self.exchange_balance: Callable[[], Awaitable[float]] | None = None
 
     def set_market_constraints(self, constraints: MarketConstraints) -> None:
         self.market_constraints = constraints
@@ -411,7 +418,8 @@ class OrderManager:
                 return
             try:
                 if self._positions_closed:
-                    for entry in self.journal.limit_entries():
+                    # A sent entry may be an order the exchange holds, so only a lookup may drop it.
+                    for entry in [entry for entry in self.journal.limit_entries() if not entry.sent]:
                         await self._drop_entry(entry)
                     return
                 for entry in self.journal.limit_entries():
@@ -772,6 +780,10 @@ class OrderManager:
                 settled.status = OrderStatus.CLOSED
                 settled.average = found.average or found.price or entry.price
                 return settled
+            if found is not None and found.status not in ENDED_UNFILLED_STATUSES:
+                raise OrderOutcomeUnknownError(
+                    f"Market order {entry.client_order_id} is {found.status.value} on the exchange without a fill."
+                )
             if found is not None:
                 self.journal.remove(entry.client_order_id)
                 entry.client_order_id = new_client_order_id(self.config_hash)
@@ -806,78 +818,182 @@ class OrderManager:
 
     async def close_positions(self, liquidate: bool, current_price: float | None = None) -> None:
         """
-        Unified shutdown path: cancels every open grid order (releasing reservations),
-        then optionally liquidates the full crypto balance at market. Idempotent —
-        a second call (e.g. STOP_BOT after a TP liquidation) is a no-op.
+        Cancels every open grid order and drops the journal's limit entries, once; then, when asked, sells the crypto
+        until it is sold, under the exchange minimum, or interrupted. A liquidation that failed or was interrupted
+        runs again on the next call that asks for it.
 
-        Note: `cancel_open_grid_orders` acquires `self._lock` itself, so it must be
-        awaited outside any lock held by this method to avoid deadlocking.
+        Note: `cancel_open_grid_orders` acquires `self._lock` itself, so it must be awaited outside any lock held by
+        this method to avoid deadlocking.
         """
-        if self._positions_closed:
+        if not self._positions_closed:
+            self._positions_closed = True
+            cancelled = await self.cancel_open_grid_orders()
+            if not cancelled:
+                self.logger.error("Could not cancel all open grid orders during shutdown.")
+                await self.notification_handler.async_send_notification(
+                    NotificationType.ERROR_OCCURRED,
+                    error_details="Shutdown: some open grid orders could not be cancelled on the exchange.",
+                )
+        elif not liquidate:
             self.logger.info("close_positions already executed; skipping.")
             return
-        self._positions_closed = True
-
-        cancelled = await self.cancel_open_grid_orders()
-        if not cancelled:
-            self.logger.error("Could not cancel all open grid orders during shutdown.")
-            await self.notification_handler.async_send_notification(
-                NotificationType.ERROR_OCCURRED,
-                error_details="Shutdown: some open grid orders could not be cancelled on the exchange.",
-            )
-
         if not liquidate:
             return
+        if self._liquidated:
+            self.logger.info("Positions already liquidated; skipping.")
+            return
+        await self._liquidate(current_price)
 
-        async with self._locked():
-            try:
-                quantity = self.balance_tracker.crypto_balance
-                if quantity <= 0:
-                    self.logger.info("No crypto balance to liquidate.")
-                    return
-                if self.market_constraints is not None and current_price is not None:
-                    violation = self.market_constraints.violation(quantity, current_price)
-                    if violation:
-                        self.logger.error(f"Cannot liquidate position: {violation}")
-                        self._notify(
-                            NotificationType.ERROR_OCCURRED,
-                            error_details=f"Liquidation skipped: {violation}",
-                        )
-                        return
+    def interrupt_liquidation(self) -> None:
+        """Ends a liquidation's retries; the attempt in progress, or a first one, still runs."""
+        self._liquidation_interrupted.set()
+
+    @property
+    def _base_currency(self) -> str:
+        return self.trading_pair.split("/")[0]
+
+    async def _liquidate(self, current_price: float | None) -> None:
+        """
+        Sells the free crypto at market until none is left. A transient failure is retried after a growing delay, a
+        refusal re-reads the exchange balance first, and a remainder under the exchange minimum stops with an alert.
+        Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL seconds.
+        """
+        failures = 0
+        last_alert_at: float | None = None
+        exchange_cap: float | None = None
+        while True:
+            if failures and self._liquidation_interrupted.is_set():
+                await self._send_liquidation_alert(
+                    f"Liquidation interrupted by the shutdown, {self.balance_tracker.crypto_balance} "
+                    f"{self._base_currency} still open."
+                )
+                return
+            error: Exception | None = None
+            sold: float | None = None
+            async with self._locked():
                 try:
-                    order = await self.order_execution_strategy.execute_market_order(
-                        OrderSide.SELL,
-                        self.trading_pair,
-                        quantity,
-                        current_price,
-                        client_order_id=new_client_order_id(self.config_hash),
-                    )
-                    if not order:
-                        raise OrderExecutionFailedError(f"Liquidation order returned None at price {current_price}")
-                    await self.balance_tracker.update_after_liquidation(order)
-                    self.order_book.add_order(order)
-                    if order.filled < quantity:
-                        self._notify(
-                            NotificationType.ERROR_OCCURRED,
-                            error_details=(
-                                f"Liquidation partially filled: {order.filled}/{quantity}. "
-                                f"Remaining position is still on the exchange account."
-                            ),
-                        )
-                except OrderExecutionFailedError as e:
-                    self.logger.error(f"Liquidation failed: {e!s}")
-                    self._notify(
-                        NotificationType.ORDER_FAILED,
-                        error_details=f"Failed to liquidate position: {e}",
-                    )
-                except (DataFetchError, OrderRefusedError, ValueError) as e:
-                    self.logger.error(f"Failed to liquidate at {current_price}: {e}")
-                    self._notify(
-                        NotificationType.ERROR_OCCURRED,
-                        error_details=f"Failed to liquidate position: {e}",
-                    )
-            finally:
-                await self._save_state()
+                    sold = await self._liquidation_attempt(current_price, exchange_cap)
+                except (DataFetchError, OrderRefusedError) as e:
+                    error = e
+                finally:
+                    await self._save_state()
+            if error is None:
+                if sold is None:
+                    self._liquidated = True
+                    return
+                if exchange_cap is not None:
+                    exchange_cap = max(exchange_cap - sold, 0.0)
+                continue
+            failures += 1
+            backoff = self.LIQUIDATION_BACKOFF
+            delay = backoff[min(failures, len(backoff)) - 1]
+            self.logger.warning(f"Liquidation attempt {failures} failed: {error}; next attempt in {delay} s.")
+            if isinstance(error, OrderRefusedError):
+                exchange_cap = await self._read_exchange_free_base(exchange_cap)
+            now = self._clock()
+            if last_alert_at is None or now - last_alert_at >= self.LIQUIDATION_ALERT_INTERVAL:
+                last_alert_at = now
+                await self._send_liquidation_alert(self._liquidation_failure_text(failures, error))
+            if not self._liquidation_interrupted.is_set():
+                await self._pause(delay)
+
+    async def _liquidation_attempt(self, current_price: float | None, exchange_cap: float | None) -> float | None:
+        """
+        One market sell, under the lock: a leg whose outcome is unknown is looked up first, otherwise a new leg sells
+        the free crypto. Returns the quantity sold, or None once nothing more can be sold. Raises DataFetchError while
+        the outcome is unknown or the order was not placed, OrderRefusedError on a refusal.
+        """
+        entry = next((e for e in self.journal.entries() if e.purpose is PlacementPurpose.LIQUIDATION), None)
+        if entry is None:
+            entry = self._new_liquidation_entry(current_price, exchange_cap)
+            if entry is None:
+                return None
+        try:
+            order = await self._send_market_entry(entry)
+        except (OrderNotPlacedError, OrderRefusedError):
+            self.journal.remove(entry.client_order_id)
+            raise
+        self.journal.remove(entry.client_order_id)
+        return await self._book_liquidation(order)
+
+    def _new_liquidation_entry(
+        self, current_price: float | None, exchange_cap: float | None
+    ) -> PendingPlacement | None:
+        """The journal entry of the next leg, or None when nothing can be sold."""
+        quantity = self.balance_tracker.crypto_balance
+        if exchange_cap is not None:
+            quantity = min(quantity, exchange_cap)
+        if quantity > 0:
+            try:
+                quantity = self.order_execution_strategy.round_amount(self.trading_pair, quantity)
+            except OrderRefusedError as e:
+                self._stop_liquidation(
+                    f"Liquidation stopped: {quantity} {self._base_currency} left, which the exchange cannot round "
+                    f"({e})."
+                )
+                return None
+        if quantity <= 0:
+            if self.balance_tracker.crypto_balance > 0:
+                self.logger.warning(
+                    f"The exchange holds no more free {self._base_currency}; the books still show "
+                    f"{self.balance_tracker.crypto_balance}."
+                )
+            else:
+                self.logger.info("No crypto balance left to liquidate.")
+            return None
+        if self.market_constraints is not None and current_price is not None:
+            violation = self.market_constraints.violation(quantity, current_price)
+            if violation:
+                self._stop_liquidation(
+                    f"Liquidation stopped: {quantity} {self._base_currency} left, under the exchange minimum "
+                    f"({violation})."
+                )
+                return None
+        # The entry is written as sent before the request leaves, so a crash ends in a lookup, never in a second sale.
+        return self._new_market_entry(OrderSide.SELL, quantity, current_price, PlacementPurpose.LIQUIDATION)
+
+    def _stop_liquidation(self, details: str) -> None:
+        self.logger.error(details)
+        self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
+
+    async def _book_liquidation(self, order: Order) -> float:
+        if not order.filled or order.filled <= 0:
+            raise OrderNotPlacedError(f"liquidation order {order.identifier} sold nothing")
+        await self.balance_tracker.update_after_liquidation(order)
+        self.order_book.add_order(order)
+        return order.filled
+
+    async def _read_exchange_free_base(self, fallback: float | None) -> float | None:
+        if self.exchange_balance is None:
+            return fallback
+        try:
+            return await self.exchange_balance()
+        except DataFetchError as e:
+            self.logger.warning(f"Could not read the exchange balance for the next liquidation attempt: {e}")
+            return fallback
+
+    async def _pause(self, delay: float) -> None:
+        """Waits `delay` seconds, or until the liquidation is interrupted."""
+        sleeper = asyncio.ensure_future(self._sleep(delay))
+        interrupted = asyncio.ensure_future(self._liquidation_interrupted.wait())
+        try:
+            await asyncio.wait({sleeper, interrupted}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            sleeper.cancel()
+            interrupted.cancel()
+
+    def _liquidation_failure_text(self, failures: int, error: Exception) -> str:
+        position = f"{self.balance_tracker.crypto_balance} {self._base_currency}"
+        if failures == 1:
+            return f"Liquidation of {position} failed ({error}); retrying until it succeeds."
+        return f"Liquidation still failing after {failures} attempts ({error}); {position} still open."
+
+    async def _send_liquidation_alert(self, details: str) -> None:
+        self.logger.error(details)
+        await self.notification_handler.async_send_notification(
+            NotificationType.ERROR_OCCURRED,
+            error_details=details,
+        )
 
     async def execute_take_profit_or_stop_loss_order(
         self,
@@ -900,8 +1016,9 @@ class OrderManager:
 
         event = "Take profit" if take_profit_order else "Stop loss"
         await self.close_positions(liquidate=True, current_price=current_price)
+        outcome = "position liquidated" if self._liquidated else "liquidation incomplete (see the liquidation alerts)"
         await self.notification_handler.async_send_notification(
             NotificationType.TAKE_PROFIT_TRIGGERED if take_profit_order else NotificationType.STOP_LOSS_TRIGGERED,
-            order_details=f"{event} at {current_price}: open orders cancelled, position liquidated.",
+            order_details=f"{event} at {current_price}: open orders cancelled, {outcome}.",
         )
         self.logger.info(f"{event} triggered at {current_price}; close_positions executed.")
