@@ -58,6 +58,7 @@ def setup_tracker():
     order_execution_strategy = Mock()
     order_update_handler = Mock()
     order_update_handler.apply_order_update = AsyncMock()
+    order_update_handler.retry_pending_placements = AsyncMock()
     tracker = OrderStatusTracker(
         order_book=order_book,
         order_execution_strategy=order_execution_strategy,

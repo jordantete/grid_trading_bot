@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from grid_trading_bot.core.order_handling.order import OrderStatus
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus
 from grid_trading_bot.core.services.exceptions import DataFetchError
 
 
@@ -210,8 +210,12 @@ class TestOrderStatusTracker:
         mock_order1 = Mock(identifier="order_1", symbol="BTC/USDT", status=OrderStatus.OPEN)
         mock_order2 = Mock(identifier="order_2", symbol="ETH/USDT", status=OrderStatus.OPEN)
 
-        mock_remote_order1 = Mock(identifier="order_1", symbol="BTC/USDT", status=OrderStatus.CLOSED)
-        mock_remote_order2 = Mock(identifier="order_2", symbol="ETH/USDT", status=OrderStatus.CANCELED)
+        mock_remote_order1 = Mock(
+            identifier="order_1", symbol="BTC/USDT", status=OrderStatus.CLOSED, side=OrderSide.BUY, price=100.0
+        )
+        mock_remote_order2 = Mock(
+            identifier="order_2", symbol="ETH/USDT", status=OrderStatus.CANCELED, side=OrderSide.SELL, price=110.0
+        )
 
         order_book.get_open_orders.return_value = [mock_order1, mock_order2]
         order_execution_strategy.get_order = AsyncMock(side_effect=[mock_remote_order1, mock_remote_order2])
@@ -273,3 +277,114 @@ class TestStopTrackingDrain:
         warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
         assert len(warnings) == 1
         assert "cancel" in warnings[0].getMessage().lower()
+
+
+class TestPollOrder:
+    @staticmethod
+    def _poll(order_book, order_execution_strategy, remote_orders):
+        order_book.get_open_orders.return_value = [
+            Mock(identifier=remote.identifier, symbol="BTC/USDT") for remote in remote_orders
+        ]
+        by_id = {remote.identifier: remote for remote in remote_orders}
+        order_execution_strategy.get_order = AsyncMock(side_effect=lambda order_id, _pair: by_id[order_id])
+
+    async def test_the_fills_of_one_poll_are_applied_buys_high_to_low_then_sells_low_to_high(self, setup_tracker):
+        tracker, order_book, order_execution_strategy, order_update_handler = setup_tracker
+        self._poll(
+            order_book,
+            order_execution_strategy,
+            [
+                Mock(identifier="s120", status=OrderStatus.CLOSED, side=OrderSide.SELL, price=120.0),
+                Mock(identifier="b90", status=OrderStatus.CLOSED, side=OrderSide.BUY, price=90.0),
+                Mock(identifier="s110", status=OrderStatus.CANCELED, side=OrderSide.SELL, price=110.0),
+                Mock(identifier="b100", status=OrderStatus.CLOSED, side=OrderSide.BUY, price=100.0),
+                Mock(identifier="b80", status=OrderStatus.OPEN, side=OrderSide.BUY, price=80.0, filled=0),
+            ],
+        )
+
+        await tracker._process_open_orders()
+
+        applied = [c.args[0].identifier for c in order_update_handler.apply_order_update.await_args_list]
+        assert applied == ["b100", "b90", "s110", "s120"]
+
+    async def test_a_poll_ends_with_one_retry_of_the_pending_placements(self, setup_tracker):
+        tracker, order_book, order_execution_strategy, order_update_handler = setup_tracker
+        calls = []
+        order_update_handler.apply_order_update = AsyncMock(side_effect=lambda update: calls.append(update.identifier))
+        order_update_handler.retry_pending_placements = AsyncMock(side_effect=lambda: calls.append("retry"))
+        self._poll(
+            order_book,
+            order_execution_strategy,
+            [Mock(identifier="b100", status=OrderStatus.CLOSED, side=OrderSide.BUY, price=100.0)],
+        )
+
+        await tracker._process_open_orders()
+
+        assert calls == ["b100", "retry"]
+
+    async def test_a_poll_without_open_orders_still_retries(self, setup_tracker):
+        tracker, order_book, _, order_update_handler = setup_tracker
+        order_book.get_open_orders.return_value = []
+
+        await tracker._process_open_orders()
+
+        order_update_handler.retry_pending_placements.assert_awaited_once()
+
+    async def test_a_failed_update_does_not_stop_the_rest_of_the_poll(self, setup_tracker):
+        tracker, order_book, order_execution_strategy, order_update_handler = setup_tracker
+        applied = []
+
+        def apply(update):
+            if update.identifier == "b100":
+                raise RuntimeError("boom")
+            applied.append(update.identifier)
+
+        order_update_handler.apply_order_update = AsyncMock(side_effect=apply)
+        self._poll(
+            order_book,
+            order_execution_strategy,
+            [
+                Mock(identifier="b100", status=OrderStatus.CLOSED, side=OrderSide.BUY, price=100.0),
+                Mock(identifier="b90", status=OrderStatus.CLOSED, side=OrderSide.BUY, price=90.0),
+            ],
+        )
+
+        with patch.object(tracker.logger, "error") as mock_logger_error:
+            await tracker._process_open_orders()
+
+        assert applied == ["b90"]
+        mock_logger_error.assert_called_once()
+        order_update_handler.retry_pending_placements.assert_awaited_once()
+
+    async def test_a_failing_retry_is_logged_and_the_poll_ends(self, setup_tracker):
+        tracker, order_book, _, order_update_handler = setup_tracker
+        order_book.get_open_orders.return_value = []
+        order_update_handler.retry_pending_placements = AsyncMock(side_effect=RuntimeError("journal broken"))
+
+        with patch.object(tracker.logger, "error") as mock_logger_error:
+            await tracker._process_open_orders()
+
+        mock_logger_error.assert_called_once_with(
+            "Error while retrying the pending placements: journal broken", exc_info=True
+        )
+
+    async def test_a_poll_with_several_orders_runs_as_one_task(self, setup_tracker):
+        tracker, order_book, order_execution_strategy, _ = setup_tracker
+        order_book.get_open_orders.return_value = [
+            Mock(identifier="order_1", symbol="BTC/USDT"),
+            Mock(identifier="order_2", symbol="BTC/USDT"),
+        ]
+        started = asyncio.Event()
+
+        async def stuck(*_args):
+            started.set()
+            await asyncio.Event().wait()
+
+        order_execution_strategy.get_order = AsyncMock(side_effect=stuck)
+        tracker.HANDLER_DRAIN_TIMEOUT = 0.01
+        tracker.start_tracking()
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        assert len(tracker._active_tasks) == 1
+
+        await asyncio.wait_for(tracker.stop_tracking(), timeout=1)

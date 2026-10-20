@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+import copy
 from dataclasses import replace
 import logging
 import time
@@ -218,6 +219,14 @@ class OrderManager:
                 await self._save_state()
 
     async def _cancel_open_grid_orders(self) -> bool:
+        for entry in [entry for entry in self.journal.limit_entries() if entry.sent]:
+            try:
+                await self._resolve_sent_entry(entry)
+            except DataFetchError as e:
+                self.logger.error(
+                    f"Could not look up placement {entry.client_order_id}; aborting bulk cancellation: {e}"
+                )
+                return False
         open_orders = set(self.order_book.get_open_orders())
         pairs = [
             (order, grid_level)
@@ -243,7 +252,7 @@ class OrderManager:
                 self.grid_manager.rollback_order_placement(grid_level, order.side, self._level_busy(grid_level))
             self.logger.info(f"Cancelled {order.side.value} order {order.identifier} at {order.price}.")
 
-        for entry in [entry for entry in self.journal.limit_entries() if not entry.sent]:
+        for entry in self.journal.limit_entries():
             await self._drop_entry(entry)
         return True
 
@@ -383,6 +392,49 @@ class OrderManager:
         if purpose in (PlacementPurpose.PAIRED, PlacementPurpose.REPLACEMENT):
             self._notify(NotificationType.ORDER_FAILED, error_details=details)
 
+    async def retry_pending_placements(self) -> None:
+        """Resolves or sends again, in creation order, every limit placement the journal holds, then saves."""
+        async with self._locked():
+            if not self.journal.limit_entries():
+                return
+            try:
+                if self._positions_closed:
+                    for entry in self.journal.limit_entries():
+                        await self._drop_entry(entry)
+                    return
+                for entry in self.journal.limit_entries():
+                    if self.journal.get(entry.client_order_id) is entry:
+                        await self._retry_entry(entry)
+            finally:
+                await self._save_state()
+
+    async def _retry_entry(self, entry: PendingPlacement) -> None:
+        try:
+            if entry.sent and await self._resolve_sent_entry(entry) is not None:
+                return
+            await self._send_entry(entry)
+        except OrderRefusedError as e:
+            if entry.purpose is PlacementPurpose.GRID:
+                self._report_unfunded([(entry.side, entry.level_price)])
+            else:
+                self._report_refusal(entry.purpose, entry.level_price, e)
+        except DataFetchError as e:
+            self.logger.warning(f"Could not look up placement {entry.client_order_id}; retried at the next poll: {e}")
+
+    async def _resolve_sent_entry(self, entry: PendingPlacement) -> Order | None:
+        """
+        Looks a sent entry up by its client id. Adopts the order the exchange holds and applies what it already did, or
+        marks the entry unsent when the exchange never received it. Raises DataFetchError when the lookup fails.
+        """
+        found = await self.order_execution_strategy.find_order(entry.client_order_id, self.trading_pair)
+        if found is None:
+            entry.sent = False
+            return None
+        local = self._adopt(entry, copy.copy(found))
+        if found.status != OrderStatus.OPEN:
+            await self._apply_update(local, found)
+        return local
+
     async def _replace_on_level(self, order: Order, grid_level: GridLevel) -> None:
         """Re-places an order that ended unfilled on its level, for the quantity it did not fill."""
         quantity = order.remaining if order.remaining and order.remaining > 0 else order.amount
@@ -444,14 +496,17 @@ class OrderManager:
                 self.logger.info(f"Update for order {update.identifier}, which is not open locally; ignoring it.")
                 return
             try:
-                if update.status == OrderStatus.CLOSED:
-                    await self._settle_fill(local, update)
-                elif update.status in ENDED_UNFILLED_STATUSES:
-                    await self._settle_end(local, update)
-                else:
-                    self.logger.info(f"Order {update.identifier} reported as {update.status.value}; nothing to apply.")
+                await self._apply_update(local, update)
             finally:
                 await self._save_state()
+
+    async def _apply_update(self, local: Order, update: Order) -> None:
+        if update.status == OrderStatus.CLOSED:
+            await self._settle_fill(local, update)
+        elif update.status in ENDED_UNFILLED_STATUSES:
+            await self._settle_end(local, update)
+        else:
+            self.logger.info(f"Order {update.identifier} reported as {update.status.value}; nothing to apply.")
 
     async def _settle_end(self, local: Order, update: Order) -> None:
         """

@@ -4,10 +4,15 @@ import logging
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
-from grid_trading_bot.core.order_handling.order import ENDED_UNFILLED_STATUSES, Order, OrderStatus
+from grid_trading_bot.core.order_handling.order import ENDED_UNFILLED_STATUSES, Order, OrderSide, OrderStatus
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.order_update_handler import OrderUpdateHandler
 from grid_trading_bot.core.services.exceptions import DataFetchError
+
+
+def _fill_order_key(order: Order) -> tuple[int, float]:
+    """Buys from the highest price down, then sells from the lowest up: the order the price reaches the levels."""
+    return (0, -order.price) if order.side == OrderSide.BUY else (1, order.price)
 
 
 class OrderStatusTracker:
@@ -44,11 +49,11 @@ class OrderStatusTracker:
 
     async def _track_open_order_statuses(self) -> None:
         """
-        Periodically checks the statuses of open orders and updates their states.
+        Polls the open orders every `polling_interval` seconds, one poll task at a time.
         """
         try:
             while True:
-                await self._process_open_orders()
+                await self._create_task(self._process_open_orders())
                 await asyncio.sleep(self.polling_interval)
 
         except asyncio.CancelledError:
@@ -60,29 +65,41 @@ class OrderStatusTracker:
 
     async def _process_open_orders(self) -> None:
         """
-        Processes open orders by querying their statuses and handling state changes.
+        Fetches every open order, applies the ones that filled or ended in the order the price reached them, then
+        retries the placements still pending.
         """
         open_orders = self.order_book.get_open_orders()
-        tasks = [self._create_task(self._query_and_handle_order(order)) for order in open_orders]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        responses = await asyncio.gather(*(self._fetch(order) for order in open_orders), return_exceptions=True)
+        ended: list[Order] = []
+        others: list[Order] = []
+        for response in responses:
+            if isinstance(response, Exception):
+                self.logger.error(f"Error during order processing: {response}", exc_info=response)
+            elif response is not None:
+                is_ended = response.status == OrderStatus.CLOSED or response.status in ENDED_UNFILLED_STATUSES
+                (ended if is_ended else others).append(response)
 
-        for result in results:
-            if isinstance(result, Exception):
-                self.logger.error(f"Error during order processing: {result}", exc_info=True)
+        for remote_order in [*others, *sorted(ended, key=_fill_order_key)]:
+            try:
+                await self._handle_order_status_change(remote_order)
+            except Exception as error:
+                self.logger.error(f"Error during order processing: {error}", exc_info=True)
 
-    async def _query_and_handle_order(self, local_order: Order):
-        """
-        Query order and handling state changes if needed.
-        """
         try:
-            remote_order = await self.order_execution_strategy.get_order(local_order.identifier, local_order.symbol)
-            await self._handle_order_status_change(remote_order)
+            await self.order_update_handler.retry_pending_placements()
+        except Exception as error:
+            self.logger.error(f"Error while retrying the pending placements: {error}", exc_info=True)
 
+    async def _fetch(self, local_order: Order) -> Order | None:
+        """The exchange's view of `local_order`, or None when it cannot be read."""
+        try:
+            return await self.order_execution_strategy.get_order(local_order.identifier, local_order.symbol)
         except (DataFetchError, ValueError) as error:
             self.logger.error(
                 f"Failed to query remote order with identifier {local_order.identifier}: {error}",
                 exc_info=True,
             )
+            return None
 
     async def _handle_order_status_change(
         self,
