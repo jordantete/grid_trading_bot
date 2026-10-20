@@ -140,7 +140,8 @@ class BalanceTracker:
     async def record_execution(self, order: Order, filled_quantity: float) -> None:
         """
         Books `filled_quantity` more of `order` at its fill price, then releases the reservation of the unfilled
-        remainder once the order is no longer open.
+        remainder once the order is no longer open. A buy filled under its limit price also releases what its
+        reservation held above the fill price.
         """
         async with self._lock:
             fill_price = order.average if order.average is not None else order.price
@@ -148,6 +149,8 @@ class BalanceTracker:
                 fee = self.fee_calculator.execution_fee(order, filled_quantity, fill_price)
                 if order.side == OrderSide.BUY:
                     self._update_after_buy_order_filled(filled_quantity, fill_price, fee)
+                    if order.price is not None and fill_price < order.price:
+                        self._release_fiat_unlocked(filled_quantity * (order.price - fill_price))
                 else:
                     self._update_after_sell_order_filled(filled_quantity, fill_price, fee)
             if order.status != OrderStatus.OPEN and order.remaining:

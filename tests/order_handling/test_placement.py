@@ -283,6 +283,17 @@ class TestPairedOrders:
         assert len(armed.journal) == 0
         assert reserved_matches_open_orders(armed)
 
+    async def test_a_buy_filled_below_its_limit_price_leaves_no_fiat_reserved_for_it(self, armed):
+        buy = armed.execution.order_at(100.0, OrderSide.BUY)
+        fiat_total = armed.balances.get_adjusted_fiat_balance()
+
+        update = armed.execution.fill(buy.identifier)
+        update.average = 95.0
+        await armed.manager.apply_order_update(update)
+
+        assert reserved_matches_open_orders(armed)
+        assert armed.balances.get_adjusted_fiat_balance() == pytest.approx(fiat_total - buy.amount * 95.0)
+
     async def test_the_sell_ratio_scales_the_paired_sell(self, armed):
         armed.grid.sell_ratio = 0.5
         buy = armed.execution.order_at(100.0, OrderSide.BUY)
