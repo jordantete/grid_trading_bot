@@ -9,6 +9,8 @@ All tests skip gracefully if the network is unavailable.
 """
 
 import asyncio
+import os
+from unittest.mock import Mock
 
 import pytest
 
@@ -104,3 +106,64 @@ async def test_ccxt_websocket_connection():
         assert ticker["last"] > 0
     finally:
         await exchange.close()
+
+
+# ---------------------------------------------------------------------------
+# F8: Client order id round trip on the Binance testnet
+# ---------------------------------------------------------------------------
+
+TESTNET_KEYS = ("BINANCE_TESTNET_API_KEY", "BINANCE_TESTNET_SECRET_KEY")
+
+skip_without_testnet_keys = pytest.mark.skipif(
+    not all(os.getenv(key) for key in TESTNET_KEYS),
+    reason="Binance testnet keys not set (BINANCE_TESTNET_API_KEY, BINANCE_TESTNET_SECRET_KEY)",
+)
+
+
+@pytest.mark.sandbox
+@skip_without_testnet_keys
+@skip_if_no_network
+@pytest.mark.timeout(60)
+async def test_a_testnet_order_is_found_by_its_client_id_before_and_after_its_cancel(monkeypatch):
+    """A tiny post-only buy far under the price, placed with a client id, is found by it while open and cancelled."""
+    from grid_trading_bot.config.config_manager import ConfigManager
+    from grid_trading_bot.core.order_handling.placement_journal import new_client_order_id
+    from grid_trading_bot.core.services.live_exchange_service import LiveExchangeService
+
+    monkeypatch.setenv("EXCHANGE_API_KEY", os.environ["BINANCE_TESTNET_API_KEY"])
+    monkeypatch.setenv("EXCHANGE_SECRET_KEY", os.environ["BINANCE_TESTNET_SECRET_KEY"])
+    config_manager = Mock(spec=ConfigManager)
+    config_manager.get_exchange_name.return_value = "binance"
+    config_manager.get_websocket_max_retries.return_value = 1
+    config_manager.get_websocket_retry_base_delay.return_value = 1
+    config_manager.get_circuit_breaker_failure_threshold.return_value = 5
+    config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
+    config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
+    config_manager.get_post_only.return_value = True
+    service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
+    assert "testnet" in str(service.exchange.urls["api"]), "refusing to place an order outside the testnet"
+
+    pair = "BTC/USDT"
+    client_order_id = new_client_order_id("5a4d0b0e")
+    open_order_id = None
+    try:
+        await service.load_exchange_markets(pair)
+        price = service.round_price(pair, await service.get_current_price(pair) * 0.8)
+        constraints = service.get_market_constraints(pair)
+        amount = service.round_amount(
+            pair, max(constraints.min_amount or 0.0, 2 * (constraints.min_cost or 10.0) / price)
+        )
+
+        placed = await service.place_order(pair, "limit", "buy", amount, price, client_order_id=client_order_id)
+        open_order_id = placed["id"]
+        found = await service.fetch_order_by_client_id(client_order_id, pair)
+        assert (found["id"], found["clientOrderId"], found["status"]) == (placed["id"], client_order_id, "open")
+
+        await service.cancel_order(placed["id"], pair)
+        open_order_id = None
+        cancelled = await service.fetch_order_by_client_id(client_order_id, pair)
+        assert (cancelled["id"], cancelled["status"]) == (placed["id"], "canceled")
+    finally:
+        if open_order_id is not None:
+            await service.cancel_order(open_order_id, pair)
+        await service.close()
