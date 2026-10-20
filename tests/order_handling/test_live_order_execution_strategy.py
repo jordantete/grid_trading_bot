@@ -6,6 +6,7 @@ from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, O
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     OrderCancellationError,
+    OrderEndedUnfilledError,
     OrderNotFoundError,
     OrderNotPlacedError,
     OrderOutcomeUnknownError,
@@ -297,7 +298,7 @@ class TestLiveOrderExecutionStrategy:
 
     @pytest.mark.parametrize(
         ("status", "raised"),
-        [("rejected", OrderRejectedError), ("canceled", OrderNotPlacedError), ("expired", OrderNotPlacedError)],
+        [("rejected", OrderRejectedError), ("canceled", OrderEndedUnfilledError), ("expired", OrderEndedUnfilledError)],
     )
     async def test_a_market_leg_that_executed_nothing_raises(self, setup_live_strategy, status, raised):
         strategy, exchange_service = setup_live_strategy

@@ -179,6 +179,7 @@ def test_a_sigterm_interrupts_the_liquidation_retries_and_the_bot_stays_halted(t
     assert exchange.totals()["BTC"] > 1.0
     assert [entry["side"] for entry in _created(run, "market")] == ["buy"]
     assert "Liquidation interrupted" in run.log.read_text()
+    assert [entry["purpose"] for entry in saved_pending(tmp_path)] == ["liquidation"]
 
 
 def test_a_hedged_poll_that_crosses_two_levels_places_both_paired_sells(tmp_path):

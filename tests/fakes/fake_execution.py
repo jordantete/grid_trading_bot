@@ -9,7 +9,7 @@ from grid_trading_bot.core.order_handling.execution_strategy.order_execution_str
     OrderExecutionStrategyInterface,
 )
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
-from grid_trading_bot.core.services.exceptions import OrderNotFoundError, OrderNotPlacedError
+from grid_trading_bot.core.services.exceptions import OrderEndedUnfilledError, OrderNotFoundError
 
 
 class FakeExecution(OrderExecutionStrategyInterface):
@@ -39,7 +39,7 @@ class FakeExecution(OrderExecutionStrategyInterface):
         # A market order never rests: what did not fill is cancelled, as the live strategy reports it.
         if filled <= 0:
             order.status = OrderStatus.CANCELED
-            raise OrderNotPlacedError(
+            raise OrderEndedUnfilledError(
                 f"Market {order_side.value} order {order.identifier} ended canceled without a fill."
             )
         order.status = OrderStatus.CLOSED

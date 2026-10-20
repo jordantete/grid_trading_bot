@@ -4,6 +4,7 @@ import logging
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     OrderCancellationError,
+    OrderEndedUnfilledError,
     OrderNotFoundError,
     OrderNotPlacedError,
     OrderOutcomeUnknownError,
@@ -41,7 +42,7 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         """
         Sends one market leg and returns it closed with what it executed. A leg the exchange leaves open is
         cancelled first, and raises OrderOutcomeUnknownError when it cannot be cancelled or its final state cannot be
-        read; a leg that executed nothing raises.
+        read; a leg that executed nothing raises OrderRejectedError when rejected, OrderEndedUnfilledError otherwise.
         """
         leg = await self._send(OrderType.MARKET, order_side, pair, quantity, price, client_order_id)
         if leg.status == OrderStatus.OPEN:
@@ -67,7 +68,7 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         if filled <= 0 and leg.status == OrderStatus.REJECTED:
             raise OrderRejectedError(f"The exchange rejected market {order_side.value} order {leg.identifier}.")
         if filled <= 0 and leg.status != OrderStatus.CLOSED:
-            raise OrderNotPlacedError(
+            raise OrderEndedUnfilledError(
                 f"Market {order_side.value} order {leg.identifier} ended {leg.status.value} without a fill."
             )
 

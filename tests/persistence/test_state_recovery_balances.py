@@ -522,6 +522,23 @@ class TestJournalRecovery:
         assert "execute_market_order" not in before.execution.calls
         assert after.balances.get_adjusted_crypto_balance() == pytest.approx(crypto)
 
+    @pytest.mark.parametrize("error", [OrderNotPlacedError("exchange down"), OrderRejectedError("insufficient")])
+    async def test_a_restart_after_a_failed_liquidation_attempt_finds_the_liquidation_in_progress(
+        self, repository, error
+    ):
+        before = await _armed_and_saved(repository)
+        before.manager.state_store = _store(repository, before)
+        before.execution.market_order_failures = [error]
+        before.manager.interrupt_liquidation()
+        await before.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+        balances, _, _ = _exchange_balances(before, [])
+
+        after, result, _ = await _restarted(repository, before, balances)
+
+        assert result.liquidation_in_progress
+        assert len(after.journal) == 0
+        assert before.execution.calls.count("execute_market_order") == 1
+
     async def test_a_market_entry_closed_without_a_fill_is_dropped(self, repository):
         before = await _armed_and_saved(repository, initial_purchase_done=False, grid_orders_initialized=False)
         entry = _saved_entry(repository, _market_entry(PlacementPurpose.INITIAL_PURCHASE, OrderSide.BUY, 1.0))

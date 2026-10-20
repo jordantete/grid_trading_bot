@@ -1615,6 +1615,91 @@ class TestLiquidation:
         assert "execute_market_order" not in stack.execution.calls
         assert not stack.manager._liquidated
 
+    @pytest.mark.parametrize(
+        "error", [OrderNotPlacedError("exchange unavailable"), OrderRejectedError("insufficient balance")]
+    )
+    async def test_the_state_saved_after_a_failed_attempt_still_holds_the_liquidation_entry(self, error):
+        stack, _ = _liquidating_stack(crypto=2.0, store=RecordingStore())
+        stack.store.observe = lambda: [(entry.purpose, entry.sent) for entry in stack.journal.entries()]
+        stack.execution.market_order_failures = [error]
+        stack.manager.interrupt_liquidation()
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert stack.store.observed[-1] == [(PlacementPurpose.LIQUIDATION, False)]
+        assert not stack.manager._liquidated
+
+    async def test_a_leg_the_exchange_never_received_is_sent_again_under_the_same_client_id(self):
+        stack, _ = _liquidating_stack(crypto=2.0)
+        stack.execution.market_order_failures = [OrderNotPlacedError("exchange unavailable")] * 2
+        sent_ids = []
+        real_execute = stack.execution.execute_market_order
+
+        async def execute(side, pair, quantity, price, client_order_id):
+            sent_ids.append(client_order_id)
+            return await real_execute(side, pair, quantity, price, client_order_id)
+
+        stack.execution.execute_market_order = execute
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert len(sent_ids) == 3
+        assert len(set(sent_ids)) == 1
+        assert _market_sells(stack) == [2.0]
+        assert len(stack.journal) == 0
+
+    async def test_a_leg_that_ended_without_a_fill_is_sent_again_under_a_new_client_id(self):
+        stack, _ = _liquidating_stack(crypto=2.0)
+        stack.execution.partial_market_fill = 0.0
+        sent_ids = []
+        real_execute = stack.execution.execute_market_order
+
+        async def execute(side, pair, quantity, price, client_order_id):
+            sent_ids.append(client_order_id)
+            return await real_execute(side, pair, quantity, price, client_order_id)
+
+        stack.execution.execute_market_order = execute
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        first, second = sent_ids
+        assert second != first
+        assert stack.balances.crypto_balance == 0.0
+        assert len(stack.journal) == 0
+
+    async def test_a_refused_leg_is_kept_and_sent_again_for_what_the_exchange_holds(self):
+        stack, _ = _liquidating_stack(crypto=2.0, store=RecordingStore())
+        stack.manager.exchange_balance = AsyncMock(return_value=1.5)
+        stack.execution.market_order_failures = [OrderRejectedError("insufficient balance")]
+        sent = []
+        real_execute = stack.execution.execute_market_order
+
+        async def execute(side, pair, quantity, price, client_order_id):
+            sent.append((quantity, [(e.client_order_id, e.quantity) for e in stack.journal.entries()]))
+            return await real_execute(side, pair, quantity, price, client_order_id)
+
+        stack.execution.execute_market_order = execute
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        [(first_quantity, _), (second_quantity, [(_, entry_quantity)])] = sent
+        assert (first_quantity, second_quantity, entry_quantity) == (2.0, 1.5, 1.5)
+        assert [entry.purpose for entry in stack.store.pending] == [PlacementPurpose.LIQUIDATION] * 2
+        assert len(stack.journal) == 0
+
+    @pytest.mark.parametrize("crypto", [0.001, 0.0])
+    async def test_a_kept_entry_is_removed_when_the_liquidation_ends_without_a_sale(self, crypto):
+        stack, _ = _liquidating_stack(crypto=2.0)
+        stack.execution.market_order_failures = [OrderRejectedError("insufficient balance")]
+        stack.manager.exchange_balance = AsyncMock(return_value=crypto)
+        stack.manager.set_market_constraints(MarketConstraints(min_amount=None, min_cost=1.0))
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert _market_sells(stack) == []
+        assert len(stack.journal) == 0
+        assert stack.manager._liquidated
+
 
 async def _ended_while_down(stack, price, side):
     """Settles the order at `price` the way recovery does for an order the exchange cancelled while the bot was down."""

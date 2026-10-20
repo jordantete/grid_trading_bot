@@ -34,6 +34,15 @@ class OrderNotPlacedError(DataFetchError):
     pass
 
 
+class OrderEndedUnfilledError(DataFetchError):
+    """
+    Raised when a market order took its client order id and ended without executing anything: nothing is live, and a
+    new attempt needs a new client order id.
+    """
+
+    pass
+
+
 class OrderOutcomeUnknownError(DataFetchError):
     """Raised when a placement may have reached the order book and no lookup by its client order id settled it."""
 

@@ -13,6 +13,7 @@ from grid_trading_bot.core.bot_management.notification.notification_handler impo
 from grid_trading_bot.core.exceptions import OrderRefusedError
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
+    OrderEndedUnfilledError,
     OrderNotPlacedError,
     OrderOutcomeUnknownError,
     PostOnlyRejectedError,
@@ -742,9 +743,6 @@ class OrderManager:
                     )
                 return False
             self.journal.remove(entry.client_order_id)
-            if not order.filled:
-                self.logger.warning("The initial purchase leg filled nothing; retried at the next tick.")
-                return False
             await self._book_initial_purchase(order)
             remaining = entry.quantity - order.filled
             if self._is_dust(remaining, current_price):
@@ -784,6 +782,7 @@ class OrderManager:
         A found order is returned only once it is closed and filled; one that ended, closed included, without a fill has
         taken its client id, so the entry moves to a new one. A lookup counts as an attempt.
         Raises DataFetchError when the order is not placed or its outcome stays unknown, OrderRefusedError on a refusal.
+        Every raise leaves the entry in the journal, unsent under a client id no order took, unless it may be live.
         """
         if entry.sent:
             entry.attempts += 1
@@ -808,15 +807,25 @@ class OrderManager:
             raise OrderNotPlacedError(f"Placement {entry.client_order_id} could not be saved before sending.")
         entry.attempts += 1
         try:
-            return await self.order_execution_strategy.execute_market_order(
+            order = await self.order_execution_strategy.execute_market_order(
                 entry.side, self.trading_pair, entry.quantity, entry.price, entry.client_order_id
             )
         except OrderNotPlacedError:
             entry.sent = False
             raise
+        except (OrderEndedUnfilledError, OrderRefusedError) as e:
+            self._move_to_new_client_id(entry)
+            if isinstance(e, OrderRefusedError):
+                raise
+            raise OrderNotPlacedError(f"{e} Next attempt under client id {entry.client_order_id}.") from e
+        if not order.filled:
+            taken = entry.client_order_id
+            self._move_to_new_client_id(entry)
+            raise OrderNotPlacedError(f"Market order {taken} closed without a fill.")
+        return order
 
     def _move_to_new_client_id(self, entry: PendingPlacement) -> None:
-        """Re-keys an unsent entry whose client id an order that executed nothing already took."""
+        """Re-keys, unsent, an entry whose client id an order that executed nothing may already hold."""
         self.journal.remove(entry.client_order_id)
         entry.client_order_id = new_client_order_id(self.config_hash)
         entry.sent = False
@@ -924,22 +933,23 @@ class OrderManager:
         the outcome is unknown or the order was not placed, OrderRefusedError on a refusal.
         """
         entry = next((e for e in self.journal.entries() if e.purpose is PlacementPurpose.LIQUIDATION), None)
-        if entry is None:
-            entry = self._new_liquidation_entry(current_price, exchange_cap)
-            if entry is None:
+        if entry is None or not entry.sent:
+            quantity = self._liquidation_quantity(current_price, exchange_cap)
+            if quantity is None:
+                if entry is not None:
+                    self.journal.remove(entry.client_order_id)
                 return None
-        try:
-            order = await self._send_market_entry(entry)
-        except (OrderNotPlacedError, OrderRefusedError):
-            self.journal.remove(entry.client_order_id)
-            raise
+            if entry is None:
+                # The entry stays in the journal until the liquidation ends, so a restart in between halts.
+                entry = self._new_market_entry(OrderSide.SELL, quantity, current_price, PlacementPurpose.LIQUIDATION)
+            else:
+                entry.quantity = quantity
+        order = await self._send_market_entry(entry)
         self.journal.remove(entry.client_order_id)
         return await self._book_liquidation(order)
 
-    def _new_liquidation_entry(
-        self, current_price: float | None, exchange_cap: float | None
-    ) -> PendingPlacement | None:
-        """The journal entry of the next leg, or None when nothing can be sold."""
+    def _liquidation_quantity(self, current_price: float | None, exchange_cap: float | None) -> float | None:
+        """The quantity of the next leg, or None when nothing can be sold."""
         quantity = self.balance_tracker.crypto_balance
         if exchange_cap is not None:
             quantity = min(quantity, exchange_cap)
@@ -969,16 +979,13 @@ class OrderManager:
                     f"({violation})."
                 )
                 return None
-        # The entry is written as sent before the request leaves, so a crash ends in a lookup, never in a second sale.
-        return self._new_market_entry(OrderSide.SELL, quantity, current_price, PlacementPurpose.LIQUIDATION)
+        return quantity
 
     def _stop_liquidation(self, details: str) -> None:
         self.logger.error(details)
         self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
 
     async def _book_liquidation(self, order: Order) -> float:
-        if not order.filled or order.filled <= 0:
-            raise OrderNotPlacedError(f"liquidation order {order.identifier} sold nothing")
         await self.balance_tracker.update_after_liquidation(order)
         self.order_book.add_order(order)
         return order.filled
