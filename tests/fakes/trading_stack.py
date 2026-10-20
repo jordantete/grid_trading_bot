@@ -13,9 +13,11 @@ from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
 from grid_trading_bot.core.order_handling.order import OrderSide
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
+from grid_trading_bot.core.order_handling.placement_journal import PlacementJournal
 from grid_trading_bot.core.validation.order_validator import OrderValidator
 
 from .fake_execution import FakeExecution
+from .recording_store import RecordingStore
 
 # Buys rest on 80, 90 and 100 and a sell on 120, while 110 stays free.
 ARMING_PRICE = 115.0
@@ -53,9 +55,17 @@ class TradingStack:
     execution: FakeExecution
     notifications: Mock
     manager: OrderManager
+    journal: PlacementJournal
+    store: RecordingStore | None
 
 
-def build_stack(fiat: float = 2700.0, crypto: float = 20.0, trading_mode: str = "live") -> TradingStack:
+def build_stack(
+    fiat: float = 2700.0,
+    crypto: float = 20.0,
+    trading_mode: str = "live",
+    store: RecordingStore | None = None,
+    config_hash: str = "3f2a9c1d",
+) -> TradingStack:
     config = ConfigManager.from_dict(stack_config(trading_mode=trading_mode))
     grid = GridManager(config, StrategyType.SIMPLE_GRID)
     grid.initialize_grids_and_levels()
@@ -71,6 +81,7 @@ def build_stack(fiat: float = 2700.0, crypto: float = 20.0, trading_mode: str = 
     execution = FakeExecution(market_price=ARMING_PRICE)
     notifications = Mock()
     notifications.async_send_notification = AsyncMock()
+    journal = PlacementJournal()
     manager = OrderManager(
         grid,
         OrderValidator(),
@@ -80,8 +91,11 @@ def build_stack(fiat: float = 2700.0, crypto: float = 20.0, trading_mode: str = 
         notifications,
         TradingMode(trading_mode),
         "BTC/USDT",
+        state_store=store,
+        journal=journal,
+        config_hash=config_hash,
     )
-    return TradingStack(config, grid, book, balances, execution, notifications, manager)
+    return TradingStack(config, grid, book, balances, execution, notifications, manager, journal, store)
 
 
 def reserved_matches_open_orders(stack: TradingStack) -> bool:

@@ -12,9 +12,16 @@ from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequ
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_book import OrderBook
+from grid_trading_bot.core.order_handling.placement_journal import PendingPlacement, PlacementJournal
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 
-from .serializers import balance_to_dict, compute_config_hash, grid_level_to_dict, order_to_dict
+from .serializers import (
+    balance_to_dict,
+    compute_config_hash,
+    grid_level_to_dict,
+    order_to_dict,
+    pending_placement_to_dict,
+)
 from .state_repository_interface import StateRepositoryInterface, StateSnapshot
 
 
@@ -34,6 +41,7 @@ class StatePersistenceService:
         trading_pair: str,
         strategy_type: str,
         strategy_state_provider: Callable[[], dict] | None = None,
+        journal: PlacementJournal | None = None,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.repository = repository
@@ -46,6 +54,7 @@ class StatePersistenceService:
         self.trading_pair = trading_pair
         self.strategy_type = strategy_type
         self.strategy_state_provider = strategy_state_provider
+        self.journal = journal
         self._config_hash = compute_config_hash(config_manager)
         self._consecutive_failures = 0
         self._halt_task: asyncio.Task | None = None
@@ -74,6 +83,11 @@ class StatePersistenceService:
             balance_state=balance_to_dict(self.balance_tracker),
             orders=orders,
             grid_levels=[grid_level_to_dict(level) for level in self.grid_manager.grid_levels.values()],
+            pending_placements=(
+                [pending_placement_to_dict(entry) for entry in self.journal.entries()]
+                if self.journal is not None
+                else []
+            ),
         )
 
     async def save(self, arming: ArmingFlags) -> None:
@@ -85,6 +99,19 @@ class StatePersistenceService:
             self._record_failure(error)
             return
         self._record_success()
+
+    async def save_pending(self, entry: PendingPlacement) -> bool:
+        """
+        Writes one journal entry before its order is sent, so a restart finds the order by its client id. A failure
+        is alerted and counted like a failed checkpoint, never raised.
+        """
+        try:
+            await asyncio.to_thread(self.repository.save_pending, pending_placement_to_dict(entry))
+        except Exception as error:
+            self._record_failure(error)
+            return False
+        self._record_success()
+        return True
 
     def _record_failure(self, error: Exception) -> None:
         self._consecutive_failures += 1

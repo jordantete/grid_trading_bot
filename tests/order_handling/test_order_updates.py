@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from tests.fakes.recording_store import RecordingStore
 from tests.fakes.trading_stack import ARMING_PRICE, build_stack, reserved_matches_open_orders
 
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
@@ -26,22 +27,16 @@ async def stack():
     return stack
 
 
-class RecordingStore:
-    """At each save, records the open orders of the book, whether the order lock was held and whether the
-    reserved funds equal the open orders."""
-
-    def __init__(self, stack):
-        self.stack = stack
-        self.saves = []
-
-    async def save(self, arming):
-        self.saves.append(
-            SimpleNamespace(
-                open_ids={o.identifier for o in self.stack.book.get_open_orders()},
-                locked=self.stack.manager._lock.locked(),
-                consistent=reserved_matches_open_orders(self.stack),
-            )
+def _observing_store(stack) -> RecordingStore:
+    """A store that records, at each save, the open orders of the book, whether the order lock was held and whether
+    the reserved funds equal the open orders."""
+    return RecordingStore(
+        observe=lambda: SimpleNamespace(
+            open_ids={o.identifier for o in stack.book.get_open_orders()},
+            locked=stack.manager._lock.locked(),
+            consistent=reserved_matches_open_orders(stack),
         )
+    )
 
 
 def _sent(stack):
@@ -161,7 +156,7 @@ class TestFills:
         ],
     )
     async def test_a_failed_paired_placement_keeps_the_fill_booked_and_saves(self, stack, error):
-        store = RecordingStore(stack)
+        store = _observing_store(stack)
         stack.manager.state_store = store
         buy = stack.execution.order_at(100.0, OrderSide.BUY)
         stack.execution.fail_next_limit_order = error
@@ -172,11 +167,11 @@ class TestFills:
         assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.999)
         assert stack.grid.grid_levels[100.0].state == GridCycleState.READY_TO_BUY
         assert stack.grid.grid_levels[110.0].state == GridCycleState.READY_TO_SELL
-        assert [save.consistent for save in store.saves] == [True]
+        assert [save.consistent for save in store.observed] == [True]
         assert NotificationType.ORDER_FAILED in _sent(stack)
 
     async def test_a_paired_order_the_validator_refuses_keeps_the_fill_booked_and_saves(self, stack):
-        store = RecordingStore(stack)
+        store = _observing_store(stack)
         stack.manager.state_store = store
         stack.manager.order_validator.adjust_and_validate_sell_quantity = Mock(
             side_effect=InsufficientCryptoBalanceError("no crypto")
@@ -196,24 +191,24 @@ class TestFills:
         assert stack.balances.get_adjusted_crypto_balance() == pytest.approx(crypto_before + buy.amount * 0.999)
         assert stack.grid.grid_levels[100.0].state == GridCycleState.READY_TO_BUY
         assert stack.grid.grid_levels[110.0].state == GridCycleState.READY_TO_SELL
-        assert [save.consistent for save in store.saves] == [True]
+        assert [save.consistent for save in store.observed] == [True]
         assert held_when_sent == [False]
         assert NotificationType.ORDER_FAILED in _sent(stack)
 
     async def test_the_state_is_saved_under_the_lock_once_the_paired_order_exists(self, stack):
-        store = RecordingStore(stack)
+        store = _observing_store(stack)
         stack.manager.state_store = store
         buy = stack.execution.order_at(100.0, OrderSide.BUY)
 
         await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
 
         sell = stack.execution.order_at(110.0, OrderSide.SELL)
-        assert len(store.saves) == 1
-        assert sell.identifier in store.saves[0].open_ids
-        assert (store.saves[0].locked, store.saves[0].consistent) == (True, True)
+        assert len(store.observed) == 1
+        assert sell.identifier in store.observed[0].open_ids
+        assert (store.observed[0].locked, store.observed[0].consistent) == (True, True)
 
     async def test_updates_applied_together_are_saved_one_consistent_state_at_a_time(self, stack):
-        store = RecordingStore(stack)
+        store = _observing_store(stack)
         stack.manager.state_store = store
         stack.execution.placement_delay = 0.01
         buy_100 = stack.execution.order_at(100.0, OrderSide.BUY)
@@ -224,7 +219,7 @@ class TestFills:
             stack.manager.apply_order_update(stack.execution.fill(buy_90.identifier)),
         )
 
-        assert [(save.locked, save.consistent) for save in store.saves] == [(True, True), (True, True)]
+        assert [(save.locked, save.consistent) for save in store.observed] == [(True, True), (True, True)]
 
     async def test_the_fill_notification_goes_out_after_the_lock_is_released(self, stack):
         held_when_sent = []

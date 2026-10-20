@@ -5,9 +5,25 @@ from typing import Any
 
 from .state_repository_interface import StateRepositoryInterface, StateSnapshot
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
-_CREATE_TABLES_SQL = """
+_CREATE_PENDING_PLACEMENTS_SQL = """
+CREATE TABLE IF NOT EXISTS pending_placements (
+    client_order_id TEXT PRIMARY KEY,
+    order_type TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    price REAL,
+    purpose TEXT NOT NULL,
+    level_price REAL,
+    source_level_price REAL,
+    sent INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+"""
+
+_CREATE_TABLES_SQL = (
+    """
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -73,6 +89,8 @@ CREATE TABLE IF NOT EXISTS grid_levels (
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_grid_level ON orders(grid_level_price);
 """
+    + _CREATE_PENDING_PLACEMENTS_SQL
+)
 
 
 class SQLiteStateRepository(StateRepositoryInterface):
@@ -107,6 +125,9 @@ class SQLiteStateRepository(StateRepositoryInterface):
         if stored_version == 2:
             self._migrate_v2_to_v3()
             stored_version = 3
+        if stored_version == 3:
+            self._migrate_v3_to_v4()
+            stored_version = 4
 
         if stored_version != SCHEMA_VERSION:
             self.logger.warning(
@@ -130,18 +151,27 @@ class SQLiteStateRepository(StateRepositoryInterface):
         self._conn.commit()
         self.logger.info("Migrated schema v2 -> v3 (added balance_state.avg_cost, realized_pnl, peak_value).")
 
+    def _migrate_v3_to_v4(self) -> None:
+        self._conn.executescript(_CREATE_PENDING_PLACEMENTS_SQL)
+        self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (4,))
+        self._conn.commit()
+        self.logger.info("Migrated schema v3 -> v4 (added pending_placements).")
+
     # ── Bot State ────────────────────────────────────────────────────────
 
     def save_state(self, snapshot: StateSnapshot) -> None:
         with self._write_lock, self._conn:
             self._conn.execute("DELETE FROM orders")
             self._conn.execute("DELETE FROM grid_levels")
+            self._conn.execute("DELETE FROM pending_placements")
             self._upsert_bot_state(snapshot.bot_state)
             self._upsert_balance_state(snapshot.balance_state)
             for order_dict in snapshot.orders:
                 self._upsert_order(order_dict)
             for grid_level_dict in snapshot.grid_levels:
                 self._upsert_grid_level(grid_level_dict)
+            for row in snapshot.pending_placements:
+                self._upsert_pending(row)
 
     def _upsert_bot_state(self, state: dict[str, Any]) -> None:
         self._conn.execute(
@@ -268,6 +298,36 @@ class SQLiteStateRepository(StateRepositoryInterface):
     def load_grid_levels(self) -> list[dict[str, Any]]:
         cursor = self._conn.execute("SELECT * FROM grid_levels")
         return [dict(row) for row in cursor.fetchall()]
+
+    # ── Pending Placements ───────────────────────────────────────────────
+
+    def _upsert_pending(self, row: dict[str, Any]) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO pending_placements
+               (client_order_id, order_type, side, quantity, price, purpose,
+                level_price, source_level_price, sent, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                row["client_order_id"],
+                row["order_type"],
+                row["side"],
+                row["quantity"],
+                row.get("price"),
+                row["purpose"],
+                row.get("level_price"),
+                row.get("source_level_price"),
+                1 if row["sent"] else 0,
+                row["created_at"],
+            ),
+        )
+
+    def save_pending(self, row: dict[str, Any]) -> None:
+        with self._write_lock, self._conn:
+            self._upsert_pending(row)
+
+    def load_pending_placements(self) -> list[dict[str, Any]]:
+        cursor = self._conn.execute("SELECT * FROM pending_placements ORDER BY created_at, rowid")
+        return [{**dict(row), "sent": bool(row["sent"])} for row in cursor.fetchall()]
 
     # ── Utilities ────────────────────────────────────────────────────────
 

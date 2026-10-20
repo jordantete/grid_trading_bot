@@ -7,7 +7,10 @@ import pytest
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.stop_request import StopKind
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
+from grid_trading_bot.core.order_handling.placement_journal import PendingPlacement, PlacementJournal, PlacementPurpose
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
+from grid_trading_bot.core.persistence.serializers import pending_placement_to_dict
 from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
 from grid_trading_bot.core.persistence.state_repository_interface import StateSnapshot
 
@@ -309,3 +312,82 @@ class TestPeriodicCheckpoints:
 
         assert service._periodic_task is task
         await service.cleanup()
+
+
+def _entry() -> PendingPlacement:
+    return PendingPlacement(
+        client_order_id="g3f2a9c1d0123456789abcdef",
+        order_type=OrderType.LIMIT,
+        side=OrderSide.BUY,
+        quantity=0.5,
+        price=95.0,
+        purpose=PlacementPurpose.PAIRED,
+        level_price=95.0,
+        source_level_price=105.0,
+        sent=False,
+        created_at=1700000000000,
+    )
+
+
+class TestPendingPlacements:
+    def test_the_snapshot_carries_the_journal_entries(self, setup_persistence_service):
+        service, *_ = setup_persistence_service
+        journal = PlacementJournal()
+        entry = _entry()
+        journal.add(entry)
+        service.journal = journal
+
+        assert service.snapshot(ArmingFlags()).pending_placements == [pending_placement_to_dict(entry)]
+
+    def test_a_snapshot_without_a_journal_carries_no_entry(self, setup_persistence_service):
+        service, *_ = setup_persistence_service
+
+        assert service.snapshot(ArmingFlags()).pending_placements == []
+
+    async def test_an_entry_is_written_as_one_row(self, setup_persistence_service):
+        service, repository, *_ = setup_persistence_service
+        entry = _entry()
+
+        assert await service.save_pending(entry) is True
+
+        repository.save_pending.assert_called_once_with(pending_placement_to_dict(entry))
+
+    async def test_a_failed_entry_write_returns_false_and_alerts(self, setup_persistence_service):
+        service, repository, *_, notification_handler = setup_persistence_service
+        repository.save_pending.side_effect = OSError("disk I/O error")
+
+        assert await service.save_pending(_entry()) is False
+
+        await service.wait_for_alerts()
+        notification_handler.async_send_notification.assert_awaited_once_with(
+            NotificationType.CHECKPOINT_FAILED, error_details="disk I/O error"
+        )
+
+    async def test_entry_writes_and_checkpoints_share_one_failure_count(self, setup_persistence_service):
+        service, repository, event_bus, *_ = setup_persistence_service
+        requests = []
+        event_bus.subscribe(Events.STOP_BOT, requests.append)
+        repository.save_pending.side_effect = OSError("full")
+        repository.save_state.side_effect = OSError("full")
+
+        await service.save_pending(_entry())
+        await service.save_pending(_entry())
+        await service.save(ArmingFlags())
+        await service._halt_task
+
+        assert [request.kind for request in requests] == [StopKind.PERSISTENCE]
+
+    async def test_an_entry_written_after_failures_restores_the_count(self, setup_persistence_service):
+        service, repository, *_, notification_handler = setup_persistence_service
+        repository.save_state.side_effect = OSError("full")
+        await service.save(ArmingFlags())
+
+        assert await service.save_pending(_entry()) is True
+
+        await service.wait_for_alerts()
+        sent = notification_handler.async_send_notification.await_args_list
+        assert [call.args[0] for call in sent] == [
+            NotificationType.CHECKPOINT_FAILED,
+            NotificationType.CHECKPOINT_RESTORED,
+        ]
+        assert service._consecutive_failures == 0

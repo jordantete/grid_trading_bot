@@ -26,7 +26,7 @@ from .execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
 from .order import ENDED_UNFILLED_STATUSES, Order, OrderSide, OrderStatus
-from .placement_journal import new_client_order_id
+from .placement_journal import PlacementJournal, new_client_order_id
 from .state_store import ArmingFlags, StateStore
 
 
@@ -42,6 +42,7 @@ class OrderManager:
         trading_mode: TradingMode,
         trading_pair: str,
         state_store: StateStore | None = None,
+        journal: PlacementJournal | None = None,
         config_hash: str = "",
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -54,6 +55,7 @@ class OrderManager:
         self.trading_mode: TradingMode = trading_mode
         self.trading_pair = trading_pair
         self.state_store = state_store
+        self.journal = journal if journal is not None else PlacementJournal()
         self.config_hash = config_hash
         self.arming = ArmingFlags()
         self.market_constraints: MarketConstraints | None = None

@@ -4,11 +4,14 @@ from unittest.mock import MagicMock
 
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.placement_journal import PendingPlacement, PlacementPurpose
 from grid_trading_bot.core.persistence.serializers import (
     balance_to_dict,
     dict_to_order,
+    dict_to_pending_placement,
     grid_level_to_dict,
     order_to_dict,
+    pending_placement_to_dict,
 )
 
 
@@ -305,3 +308,54 @@ class TestBalanceSerialization:
 
         assert result["avg_cost"] is None
         assert result["peak_value"] is None
+
+
+class TestPendingPlacementSerialization:
+    def _entry(self, **overrides) -> PendingPlacement:
+        fields = {
+            "client_order_id": "g3f2a9c1d0123456789abcdef",
+            "order_type": OrderType.LIMIT,
+            "side": OrderSide.SELL,
+            "quantity": 0.5,
+            "price": 105.0,
+            "purpose": PlacementPurpose.PAIRED,
+            "level_price": 105.0,
+            "source_level_price": 95.0,
+            "sent": True,
+            "created_at": 1700000000000,
+        }
+        fields.update(overrides)
+        return PendingPlacement(**fields)
+
+    def test_an_entry_round_trips(self):
+        entry = self._entry()
+
+        assert dict_to_pending_placement(pending_placement_to_dict(entry)) == entry
+
+    def test_enums_are_stored_as_their_values(self):
+        row = pending_placement_to_dict(self._entry())
+        market = pending_placement_to_dict(
+            self._entry(order_type=OrderType.MARKET, side=OrderSide.BUY, purpose=PlacementPurpose.LIQUIDATION)
+        )
+
+        assert (row["order_type"], row["side"], row["purpose"]) == ("limit", "sell", "paired")
+        assert (market["order_type"], market["side"], market["purpose"]) == ("market", "buy", "liquidation")
+
+    def test_the_attempt_count_is_not_stored(self):
+        row = pending_placement_to_dict(self._entry(attempts=4))
+
+        assert "attempts" not in row
+        assert dict_to_pending_placement(row).attempts == 0
+
+    def test_a_market_entry_round_trips_without_a_level(self):
+        entry = self._entry(
+            order_type=OrderType.MARKET,
+            side=OrderSide.BUY,
+            price=None,
+            purpose=PlacementPurpose.INITIAL_PURCHASE,
+            level_price=None,
+            source_level_price=None,
+            sent=False,
+        )
+
+        assert dict_to_pending_placement(pending_placement_to_dict(entry)) == entry

@@ -22,6 +22,7 @@ from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
+from grid_trading_bot.core.order_handling.placement_journal import PlacementJournal
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import HaltRecord, RunFiles, write_halt_marker
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
@@ -111,6 +112,7 @@ class GridTradingBot:
             )
             order_book = OrderBook()
             self.order_book = order_book
+            journal = PlacementJournal()
 
             self.reconciliation_service = None
             if self.trading_mode == TradingMode.LIVE:
@@ -145,6 +147,7 @@ class GridTradingBot:
                     config_manager=self.config_manager,
                     trading_pair=trading_pair,
                     strategy_type=strategy_type.value,
+                    journal=journal,
                 )
                 self.state_recovery_service = StateRecoveryService(
                     repository=state_repository,
@@ -168,6 +171,7 @@ class GridTradingBot:
                 self.trading_mode,
                 trading_pair,
                 state_store=self.state_persistence_service,
+                journal=journal,
                 config_hash=compute_config_hash(self.config_manager),
             )
 

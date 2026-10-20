@@ -6,6 +6,7 @@ from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.core.grid_management.grid_level import GridLevel
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.placement_journal import PendingPlacement, PlacementPurpose
 
 
 def order_to_dict(order: Order, grid_level_price: float | None, is_non_grid: bool) -> dict[str, Any]:
@@ -53,6 +54,36 @@ def dict_to_order(row: dict[str, Any]) -> Order:
         trades=json.loads(row["trades_json"]) if row.get("trades_json") else None,
         fee=json.loads(row["fee_json"]) if row.get("fee_json") else None,
         info=json.loads(row["info_json"]) if row.get("info_json") else None,
+    )
+
+
+def pending_placement_to_dict(entry: PendingPlacement) -> dict[str, Any]:
+    return {
+        "client_order_id": entry.client_order_id,
+        "order_type": entry.order_type.value,
+        "side": entry.side.value,
+        "quantity": entry.quantity,
+        "price": entry.price,
+        "purpose": entry.purpose.value,
+        "level_price": entry.level_price,
+        "source_level_price": entry.source_level_price,
+        "sent": entry.sent,
+        "created_at": entry.created_at,
+    }
+
+
+def dict_to_pending_placement(row: dict[str, Any]) -> PendingPlacement:
+    return PendingPlacement(
+        client_order_id=row["client_order_id"],
+        order_type=OrderType(row["order_type"]),
+        side=OrderSide(row["side"]),
+        quantity=row["quantity"],
+        price=row.get("price"),
+        purpose=PlacementPurpose(row["purpose"]),
+        level_price=row.get("level_price"),
+        source_level_price=row.get("source_level_price"),
+        sent=bool(row["sent"]),
+        created_at=row["created_at"],
     )
 
 

@@ -8,7 +8,7 @@ from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStat
 from grid_trading_bot.core.persistence.state_repository_interface import StateSnapshot
 
 
-def _save(repo, *, bot_state=None, balance=None, orders=(), grid_levels=()):
+def _save(repo, *, bot_state=None, balance=None, orders=(), grid_levels=(), pending_placements=()):
     repo.save_state(
         StateSnapshot(
             bot_state=bot_state
@@ -29,6 +29,7 @@ def _save(repo, *, bot_state=None, balance=None, orders=(), grid_levels=()):
             },
             orders=list(orders),
             grid_levels=list(grid_levels),
+            pending_placements=list(pending_placements),
         )
     )
 
@@ -104,7 +105,14 @@ class TestInitialize:
     def test_initialize_creates_tables(self, repo):
         cursor = repo._conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         tables = {row["name"] for row in cursor.fetchall()}
-        expected_tables = {"schema_version", "bot_state", "balance_state", "orders", "grid_levels"}
+        expected_tables = {
+            "schema_version",
+            "bot_state",
+            "balance_state",
+            "orders",
+            "grid_levels",
+            "pending_placements",
+        }
         assert expected_tables.issubset(tables)
 
     def test_wal_mode_enabled(self):
@@ -130,7 +138,7 @@ class TestInitialize:
         cursor = repo._conn.execute("SELECT version FROM schema_version")
         row = cursor.fetchone()
         assert row is not None
-        assert row["version"] == 3
+        assert row["version"] == 4
 
 
 class TestBotState:
@@ -339,7 +347,7 @@ class TestStrategyStatePersistence:
 
 
 class TestSchemaMigrationV1ToV2:
-    def test_v1_database_migrates_to_v3(self, tmp_path):
+    def test_v1_database_migrates_to_the_current_schema(self, tmp_path):
         """A hand-crafted v1 database (no strategy_state column) should gain the
         column and be bumped to the current schema version when opened with the current code."""
         db_path = str(tmp_path / "v1.db")
@@ -375,7 +383,7 @@ class TestSchemaMigrationV1ToV2:
             version_row = repository._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             ).fetchone()
-            assert version_row["version"] == 3
+            assert version_row["version"] == 4
 
             # Pre-existing row should have survived the migration untouched.
             loaded = repository.load_bot_state()
@@ -421,7 +429,7 @@ class TestSchemaMigrationV2ToV3:
             version_row = repository._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             ).fetchone()
-            assert version_row["version"] == 3
+            assert version_row["version"] == 4
 
             loaded = repository.load_balance_state()
             assert loaded["fiat_balance"] == "4500"
@@ -482,3 +490,112 @@ class TestSaveState:
             _save(repo, orders=[{**sample_order, "identifier": "order-2"}], grid_levels=[sample_grid_level])
 
         assert [row["identifier"] for row in repo.load_all_orders()] == ["order-1"]
+
+
+def _pending_row(**overrides):
+    row = {
+        "client_order_id": "g3f2a9c1d0123456789abcdef",
+        "order_type": "limit",
+        "side": "buy",
+        "quantity": 0.5,
+        "price": 95.0,
+        "purpose": "paired",
+        "level_price": 95.0,
+        "source_level_price": 105.0,
+        "sent": True,
+        "created_at": 1700000000000,
+    }
+    row.update(overrides)
+    return row
+
+
+class TestSchemaMigrationV3ToV4:
+    def test_a_v3_database_gains_the_pending_placements_table(self, tmp_path):
+        db_path = str(tmp_path / "v3.db")
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE schema_version (
+                version INTEGER NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE bot_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                config_hash TEXT NOT NULL,
+                trading_pair TEXT NOT NULL,
+                strategy_type TEXT NOT NULL,
+                initial_purchase_done INTEGER NOT NULL DEFAULT 0,
+                grid_orders_initialized INTEGER NOT NULL DEFAULT 0,
+                strategy_state TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO schema_version (version) VALUES (3);
+            INSERT INTO bot_state (id, config_hash, trading_pair, strategy_type)
+            VALUES (1, 'abc', 'BTC/USDT', 'simple_grid');
+        """)
+        conn.commit()
+        conn.close()
+
+        repository = SQLiteStateRepository(db_path=db_path)
+        try:
+            repository.initialize()
+
+            version_row = repository._conn.execute(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            assert version_row["version"] == 4
+            assert repository.load_pending_placements() == []
+            assert repository.load_bot_state()["config_hash"] == "abc"
+            repository.save_pending(_pending_row())
+            assert repository.load_pending_placements() == [_pending_row()]
+        finally:
+            repository.close()
+
+
+class TestPendingPlacements:
+    def test_an_entry_round_trips(self, repo):
+        repo.save_pending(_pending_row())
+
+        assert repo.load_pending_placements() == [_pending_row()]
+
+    def test_writing_an_entry_again_replaces_it(self, repo):
+        repo.save_pending(_pending_row())
+
+        repo.save_pending(_pending_row(sent=False))
+
+        assert repo.load_pending_placements() == [_pending_row(sent=False)]
+
+    def test_entries_load_in_creation_order(self, repo):
+        later = _pending_row(client_order_id="gb", created_at=2)
+        earlier = _pending_row(client_order_id="ga", created_at=1)
+        repo.save_pending(later)
+        repo.save_pending(earlier)
+
+        assert [row["client_order_id"] for row in repo.load_pending_placements()] == ["ga", "gb"]
+
+    def test_a_market_entry_has_no_level(self, repo):
+        row = _pending_row(order_type="market", purpose="initial_purchase", level_price=None, source_level_price=None)
+
+        repo.save_pending(row)
+
+        assert repo.load_pending_placements() == [row]
+
+    def test_a_save_replaces_the_entries(self, repo):
+        repo.save_pending(_pending_row(client_order_id="old"))
+
+        _save(repo, pending_placements=[_pending_row(client_order_id="new")])
+        assert [row["client_order_id"] for row in repo.load_pending_placements()] == ["new"]
+
+        _save(repo)
+        assert repo.load_pending_placements() == []
+
+    def test_a_failed_save_keeps_the_previous_entries(self, repo, sample_grid_level, monkeypatch):
+        repo.save_pending(_pending_row())
+
+        def failing_upsert(_grid_level):
+            raise sqlite3.OperationalError("disk I/O error")
+
+        monkeypatch.setattr(repo, "_upsert_grid_level", failing_upsert)
+        with pytest.raises(sqlite3.OperationalError):
+            _save(repo, grid_levels=[sample_grid_level])
+
+        assert repo.load_pending_placements() == [_pending_row()]
