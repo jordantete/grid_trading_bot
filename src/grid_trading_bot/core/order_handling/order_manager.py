@@ -72,6 +72,7 @@ class OrderManager:
         self._outbox: list[tuple[NotificationType, dict[str, Any]]] = []
         self._positions_closed = False
         self._resolving_for_cancel = False
+        self._retry_errors_alerted: set[str] = set()
         self._liquidated = False
         self._liquidation_interrupted = asyncio.Event()
         self._clock: Callable[[], float] = time.monotonic
@@ -446,7 +447,9 @@ class OrderManager:
         except Exception as e:
             details = f"Retry of placement {entry.client_order_id} failed: {e}"
             self.logger.error(details, exc_info=True)
-            self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
+            if entry.client_order_id not in self._retry_errors_alerted:
+                self._retry_errors_alerted.add(entry.client_order_id)
+                self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
 
     async def _resolve_sent_entry(self, entry: PendingPlacement) -> Order | None:
         """

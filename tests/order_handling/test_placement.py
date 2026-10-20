@@ -724,6 +724,20 @@ class TestRetries:
         assert any("book broken" in message for message in _errors(caplog))
         assert len(store.saves) == saves_before + 1
 
+    async def test_an_entry_failing_the_same_unexpected_way_at_every_poll_alerts_once(self, caplog):
+        stack, entry, _ = await _arm_with_one_lost_placement(OrderOutcomeUnknownError("timeout"))
+
+        async def broken_lookup(client_order_id, pair):
+            raise RuntimeError("lookup broken")
+
+        stack.execution.find_order = broken_lookup
+        for _ in range(3):
+            await stack.manager.retry_pending_placements()
+
+        assert stack.journal.limit_entries() == [entry]
+        assert _sent(stack).count(NotificationType.ERROR_OCCURRED) == 1
+        assert sum("lookup broken" in message for message in _errors(caplog)) == 3
+
 
 class TestBulkCancelResolvesSentEntries:
     async def test_a_regrid_resolves_a_sent_entry_before_rebuilding(self):
