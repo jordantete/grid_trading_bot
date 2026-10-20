@@ -296,6 +296,9 @@ class TestGridTradingBot(BotFixtures):
             "reserved_crypto": 0.0,
         }
 
+    def test_reconciliation_shares_the_order_managers_journal(self, bot):
+        assert bot.reconciliation_service.journal is bot.order_manager.journal
+
     def test_get_account_snapshot_values_the_account_at_the_last_accepted_price(self, bot):
         bot.exchange_service = Mock(last_price=61250.0)
         bot.balance_tracker = Mock()

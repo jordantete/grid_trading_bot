@@ -9,6 +9,7 @@ from grid_trading_bot.core.bot_management.notification.notification_handler impo
 from grid_trading_bot.core.bot_management.stop_request import StopRequest
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_book import OrderBook
+from grid_trading_bot.core.order_handling.placement_journal import PlacementJournal
 from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
@@ -36,6 +37,7 @@ class ReconciliationService:
         reconciliation_interval: float = 300.0,
         balance_tolerance: float = 0.01,
         alert_cooldown: int = 900,
+        journal: PlacementJournal | None = None,
     ):
         self.order_book = order_book
         self.balance_tracker = balance_tracker
@@ -48,6 +50,7 @@ class ReconciliationService:
         self.reconciliation_interval = reconciliation_interval
         self.balance_tolerance = balance_tolerance
         self.alert_cooldown = alert_cooldown
+        self.journal = journal
 
         self._min_amount: float | None = None
         self._monitoring_task = None
@@ -120,7 +123,13 @@ class ReconciliationService:
             alerts.append(msg)
 
         # Orphan orders: exist on exchange but not locally
-        orphan_ids = remote_order_ids - local_order_ids
+        # A pending placement whose answer was lost is already on the exchange under its client id.
+        journal_ids = {entry.client_order_id for entry in self.journal.entries()} if self.journal is not None else set()
+        orphan_ids = {
+            order["id"]
+            for order in remote_orders
+            if order["id"] not in local_order_ids and order.get("clientOrderId") not in journal_ids
+        }
         for orphan_id in orphan_ids:
             remote = next(o for o in remote_orders if o["id"] == orphan_id)
             msg = (
@@ -157,8 +166,10 @@ class ReconciliationService:
         exchange_fiat = float(exchange_balance.get("free", {}).get(self.quote_currency, 0))
         exchange_crypto = float(exchange_balance.get("free", {}).get(self.base_currency, 0))
 
-        local_fiat = self.balance_tracker.balance
-        local_crypto = self.balance_tracker.crypto_balance
+        # A pending placement's funds are reserved by the bot but still free on the exchange.
+        entry_fiat, entry_crypto = self.journal.reserved() if self.journal is not None else (0.0, 0.0)
+        local_fiat = self.balance_tracker.balance + entry_fiat
+        local_crypto = self.balance_tracker.crypto_balance + entry_crypto
 
         alerts = []
 

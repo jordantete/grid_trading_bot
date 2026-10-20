@@ -7,6 +7,12 @@ import pytest
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
+from grid_trading_bot.core.order_handling.placement_journal import (
+    PendingPlacement,
+    PlacementJournal,
+    PlacementPurpose,
+)
 from grid_trading_bot.core.reconciliation.reconciliation_service import ReconciliationService
 from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
@@ -380,5 +386,59 @@ class TestCryptoToleranceInQuoteValue:
         )
 
         await service._reconcile_balances()
+
+        notification_handler.async_send_notification.assert_not_awaited()
+
+
+CLIENT_ID = "g3f2a9c1d0123456789abcdef"
+
+
+def _journal_with(side, quantity, price):
+    journal = PlacementJournal()
+    journal.add(
+        PendingPlacement(
+            client_order_id=CLIENT_ID,
+            order_type=OrderType.LIMIT,
+            side=side,
+            quantity=quantity,
+            price=price,
+            purpose=PlacementPurpose.PAIRED,
+            level_price=price,
+        )
+    )
+    return journal
+
+
+class TestPendingPlacements:
+    @pytest.mark.asyncio
+    async def test_fiat_held_for_a_pending_buy_is_not_drift(self, setup_reconciliation_service):
+        service, _, balance_tracker, _, notification_handler, _ = setup_reconciliation_service
+        service.journal = _journal_with(OrderSide.BUY, 0.002, 50000.0)
+        balance_tracker.balance = 4900.0
+
+        await service._reconcile_balances()
+
+        notification_handler.async_send_notification.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_crypto_held_for_a_pending_sell_is_not_drift(self, setup_reconciliation_service):
+        service, _, balance_tracker, _, notification_handler, _ = setup_reconciliation_service
+        service.journal = _journal_with(OrderSide.SELL, 0.5, 60000.0)
+        balance_tracker.crypto_balance = 1.0
+
+        await service._reconcile_balances()
+
+        notification_handler.async_send_notification.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_exchange_order_of_a_pending_placement_is_no_orphan(self, setup_reconciliation_service):
+        service, order_book, _, exchange_service, notification_handler, _ = setup_reconciliation_service
+        service.journal = _journal_with(OrderSide.SELL, 0.5, 60000.0)
+        order_book.get_open_orders.return_value = []
+        exchange_service.fetch_open_orders = AsyncMock(
+            return_value=[{"id": "x1", "clientOrderId": CLIENT_ID, "side": "sell", "price": 60000, "amount": 0.5}]
+        )
+
+        await service._reconcile_orders()
 
         notification_handler.async_send_notification.assert_not_awaited()

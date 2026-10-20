@@ -130,6 +130,7 @@ class GridTradingBot:
                     quote_currency=quote_currency,
                     reconciliation_interval=self.config_manager.get_reconciliation_interval(),
                     balance_tolerance=self.config_manager.get_reconciliation_balance_tolerance(),
+                    journal=journal,
                 )
 
             self.state_persistence_service = None
