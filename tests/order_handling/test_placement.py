@@ -1085,8 +1085,21 @@ class TestInitialPurchase:
         entry = await self._lose_the_answer(stack)
         found = stack.execution.orders[stack.execution.client_ids[entry.client_order_id]]
         found.status, found.filled, found.remaining = OrderStatus.CANCELED, 0.0, entry.quantity
+        old_client_id = entry.client_order_id
+        seen = []
+        real_execute = stack.execution.execute_market_order
+
+        async def execute(side, pair, quantity, price, client_order_id):
+            seen.append((client_order_id, tuple(e.client_order_id for e in stack.journal.entries())))
+            return await real_execute(side, pair, quantity, price, client_order_id)
+
+        stack.execution.execute_market_order = execute
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
+
+        [(new_client_id, journal_ids)] = seen
+        assert new_client_id != old_client_id
+        assert journal_ids == (new_client_id,)
 
         assert stack.balances.crypto_balance == pytest.approx(entry.quantity * 0.999)
         assert len(stack.journal) == 0

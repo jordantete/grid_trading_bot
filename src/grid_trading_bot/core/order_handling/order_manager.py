@@ -758,7 +758,8 @@ class OrderManager:
     async def _send_market_entry(self, entry: PendingPlacement) -> Order:
         """
         Sends one market leg through the journal, looking it up first when an earlier send's outcome is unknown.
-        A found order is returned only once it is closed and filled; a lookup counts as an attempt.
+        A found order is returned only once it is closed and filled; one that ended unfilled has taken its client id, so
+        the entry moves to a new one. A lookup counts as an attempt.
         Raises DataFetchError when the order is not placed or its outcome stays unknown, OrderRefusedError on a refusal.
         """
         if entry.sent:
@@ -771,6 +772,11 @@ class OrderManager:
                 settled.status = OrderStatus.CLOSED
                 settled.average = found.average or found.price or entry.price
                 return settled
+            if found is not None:
+                self.journal.remove(entry.client_order_id)
+                entry.client_order_id = new_client_order_id(self.config_hash)
+                entry.attempts = 0
+                self.journal.add(entry)
             entry.sent = False
         entry.sent = True
         if self.state_store is not None and not await self.state_store.save_pending(entry):
