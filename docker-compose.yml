@@ -5,7 +5,8 @@ services:
     profiles: ["bot"]
     # on-failure: a halted bot exits 0 and stays down; a crash, a lost feed or a reboot relaunches it
     restart: on-failure
-    stop_grace_period: 30s
+    # 20 s of tick drain, 10 s of poll drain, the cancellations and a 5 s checkpoint lock wait fit in a minute
+    stop_grace_period: 60s
     command: ["run", "--config", "${BOT_CONFIG:-config/config.json}", "--no-plot"]
     environment:
       - EXCHANGE_API_KEY=${EXCHANGE_API_KEY:-}

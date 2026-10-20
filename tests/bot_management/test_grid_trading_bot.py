@@ -1284,6 +1284,71 @@ class TestShutdownSequence(BotFixtures):
 
         assert bot.stop_request.kind is StopKind.CRASH
 
+    @pytest.mark.asyncio
+    async def test_a_halt_requested_during_the_tick_drain_replaces_the_suspend(self, bot, tmp_path):
+        calls = []
+        _record_shutdown(bot, calls, _run_files(tmp_path))
+
+        async def tick_ends_with_a_stop_loss(timeout):
+            calls.append("tick")
+            await bot._stop(StopRequest(StopKind.RISK, "TP or SL hit."))
+
+        bot.strategy.wait_for_tick_to_finish = AsyncMock(side_effect=tick_ends_with_a_stop_loss)
+
+        await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
+
+        assert bot.stop_request.kind is StopKind.RISK
+        assert bot.stop_request.exit_code == 0
+        assert calls == ["tracking", "strategy", "tick", "cancel", "checkpoint", "notify", "close"]
+        assert json.loads((tmp_path / "halted_x.json").read_text())["kind"] == "risk"
+        assert bot.notification_handler.async_send_notification.await_args.args[0] == NotificationType.BOT_HALTED
+
+    @pytest.mark.asyncio
+    async def test_a_halt_requested_after_the_drain_leaves_the_suspend(self, bot, tmp_path):
+        calls = []
+        _record_shutdown(bot, calls, _run_files(tmp_path))
+
+        async def checkpoint_meets_a_stop_command(**_kwargs):
+            calls.append("checkpoint")
+            await bot._stop(StopRequest(StopKind.MANUAL, "User issued stop command"))
+
+        bot.order_manager.checkpoint = AsyncMock(side_effect=checkpoint_meets_a_stop_command)
+
+        await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
+
+        assert bot.stop_request.kind is StopKind.SIGNAL
+        assert calls == ["tracking", "strategy", "checkpoint", "notify", "close"]
+        assert not (tmp_path / "halted_x.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_a_halt_during_startup_replaces_a_deferred_suspend(self, bot):
+        bot._starting = True
+
+        await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
+        await bot._stop(StopRequest(StopKind.MANUAL, "User issued stop command"))
+
+        assert bot.stop_request.kind is StopKind.MANUAL
+
+    @pytest.mark.asyncio
+    async def test_a_halt_does_not_replace_a_refused_start(self, bot):
+        bot._starting = True
+
+        await bot._stop(StopRequest(StopKind.START_REFUSED, "orders still open"))
+        await bot._stop(StopRequest(StopKind.MANUAL, "User issued stop command"))
+
+        assert bot.stop_request.kind is StopKind.START_REFUSED
+
+    @pytest.mark.asyncio
+    async def test_a_stop_interrupts_the_liquidation_before_waiting_for_the_tick(self, bot, tmp_path):
+        calls = []
+        _record_shutdown(bot, calls, _run_files(tmp_path))
+        bot.order_manager.interrupt_liquidation = Mock(side_effect=lambda: calls.append("interrupt"))
+        bot.strategy.wait_for_tick_to_finish = AsyncMock(side_effect=lambda timeout: calls.append("tick"))
+
+        await bot._stop(StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15))
+
+        assert calls[:4] == ["tracking", "strategy", "interrupt", "tick"]
+
 
 class TestLiquidationBalanceWiring(BotFixtures):
     @pytest.mark.asyncio

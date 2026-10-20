@@ -52,6 +52,8 @@ if TYPE_CHECKING:
 from .notification.notification_content import NotificationType
 from .notification.notification_handler import NotificationHandler
 
+_SUSPEND_KINDS = frozenset({StopKind.SIGNAL, StopKind.FEED_LOST, StopKind.CRASH})
+
 
 class GridTradingBot:
     TICKER_FEED_STALENESS_THRESHOLD = 120.0  # seconds
@@ -73,6 +75,7 @@ class GridTradingBot:
         self._starting = False
         self._state_ready = False
         self._shutdown_started = False
+        self._request_settled = False
         self._stopped = asyncio.Event()
         try:
             self.logger = logging.getLogger(self.__class__.__name__)
@@ -390,10 +393,18 @@ class GridTradingBot:
 
     async def _stop(self, request: StopRequest) -> None:
         """
-        Records the first stop request and shuts down for it, or defers the shutdown until startup ends when
-        it arrives during startup. Later requests are ignored.
+        Records the first stop request and shuts down for it, or defers the shutdown until startup ends when it
+        arrives during startup. A halt that arrives while a suspend is recorded replaces it until the shutdown has
+        read the request, so a stop-loss fired during a SIGTERM drain still halts; any other later request is ignored.
         """
         if self.stop_request is not None:
+            if request.kind.halts and self.stop_request.kind in _SUSPEND_KINDS and not self._request_settled:
+                self.logger.warning(
+                    f"Halt requested ({request.kind.value}: {request.reason}) while stopping for "
+                    f"{self.stop_request.kind.value}; the bot halts instead."
+                )
+                self.stop_request = request
+                return
             self.logger.info(
                 f"Stop already in progress ({self.stop_request.kind.value}); "
                 f"ignoring {request.kind.value}: {request.reason}",
@@ -413,8 +424,9 @@ class GridTradingBot:
 
     async def _shutdown(self, request: StopRequest) -> None:
         """
-        Runs the shutdown sequence at most once: stops tracking and the strategy, waits for the ticker update in
-        progress, writes the halt marker then cancels the open orders only for a halt, writes the final checkpoint
+        Runs the shutdown sequence at most once: stops tracking and the strategy, interrupts a liquidation's retries,
+        waits for the ticker update in progress, then settles the request (a halt fired by that update replaces a
+        suspend), writes the halt marker then cancels the open orders only for a halt, writes the final checkpoint
         once the state was loaded, notifies, then closes the exchange last.
         """
         if self._shutdown_started:
@@ -427,7 +439,10 @@ class GridTradingBot:
                 await self._attempt("reconciliation", self.reconciliation_service.stop)
             await self._attempt("order tracking", self.order_status_tracker.stop_tracking)
             await self._attempt("strategy", self.strategy.stop)
+            await self._attempt("liquidation interrupt", self.order_manager.interrupt_liquidation)
             await self._attempt("ticker update", lambda: self.strategy.wait_for_tick_to_finish(self.TICK_DRAIN_TIMEOUT))
+            self._request_settled = True
+            request = self.stop_request
             if request.kind.halts and self._is_live_or_paper():
                 # Marked first, so a SIGKILL during a slow cancellation cannot leave a halted bot without its marker.
                 if self.run_files is not None:

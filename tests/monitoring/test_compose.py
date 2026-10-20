@@ -22,3 +22,7 @@ def test_monitoring_ports_are_bound_to_localhost():
     for name in ("grafana", "alloy"):
         for mapping in SERVICES[name].get("ports", []):
             assert str(mapping).startswith("127.0.0.1:"), (name, mapping)
+
+
+def test_the_bot_gets_a_minute_to_stop():
+    assert SERVICES["bot"]["stop_grace_period"] == "60s"
