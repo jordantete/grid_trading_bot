@@ -173,3 +173,11 @@ async def test_set_scenario_changes_the_ticker_price_and_refuses_other_fields(fa
     assert (await fake.fetch_ticker(PAIR))["last"] == 94.0
     with pytest.raises(ValueError, match="not settable"):
         state.set_scenario(fee=0.0)
+
+
+@pytest.mark.parametrize("params", [None, {}])
+async def test_a_lookup_without_an_order_id_or_a_client_id_finds_nothing(fake, state, params):
+    state.add_open_order("buy", 90.0, 1.0)
+
+    with pytest.raises(ccxt.OrderNotFound):
+        await fake.fetch_order(None, PAIR, params=params)

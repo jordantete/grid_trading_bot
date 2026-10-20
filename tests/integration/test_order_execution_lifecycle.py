@@ -103,6 +103,7 @@ def test_a_placement_cut_off_by_sigterm_is_resolved_at_restart(tmp_path):
     paired = _created(first, "limit", "sell")[-1]
     assert paired["id"] not in saved_open_order_ids(tmp_path)
     assert [entry["client_order_id"] for entry in saved_pending(tmp_path)] == [paired["client_order_id"]]
+    assert reserved_gap(tmp_path) == pytest.approx((0.0, 0.0), abs=1e-6)
 
     exchange.set_scenario(response_delay=None)
     second = start(tmp_path, "second")

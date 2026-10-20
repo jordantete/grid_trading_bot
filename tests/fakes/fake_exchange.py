@@ -383,6 +383,8 @@ class FakeExchange:
         orders = self._state.read()["orders"]
         if order_id is None:
             client_order_id = (params or {}).get("clientOrderId")
+            if client_order_id is None:
+                raise ccxt.OrderNotFound("fake exchange: a lookup needs an order id or a client id")
             matches = [order for order in orders.values() if order.get("clientOrderId") == client_order_id]
             self._record("fetch_order_by_client_id", client_order_id=client_order_id, found=bool(matches))
             if not matches:
