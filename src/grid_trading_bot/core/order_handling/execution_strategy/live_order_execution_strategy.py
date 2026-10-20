@@ -224,6 +224,10 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         if missing:
             raise DataFetchError(f"Exchange response missing required fields: {', '.join(missing)}")
 
+        fee = raw_order_result.get("fee")
+        if not fee or (isinstance(fee, dict) and fee.get("cost") is None):
+            fee = raw_order_result.get("fees") or fee or None
+
         return Order(
             identifier=raw_order_result["id"],
             status=OrderStatus(raw_order_result["status"].lower()),
@@ -240,7 +244,7 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
             symbol=raw_order_result.get("symbol", ""),
             time_in_force=raw_order_result.get("timeInForce"),
             trades=raw_order_result.get("trades", []),
-            fee=raw_order_result.get("fee") or raw_order_result.get("fees") or None,
+            fee=fee,
             cost=raw_order_result.get("cost"),
             info=raw_order_result.get("info", raw_order_result),
         )

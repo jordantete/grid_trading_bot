@@ -470,3 +470,28 @@ class TestParsedFees:
         order = await strategy._parse_order_result(raw_order)
 
         assert order.fee == fees
+
+    async def test_a_fee_list_is_preferred_to_a_single_fee_without_a_cost(self, setup_live_strategy):
+        strategy, _ = setup_live_strategy
+        fees = [{"cost": 0.001, "currency": "BTC"}]
+        raw_order = {
+            "id": "1",
+            "status": "closed",
+            "type": "market",
+            "side": "buy",
+            "fee": {"cost": None, "currency": None},
+            "fees": fees,
+        }
+
+        order = await strategy._parse_order_result(raw_order)
+
+        assert order.fee == fees
+
+    async def test_a_single_fee_with_a_cost_is_kept(self, setup_live_strategy):
+        strategy, _ = setup_live_strategy
+        fee = {"cost": 0.003, "currency": "BTC"}
+        raw_order = {"id": "1", "status": "closed", "type": "market", "side": "buy", "fee": fee, "fees": [fee, fee]}
+
+        order = await strategy._parse_order_result(raw_order)
+
+        assert order.fee == fee
