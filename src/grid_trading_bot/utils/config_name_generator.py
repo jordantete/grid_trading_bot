@@ -1,6 +1,15 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from grid_trading_bot.config.config_manager import ConfigManager
+
+
+def _bound(value: float | None) -> str:
+    if value is None:
+        return "None"
+    if float(value).is_integer():
+        return str(int(value))
+    return format(Decimal(repr(float(value))), "f")
 
 
 def generate_config_name(config_manager: ConfigManager) -> str:
@@ -19,8 +28,8 @@ def generate_config_name(config_manager: ConfigManager) -> str:
     grid_strategy_type = config_manager.get_strategy_type().name
     grid_spacing_type = config_manager.get_spacing_type().name
     grid_size = config_manager.get_num_grids()
-    grid_top = config_manager.get_top_range()
-    grid_bottom = config_manager.get_bottom_range()
+    grid_top = _bound(config_manager.get_top_range())
+    grid_bottom = _bound(config_manager.get_bottom_range())
     start_time = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M")
 
     return (

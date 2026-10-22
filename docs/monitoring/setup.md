@@ -100,7 +100,7 @@ Alloy tails all `.log` files from the `logs/` directory and extracts structured 
 | `strategy_type` | `simple_grid` | Grid strategy type |
 | `spacing_type` | `geometric` | Grid spacing type |
 | `grid_size` | `8` | Number of grid levels |
-| `grid_range` | `120-200` | Grid price range |
+| `grid_range` | `120-200` | Grid price range, bottom-top; whole bounds carry no decimals, fractional ones such as `0.25-0.5` do |
 
 A derived `trading_pair` label is created by combining `base_currency/quote_currency` (e.g., `SOL/USDT`).
 
