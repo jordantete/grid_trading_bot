@@ -54,17 +54,11 @@ class TestConfigManager:
             ConfigManager(str(path))
         assert refused.value.invalid_fields == ["grid_strategy.num_grids"]
 
-    def test_is_take_profit_enabled(self, config_manager):
-        assert not config_manager.is_take_profit_enabled()
+    def test_take_profit_and_stop_loss_load_into_typed_objects(self, config_manager):
+        risk_management = config_manager.config.risk_management
 
-    def test_get_take_profit_threshold(self, config_manager):
-        assert config_manager.get_take_profit_threshold() == 3700
-
-    def test_get_stop_loss_threshold(self, config_manager):
-        assert config_manager.get_stop_loss_threshold() == 2830
-
-    def test_is_stop_loss_enabled(self, config_manager):
-        assert not config_manager.is_stop_loss_enabled()
+        assert (risk_management.take_profit.enabled, risk_management.take_profit.threshold) == (False, 3700)
+        assert (risk_management.stop_loss.enabled, risk_management.stop_loss.threshold) == (False, 2830)
 
     def test_get_log_level(self, config_manager):
         assert config_manager.get_logging_level() == "INFO"
@@ -164,30 +158,6 @@ class TestStateDbPath:
     def test_a_null_db_path_uses_the_default_path(self, valid_config):
         cm = _manager(valid_config, lambda raw: raw.update(persistence={"db_path": None}))
         assert cm.get_state_db_path() == f"data/ETH_USDT/state_{cm.get_config_hash()[:8]}.db"
-
-
-class TestTrailingStopLossAccessors:
-    def test_defaults_when_section_absent(self, config_manager):
-        assert config_manager.is_trailing_stop_loss_enabled() is False
-        assert config_manager.get_trailing_atr_period() == 14
-        assert config_manager.get_trailing_atr_multiplier() == 2.5
-        assert config_manager.get_trailing_on_trigger() == "stop"
-
-    def test_reads_configured_values(self, valid_config):
-        def edit(raw):
-            raw["grid_strategy"] |= {"spacing": "arithmetic", "dynamic_spacing": {"enabled": True}}
-            raw["risk_management"]["trailing_stop_loss"] = {
-                "enabled": True,
-                "atr_period": 20,
-                "atr_multiplier": 3.0,
-                "on_trigger": "regrid",
-            }
-
-        config_manager = _manager(valid_config, edit)
-        assert config_manager.is_trailing_stop_loss_enabled() is True
-        assert config_manager.get_trailing_atr_period() == 20
-        assert config_manager.get_trailing_atr_multiplier() == 3.0
-        assert config_manager.get_trailing_on_trigger() == "regrid"
 
 
 class TestPersistenceAccessors:

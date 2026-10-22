@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, Mock
 
 import pandas as pd
 import pytest
-from tests.fakes.config import bot_config_from
+from tests.fakes.config import bot_config_from, config_manager_from
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.schema import DynamicSpacingConfig
+from grid_trading_bot.config.schema import DynamicSpacingConfig, TrailingStopLossConfig, TrailingTrigger
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
@@ -33,6 +33,14 @@ def _use_dynamic_spacing(strategy, **fields):
         config.grid_strategy, dynamic_spacing=DynamicSpacingConfig(enabled=True, **fields)
     )
     strategy.config_manager.config = dataclasses.replace(config, grid_strategy=grid_strategy)
+
+
+def _use_trailing_stop(strategy, **fields):
+    config = strategy.config_manager.config
+    risk_management = dataclasses.replace(
+        config.risk_management, trailing_stop_loss=TrailingStopLossConfig(enabled=True, **fields)
+    )
+    strategy.config_manager.config = dataclasses.replace(config, risk_management=risk_management)
 
 
 def _order_manager_regrid(rebuilt=True):
@@ -85,10 +93,6 @@ def strategy_fixture(valid_config):
     order_simulator.simulate_order_fills = AsyncMock()
 
     config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1d"}})
-    config_manager.is_take_profit_enabled.return_value = False
-    config_manager.is_stop_loss_enabled.return_value = False
-    config_manager.is_trailing_stop_loss_enabled.return_value = False
-    config_manager.get_trailing_atr_multiplier.return_value = 2.5
 
     order_manager.initialize_grid_orders = AsyncMock()
     order_manager.execute_take_profit_or_stop_loss_order = AsyncMock()
@@ -122,12 +126,16 @@ class TestGridTradingStrategy:
         order_simulator = Mock(spec=OrderSimulator)
         order_simulator.simulate_order_fills = AsyncMock()
 
-        config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1d"}})
-        config_manager.is_take_profit_enabled.return_value = True
-        config_manager.is_stop_loss_enabled.return_value = True
-        config_manager.get_take_profit_threshold.return_value = 20000
-        config_manager.get_stop_loss_threshold.return_value = 10000
-        config_manager.is_trailing_stop_loss_enabled.return_value = False
+        config_manager.config = bot_config_from(
+            valid_config,
+            {
+                "trading_settings": {"timeframe": "1d"},
+                "risk_management": {
+                    "take_profit": {"enabled": True, "threshold": 20000},
+                    "stop_loss": {"enabled": True, "threshold": 10000},
+                },
+            },
+        )
 
         def create_strategy(trading_mode: TradingMode = TradingMode.BACKTEST):
             return GridTradingStrategy(
@@ -371,11 +379,9 @@ class TestGridTradingStrategy:
 
     @pytest.mark.asyncio
     async def test_handle_take_profit_triggered(self, setup_strategy):
-        create_strategy, config_manager, _, _, order_manager, balance_tracker, _, _, _ = setup_strategy
+        create_strategy, _, _, _, order_manager, balance_tracker, _, _, _ = setup_strategy
         strategy = create_strategy()
 
-        config_manager.is_take_profit_enabled.return_value = True
-        config_manager.get_take_profit_threshold.return_value = 20000
         balance_tracker.crypto_balance = 1
         order_manager.execute_take_profit_or_stop_loss_order = AsyncMock()
 
@@ -389,11 +395,9 @@ class TestGridTradingStrategy:
 
     @pytest.mark.asyncio
     async def test_handle_stop_loss_triggered(self, setup_strategy):
-        create_strategy, config_manager, _, _, order_manager, balance_tracker, _, _, _ = setup_strategy
+        create_strategy, _, _, _, order_manager, balance_tracker, _, _, _ = setup_strategy
         strategy = create_strategy()
 
-        config_manager.is_stop_loss_enabled.return_value = True
-        config_manager.get_stop_loss_threshold.return_value = 10000
         balance_tracker.crypto_balance = 1
         order_manager.execute_take_profit_or_stop_loss_order = AsyncMock()
 
@@ -492,11 +496,9 @@ class TestGridTradingStrategy:
 
     @pytest.mark.asyncio
     async def test_handle_take_profit_not_triggered(self, setup_strategy):
-        create_strategy, config_manager, _, _, order_manager, balance_tracker, _, _, _ = setup_strategy
+        create_strategy, _, _, _, order_manager, balance_tracker, _, _, _ = setup_strategy
         strategy = create_strategy()
 
-        config_manager.is_take_profit_enabled.return_value = True
-        config_manager.get_take_profit_threshold.return_value = 20000
         balance_tracker.crypto_balance = 1
         order_manager.execute_take_profit_or_stop_loss_order = AsyncMock()
 
@@ -507,11 +509,9 @@ class TestGridTradingStrategy:
 
     @pytest.mark.asyncio
     async def test_handle_stop_loss_not_triggered(self, setup_strategy):
-        create_strategy, config_manager, _, _, order_manager, balance_tracker, _, _, _ = setup_strategy
+        create_strategy, _, _, _, order_manager, balance_tracker, _, _, _ = setup_strategy
         strategy = create_strategy()
 
-        config_manager.is_stop_loss_enabled.return_value = True
-        config_manager.get_stop_loss_threshold.return_value = 10000
         balance_tracker.crypto_balance = 1
         order_manager.execute_take_profit_or_stop_loss_order = AsyncMock()
 
@@ -522,11 +522,9 @@ class TestGridTradingStrategy:
 
     @pytest.mark.asyncio
     async def test_handle_take_profit_stop_loss_both_triggered(self, setup_strategy):
-        create_strategy, config_manager, _, _, order_manager, balance_tracker, _, _, event_bus = setup_strategy
+        create_strategy, _, _, _, order_manager, balance_tracker, _, _, event_bus = setup_strategy
         strategy = create_strategy()
 
-        config_manager.is_take_profit_enabled.return_value = True
-        config_manager.get_take_profit_threshold.return_value = 20000
         balance_tracker.crypto_balance = 1
         order_manager.execute_take_profit_or_stop_loss_order = AsyncMock()
         event_bus.publish = AsyncMock()
@@ -749,8 +747,7 @@ class TestGridTradingStrategy:
 class TestTrailingStopOrchestration:
     async def test_trailing_stop_with_stop_trigger_liquidates_and_stops(self, strategy_fixture):
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
-        s.config_manager.get_trailing_on_trigger.return_value = "stop"
+        _use_trailing_stop(s, on_trigger=TrailingTrigger.STOP)
         s.balance_tracker.crypto_balance = 1.0
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
         s.trailing_stop.update(close=100.0, atr=5.0)  # stop = 95
@@ -764,10 +761,30 @@ class TestTrailingStopOrchestration:
         )
         assert s.event_bus.publish.await_args.args[1] == StopRequest(StopKind.RISK, "Trailing stop hit.")
 
+    async def test_a_regrid_trailing_trigger_does_not_liquidate(self, strategy_fixture, valid_config):
+        s = strategy_fixture
+        s.config_manager = config_manager_from(
+            valid_config,
+            {
+                "grid_strategy": {"spacing": "arithmetic", "dynamic_spacing": {"enabled": True}},
+                "risk_management": {"trailing_stop_loss": {"enabled": True, "on_trigger": "regrid"}},
+            },
+        )
+        s.balance_tracker.crypto_balance = 1.0
+        s.order_manager.regrid = _order_manager_regrid()
+        s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
+        s.trailing_stop.update(close=100.0, atr=5.0)  # stop = 95
+
+        stopped = await s._handle_trailing_stop(current_price=94.0, atr=5.0)
+
+        assert stopped is False
+        assert s.stop_reason is None
+        assert s.trailing_stop.stop_price is None  # reset after the regrid, not liquidated
+        s.order_manager.execute_take_profit_or_stop_loss_order.assert_not_awaited()
+
     async def test_trailing_stop_with_regrid_trigger_rebuilds_grid(self, strategy_fixture):
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
-        s.config_manager.get_trailing_on_trigger.return_value = "regrid"
+        _use_trailing_stop(s, on_trigger=TrailingTrigger.REGRID)
         _use_dynamic_spacing(s)
         s.balance_tracker.crypto_balance = 1.0
         s.order_manager.regrid = _order_manager_regrid()
@@ -783,7 +800,7 @@ class TestTrailingStopOrchestration:
 
     async def test_no_trailing_check_without_crypto(self, strategy_fixture):
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        _use_trailing_stop(s)
         s.balance_tracker.crypto_balance = 0
         s.balance_tracker.get_adjusted_crypto_balance.return_value = 0
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -795,8 +812,7 @@ class TestTrailingStopOrchestration:
 
     async def test_trailing_stop_fires_when_all_crypto_is_reserved(self, strategy_fixture):
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
-        s.config_manager.get_trailing_on_trigger.return_value = "stop"
+        _use_trailing_stop(s, on_trigger=TrailingTrigger.STOP)
         s.balance_tracker.crypto_balance = 0
         s.balance_tracker.get_adjusted_crypto_balance.return_value = 1.0
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -809,8 +825,7 @@ class TestTrailingStopOrchestration:
     async def test_nan_atr_does_not_trigger_restored_stop(self, strategy_fixture):
         """After a restart, a restored stop must not fire while ATR is still NaN (pre-first-candle)."""
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
-        s.config_manager.get_trailing_on_trigger.return_value = "regrid"
+        _use_trailing_stop(s, on_trigger=TrailingTrigger.REGRID)
         s.balance_tracker.crypto_balance = 1.0
         s.order_manager.regrid = AsyncMock()
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -826,8 +841,7 @@ class TestTrailingStopOrchestration:
     async def test_failed_regrid_does_not_reset_ratchet(self, strategy_fixture):
         """When the regrid fails (cancel failure), the trailing ratchet must not be reset."""
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
-        s.config_manager.get_trailing_on_trigger.return_value = "regrid"
+        _use_trailing_stop(s, on_trigger=TrailingTrigger.REGRID)
         s.balance_tracker.crypto_balance = 1.0
         s.order_manager.regrid = _order_manager_regrid(rebuilt=False)
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -876,7 +890,7 @@ class TestStrategyStateExportRestore:
 
     def test_restore_sets_trailing_stop_when_enabled(self, strategy_fixture):
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        _use_trailing_stop(s)
         s.trailing_stop = None
 
         s.restore_strategy_state({"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": None})
@@ -888,8 +902,7 @@ class TestStrategyStateExportRestore:
 
     def test_restore_strategy_state_prefers_config_atr_multiplier(self, strategy_fixture):
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
-        s.config_manager.get_trailing_atr_multiplier.return_value = 3.0
+        _use_trailing_stop(s, atr_multiplier=3.0)
 
         s.restore_strategy_state({"trailing_stop": {"stop_price": 90.0, "atr_multiplier": 2.0}, "atr_grid": None})
 
@@ -898,7 +911,6 @@ class TestStrategyStateExportRestore:
 
     def test_restore_skips_trailing_stop_when_disabled(self, strategy_fixture):
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
         s.trailing_stop = None
 
         s.restore_strategy_state({"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": None})
@@ -907,7 +919,6 @@ class TestStrategyStateExportRestore:
 
     def test_restore_sets_atr_grid_when_present(self, strategy_fixture):
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
         s.grid_manager.atr_grid = None
 
         s.restore_strategy_state({"trailing_stop": None, "atr_grid": 3.1})
@@ -916,7 +927,6 @@ class TestStrategyStateExportRestore:
 
     def test_restore_leaves_atr_grid_when_absent(self, strategy_fixture):
         s = strategy_fixture
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
         s.grid_manager.atr_grid = 5.0
 
         s.restore_strategy_state({"trailing_stop": None, "atr_grid": None})
@@ -926,7 +936,6 @@ class TestStrategyStateExportRestore:
 
 class TestVolatilityRegrid:
     def _setup_dynamic(self, s):
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
         _use_dynamic_spacing(s, regrid_threshold=0.3, cooldown_bars=5)
         s.grid_manager.is_initialized = True
         s.order_manager.regrid = _order_manager_regrid()
@@ -1019,9 +1028,8 @@ class TestLiveAtrRefresh:
     async def test_refresh_computes_atr_after_candle_close(self, strategy_fixture, valid_config):
         s = strategy_fixture
         s.trading_mode = TradingMode.LIVE
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
-        s.config_manager.get_trailing_atr_period.return_value = 3
         s.config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1m"}})
+        _use_trailing_stop(s, atr_period=3)
         candles = pd.DataFrame(
             [[pd.Timestamp("2026-01-01 00:00"), 100, 101, 99, 100, 1]] * 6,
             columns=["timestamp", "open", "high", "low", "close", "volume"],
@@ -1039,7 +1047,7 @@ class TestLiveAtrRefresh:
     async def test_no_fetch_before_candle_close(self, strategy_fixture):
         s = strategy_fixture
         s.trading_mode = TradingMode.LIVE
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
+        _use_trailing_stop(s)
         s.exchange_service.fetch_recent_ohlcv = AsyncMock()
         s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
 
@@ -1051,9 +1059,8 @@ class TestLiveAtrRefresh:
     async def test_first_call_arms_boundary_without_fetch(self, strategy_fixture, valid_config):
         s = strategy_fixture
         s.trading_mode = TradingMode.LIVE
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
-        s.config_manager.get_trailing_atr_period.return_value = 3
         s.config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1m"}})
+        _use_trailing_stop(s, atr_period=3)
         s.exchange_service.fetch_recent_ohlcv = AsyncMock()
         s._next_candle_close = None
 
@@ -1066,7 +1073,6 @@ class TestLiveAtrRefresh:
     async def test_no_features_returns_false(self, strategy_fixture):
         s = strategy_fixture
         s.trading_mode = TradingMode.LIVE
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = False
 
         refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
 
@@ -1075,9 +1081,8 @@ class TestLiveAtrRefresh:
     async def test_fetch_failure_keeps_last_atr(self, strategy_fixture, valid_config):
         s = strategy_fixture
         s.trading_mode = TradingMode.LIVE
-        s.config_manager.is_trailing_stop_loss_enabled.return_value = True
-        s.config_manager.get_trailing_atr_period.return_value = 3
         s.config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1m"}})
+        _use_trailing_stop(s, atr_period=3)
         s._live_atr[3] = 2.5
         s.exchange_service.fetch_recent_ohlcv = AsyncMock(side_effect=DataFetchError("boom"))
         s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")

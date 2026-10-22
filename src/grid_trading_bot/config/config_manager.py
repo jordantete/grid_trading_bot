@@ -38,31 +38,6 @@ class ConfigManager:
 
         return compute_config_hash(self.config)
 
-    # --- Risk management (Take Profit / Stop Loss) Accessor Methods ---
-    def is_take_profit_enabled(self) -> bool:
-        return self.config.risk_management.take_profit.enabled
-
-    def get_take_profit_threshold(self) -> float:
-        return self.config.risk_management.take_profit.threshold
-
-    def is_stop_loss_enabled(self) -> bool:
-        return self.config.risk_management.stop_loss.enabled
-
-    def get_stop_loss_threshold(self) -> float:
-        return self.config.risk_management.stop_loss.threshold
-
-    def is_trailing_stop_loss_enabled(self) -> bool:
-        return self.config.risk_management.trailing_stop_loss.enabled
-
-    def get_trailing_atr_period(self) -> int:
-        return self.config.risk_management.trailing_stop_loss.atr_period
-
-    def get_trailing_atr_multiplier(self) -> float:
-        return self.config.risk_management.trailing_stop_loss.atr_multiplier
-
-    def get_trailing_on_trigger(self) -> str:
-        return self.config.risk_management.trailing_stop_loss.on_trigger.value
-
     # --- Execution Settings Accessor Methods ---
     def get_max_retries(self) -> int:
         return self.config.execution.max_retries

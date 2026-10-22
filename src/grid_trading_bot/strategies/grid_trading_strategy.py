@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.config.schema import TrailingTrigger
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
@@ -71,10 +72,9 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.armed = False
         self.stop_reason: str | None = None
         self._starting_account_value: float | None = None
+        trailing_config = config_manager.config.risk_management.trailing_stop_loss
         self.trailing_stop: TrailingStopLoss | None = (
-            TrailingStopLoss(config_manager.get_trailing_atr_multiplier())
-            if config_manager.is_trailing_stop_loss_enabled()
-            else None
+            TrailingStopLoss(trailing_config.atr_multiplier) if trailing_config.enabled else None
         )
         self._bars_since_regrid: int = 0
         self._trailing_atr_series: pd.Series | None = None
@@ -236,7 +236,7 @@ class GridTradingStrategy(TradingStrategyInterface):
                 fresh_candle = await self._maybe_refresh_live_atr(pd.Timestamp.now())
 
                 trailing_atr = self._live_atr.get(
-                    self.config_manager.get_trailing_atr_period(),
+                    self.config_manager.config.risk_management.trailing_stop_loss.atr_period,
                     math.nan,
                 )
                 if await self._handle_trailing_stop(current_price, trailing_atr):
@@ -498,7 +498,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         if not self.trailing_stop.is_triggered(current_price):
             return False
 
-        if self.config_manager.get_trailing_on_trigger() == "stop":
+        if self.config_manager.config.risk_management.trailing_stop_loss.on_trigger is TrailingTrigger.STOP:
             self.logger.info(f"Trailing stop triggered at {current_price}. Liquidating and stopping.")
             self.stop_reason = "trailing_stop"
             await self.order_manager.execute_take_profit_or_stop_loss_order(
@@ -572,9 +572,10 @@ class GridTradingStrategy(TradingStrategyInterface):
     def restore_strategy_state(self, state: dict) -> None:
         """Restores the trailing stop ratchet and ATR grid baseline recovered from persisted state."""
         trailing = state.get("trailing_stop")
-        if trailing is not None and self.config_manager.is_trailing_stop_loss_enabled():
+        trailing_config = self.config_manager.config.risk_management.trailing_stop_loss
+        if trailing is not None and trailing_config.enabled:
             self.trailing_stop = TrailingStopLoss.from_dict(trailing)
-            self.trailing_stop.atr_multiplier = self.config_manager.get_trailing_atr_multiplier()
+            self.trailing_stop.atr_multiplier = trailing_config.atr_multiplier
 
         atr_grid = state.get("atr_grid")
         if atr_grid is not None:
@@ -588,11 +589,9 @@ class GridTradingStrategy(TradingStrategyInterface):
         """
         if self.data is None:
             return
-        if self.config_manager.is_trailing_stop_loss_enabled():
-            self._trailing_atr_series = ATRCalculator.compute_series(
-                self.data,
-                self.config_manager.get_trailing_atr_period(),
-            )
+        trailing_config = self.config_manager.config.risk_management.trailing_stop_loss
+        if trailing_config.enabled:
+            self._trailing_atr_series = ATRCalculator.compute_series(self.data, trailing_config.atr_period)
         dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
         if dynamic_spacing.enabled:
             self._dynamic_atr_series = ATRCalculator.compute_series(self.data, dynamic_spacing.atr_period)
@@ -611,8 +610,9 @@ class GridTradingStrategy(TradingStrategyInterface):
 
     def _enabled_atr_periods(self) -> set[int]:
         periods: set[int] = set()
-        if self.config_manager.is_trailing_stop_loss_enabled():
-            periods.add(self.config_manager.get_trailing_atr_period())
+        trailing_config = self.config_manager.config.risk_management.trailing_stop_loss
+        if trailing_config.enabled:
+            periods.add(trailing_config.atr_period)
         dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
         if dynamic_spacing.enabled:
             periods.add(dynamic_spacing.atr_period)
@@ -689,10 +689,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         Handles take-profit logic and executes a TP order if conditions are met.
         Returns True if take-profit is triggered.
         """
-        if (
-            self.config_manager.is_take_profit_enabled()
-            and current_price >= self.config_manager.get_take_profit_threshold()
-        ):
+        take_profit = self.config_manager.config.risk_management.take_profit
+        if take_profit.enabled and current_price >= take_profit.threshold:
             self.logger.info(f"Take-profit triggered at {current_price}. Executing TP order...")
             self.stop_reason = "take_profit"
             await self.order_manager.execute_take_profit_or_stop_loss_order(
@@ -707,10 +705,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         Handles stop-loss logic and executes an SL order if conditions are met.
         Returns True if stop-loss is triggered.
         """
-        if (
-            self.config_manager.is_stop_loss_enabled()
-            and current_price <= self.config_manager.get_stop_loss_threshold()
-        ):
+        stop_loss = self.config_manager.config.risk_management.stop_loss
+        if stop_loss.enabled and current_price <= stop_loss.threshold:
             self.logger.info(f"Stop-loss triggered at {current_price}. Executing SL order...")
             self.stop_reason = "stop_loss"
             await self.order_manager.execute_take_profit_or_stop_loss_order(

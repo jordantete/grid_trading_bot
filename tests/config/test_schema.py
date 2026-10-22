@@ -273,6 +273,21 @@ class TestTrailingStopLoss:
         assert trailing == TrailingStopLossConfig(enabled=False)
         assert (trailing.atr_period, trailing.atr_multiplier, trailing.on_trigger) == (14, 2.5, TrailingTrigger.STOP)
 
+    def test_a_configured_section_loads_every_value(self, valid_config):
+        _enable_dynamic(valid_config)
+        valid_config["risk_management"]["trailing_stop_loss"] = {
+            "enabled": True,
+            "atr_period": 20,
+            "atr_multiplier": 3.0,
+            "on_trigger": "regrid",
+        }
+
+        trailing = load_config(valid_config).risk_management.trailing_stop_loss
+
+        assert trailing == TrailingStopLossConfig(
+            enabled=True, atr_period=20, atr_multiplier=3.0, on_trigger=TrailingTrigger.REGRID
+        )
+
     def test_an_unknown_on_trigger_is_refused(self, valid_config):
         valid_config["risk_management"]["trailing_stop_loss"] = {
             "enabled": True,
