@@ -23,7 +23,6 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       upload-coverage: false
-    secrets: inherit
 
   build:
     needs: ci
