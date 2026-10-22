@@ -93,8 +93,8 @@ class SupervisedLoop:
             await self._send(
                 NotificationType.ERROR_OCCURRED,
                 error_details=(
-                    f"{self.name} failed: {error}. It runs again in {self.interval:g} s; the bot stops, keeping its "
-                    f"orders, after {self.MAX_CONSECUTIVE_FAILURES} failures in a row."
+                    f"{self.name} failed: {self._last_error}. It runs again in {self.interval:g} s; the bot stops, "
+                    f"keeping its orders, after {self.MAX_CONSECUTIVE_FAILURES} failures in a row."
                 ),
             )
         if self._consecutive_failures < self.MAX_CONSECUTIVE_FAILURES:

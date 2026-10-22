@@ -761,7 +761,8 @@ class OrderManager:
                 self._notify(
                     NotificationType.ERROR_OCCURRED,
                     error_details=(
-                        f"Initial purchase not booked: {error}. The bot halts; fix the books before resuming."
+                        f"Initial purchase not booked: {error}. The bot halts. Check this order on the exchange, "
+                        "then see going-live.md for resume vs keeping the database."
                     ),
                 )
                 raise error from e
@@ -949,7 +950,9 @@ class OrderManager:
                     await self._save_state()
             if booking_error is not None:
                 await self._send_liquidation_alert(
-                    f"Liquidation sale not booked: {booking_error}. The bot halts; fix the books before resuming."
+                    f"Liquidation sale not booked: {booking_error}. The bot halts. Check this order on the exchange, "
+                    "then see going-live.md for resume vs keeping the database.",
+                    exc_info=booking_error,
                 )
                 return
             if error is None:
@@ -1070,8 +1073,8 @@ class OrderManager:
             return f"Liquidation of {position} failed ({error}); retrying until it succeeds."
         return f"Liquidation still failing after {failures} attempts ({error}); {position} still open."
 
-    async def _send_liquidation_alert(self, details: str) -> None:
-        self.logger.error(details)
+    async def _send_liquidation_alert(self, details: str, exc_info: BaseException | None = None) -> None:
+        self.logger.error(details, exc_info=exc_info)
         await self._send([(NotificationType.ERROR_OCCURRED, {"error_details": details})])
 
     async def execute_take_profit_or_stop_loss_order(

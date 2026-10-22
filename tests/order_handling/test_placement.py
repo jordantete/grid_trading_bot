@@ -53,6 +53,11 @@ def _market_orders(stack, side: OrderSide | None = None):
     return [o for o in stack.execution.orders.values() if o.order_type is OrderType.MARKET and side in (None, o.side)]
 
 
+BOOKING_HALT_TAIL = (
+    "The bot halts. Check this order on the exchange, then see going-live.md for resume vs keeping the database."
+)
+
+
 def _errors(caplog):
     return [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
 
@@ -1890,12 +1895,22 @@ class TestBookingErrors:
         assert stack.store.pending[-1].sent is True
         [alert] = _error_alerts(stack, "Liquidation sale not booked")
         assert alert.startswith(f"Liquidation sale not booked: sell market order {sale.identifier} executed (2.0 at ")
-        assert alert.endswith("The bot halts; fix the books before resuming.")
+        assert alert.endswith(BOOKING_HALT_TAIL)
 
         await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
 
         assert _market_sells(stack) == [2.0]
         assert len(_error_alerts(stack, "Liquidation sale not booked")) == 2
+
+    @pytest.mark.timeout(5)
+    async def test_a_liquidation_sale_that_cannot_be_booked_logs_the_traceback(self, caplog):
+        stack, _ = _liquidating_stack(crypto=2.0)
+        stack.execution.market_fee = {"cost": "n/a", "currency": "USDT"}
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        [record] = [r for r in caplog.records if r.getMessage().startswith("Liquidation sale not booked")]
+        assert isinstance(record.exc_info[1], BookingError)
 
     @pytest.mark.timeout(5)
     async def test_a_stop_loss_whose_sale_cannot_be_booked_reports_the_liquidation_incomplete(self):
@@ -1935,7 +1950,7 @@ class TestBookingErrors:
         assert (entry.purpose, entry.sent) == (PlacementPurpose.INITIAL_PURCHASE, True)
         [alert] = _error_alerts(stack, "Initial purchase not booked")
         assert f"buy market order {buy.identifier} executed" in alert
-        assert alert.endswith("The bot halts; fix the books before resuming.")
+        assert alert.endswith(BOOKING_HALT_TAIL)
         assert NotificationType.ORDER_PLACED not in _sent(stack)
 
         with pytest.raises(BookingError):

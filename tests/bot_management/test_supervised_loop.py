@@ -76,7 +76,7 @@ async def test_one_failure_alerts_once_and_the_loop_keeps_running(event_bus, rec
 
     errors = [details for kind, details in recorder.sent if kind is NotificationType.ERROR_OCCURRED]
     assert len(errors) == 1
-    assert errors[0]["error_details"].startswith("Test loop failed: boom.")
+    assert errors[0]["error_details"].startswith("Test loop failed: RuntimeError: boom.")
     assert recorder.stops == []
 
 
@@ -142,6 +142,32 @@ async def test_a_cancelled_child_counts_as_a_failure_not_as_the_loop_cancellatio
 
     assert [request.kind for request in recorder.stops] == [StopKind.CRASH]
     assert loop.state.consecutive_failures == 3
+
+
+async def test_the_first_failure_alert_names_the_error_type_when_the_message_is_empty(event_bus, recorder):
+    body, calls = _body([RuntimeError()])
+    loop = _loop(body, event_bus, recorder)
+    task = asyncio.create_task(loop.run())
+
+    await _until(lambda: len(calls) >= 2)
+    await _cancel(task)
+
+    [alert] = [d["error_details"] for kind, d in recorder.sent if kind is NotificationType.ERROR_OCCURRED]
+    assert alert.startswith("Test loop failed: RuntimeError")
+
+
+async def test_the_first_failure_alert_names_a_cancelled_child(event_bus, recorder):
+    async def body():
+        child = asyncio.create_task(asyncio.sleep(10))
+        child.cancel()
+        await child
+
+    loop = _loop(body, event_bus, recorder)
+
+    await asyncio.wait_for(loop.run(), timeout=1)
+
+    [alert] = [d["error_details"] for kind, d in recorder.sent if kind is NotificationType.ERROR_OCCURRED]
+    assert alert.startswith("Test loop failed: CancelledError")
 
 
 async def test_without_an_event_bus_the_third_failure_logs_and_ends_the_loop(recorder, caplog):
