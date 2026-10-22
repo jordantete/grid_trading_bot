@@ -874,6 +874,8 @@ class OrderManager:
         if self._liquidated:
             self.logger.info("Positions already liquidated; skipping.")
             return
+        if current_price is None:
+            raise ValueError("A liquidation needs the current price.")
         await self._liquidate(current_price)
 
     def interrupt_liquidation(self) -> None:
@@ -884,7 +886,7 @@ class OrderManager:
     def _base_currency(self) -> str:
         return self.trading_pair.split("/")[0]
 
-    async def _liquidate(self, current_price: float | None) -> None:
+    async def _liquidate(self, current_price: float) -> None:
         """
         Sells the free crypto at market until none is left. A failed attempt, whatever it raised, is retried after a
         growing delay, a refusal re-reads the exchange balance first, and a remainder under the exchange minimum stops
@@ -935,7 +937,7 @@ class OrderManager:
             if not self._liquidation_interrupted.is_set():
                 await self._pause(delay)
 
-    async def _liquidation_attempt(self, current_price: float | None, exchange_cap: float | None) -> float | None:
+    async def _liquidation_attempt(self, current_price: float, exchange_cap: float | None) -> float | None:
         """
         One market sell, under the lock: a leg whose outcome is unknown is looked up first, otherwise the leg a failed
         attempt left, or a new one, sells the free crypto. Returns the quantity sold, or None once nothing more can be
@@ -958,7 +960,7 @@ class OrderManager:
         self.journal.remove(entry.client_order_id)
         return await self._book_liquidation(order)
 
-    def _liquidation_quantity(self, current_price: float | None, exchange_cap: float | None) -> float | None:
+    def _liquidation_quantity(self, current_price: float, exchange_cap: float | None) -> float | None:
         """The quantity of the next leg, or None when nothing can be sold."""
         quantity = self.balance_tracker.crypto_balance
         if exchange_cap is not None:
@@ -981,7 +983,7 @@ class OrderManager:
             else:
                 self.logger.info("No crypto balance left to liquidate.")
             return None
-        if self.market_constraints is not None and current_price is not None:
+        if self.market_constraints is not None:
             violation = self.market_constraints.violation(quantity, current_price)
             if violation:
                 self._stop_liquidation(

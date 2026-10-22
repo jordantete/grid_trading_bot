@@ -1314,6 +1314,16 @@ class TestLiquidation:
         assert len(stack.journal) == 0
         assert clock.sleeps == []
 
+    async def test_a_liquidation_without_the_current_price_is_refused(self):
+        stack, _ = _liquidating_stack(crypto=2.0)
+
+        with pytest.raises(ValueError, match="needs the current price"):
+            await stack.manager.close_positions(liquidate=True)
+
+        assert _market_sells(stack) == []
+        assert stack.balances.crypto_balance == 2.0
+        assert not stack.manager._liquidated
+
     async def test_closing_without_liquidation_cancels_the_grid_and_keeps_the_crypto(self):
         stack, _ = _liquidating_stack(crypto=20.0, fiat=2700.0)
         await stack.manager.initialize_grid_orders(ARMING_PRICE)
