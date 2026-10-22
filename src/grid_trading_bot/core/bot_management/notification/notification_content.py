@@ -68,6 +68,10 @@ class NotificationType(Enum):
         title="Checkpoint Restored",
         message="The state database is written again after {failures} failed checkpoint(s).",
     )
+    LOOP_RECOVERED = NotificationContent(
+        title="Background Loop Recovered",
+        message="{loop} runs again after {failures} failed pass(es).",
+    )
     BOT_HALTED = NotificationContent(
         title="Bot Halted",
         message=(
