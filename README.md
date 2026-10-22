@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/jordantete/grid_trading_bot/actions/workflows/unit_tests.yml"><img src="https://github.com/jordantete/grid_trading_bot/actions/workflows/unit_tests.yml/badge.svg" alt="Tests" /></a>
+  <a href="https://github.com/jordantete/grid_trading_bot/actions/workflows/ci.yml"><img src="https://github.com/jordantete/grid_trading_bot/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://codecov.io/github/jordantete/grid_trading_bot"><img src="https://codecov.io/github/jordantete/grid_trading_bot/graph/badge.svg?token=DOZRQAXAK7" alt="codecov" /></a>
   <a href="https://pypi.org/project/grid-trading-bot/"><img src="https://img.shields.io/pypi/v/grid-trading-bot" alt="PyPI" /></a>
   <a href="https://jordantete.github.io/grid_trading_bot/"><img src="https://img.shields.io/badge/docs-GitHub%20Pages-blue" alt="Docs" /></a>

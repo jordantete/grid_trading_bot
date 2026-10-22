@@ -33,7 +33,7 @@ uv run python -m pytest tests/order_handling/test_order_manager.py::TestClassNam
 # Integration tests (backtest E2E, no network needed)
 uv run python -m pytest tests/integration/test_backtest_e2e.py -v
 
-# Sandbox smoke tests (requires network, validates ccxt/aiohttp compatibility)
+# Sandbox smoke tests (requires network, validates ccxt and its aiohttp transport)
 uv run python -m pytest -m sandbox -v
 
 # Update snapshots after intentional behavior changes
@@ -42,6 +42,9 @@ uv run python -m pytest tests/integration/test_backtest_e2e.py --update-snapshot
 # Lint and format (via pre-commit or directly)
 uv run ruff check --fix .
 uv run ruff format .
+
+# Type check (src/ only, must report 0 errors)
+uv run mypy
 
 # Run pre-commit hooks
 uv run pre-commit run --all-files
@@ -110,8 +113,8 @@ Located in `tests/` (excluding `tests/integration/`). Heavy use of mocking to is
 Located in `tests/integration/`. **Zero mocks** — the full bot stack runs against real CSV data.
 
 - **`test_backtest_e2e.py`** — 16 parametrized tests covering 4 scenarios (simple_grid/hedged_grid x arithmetic/geometric). Validates: no crash, balance coherence, grid cycle integrity, and deterministic results via snapshot comparison.
-- **`test_sandbox_smoke.py`** — 3 tests that make real network calls to Binance public API (REST + WebSocket). Validates ccxt/aiohttp compatibility. Marked `@pytest.mark.sandbox` and excluded from default runs.
-- **`snapshots/`** — JSON reference files for deterministic result comparison. Update with `--update-snapshots` flag after intentional behavior changes.
+- **`test_sandbox_smoke.py`** — 3 tests that make real network calls to Binance public API (REST + WebSocket). Validates ccxt compatibility, including the aiohttp transport it brings. Marked `@pytest.mark.sandbox` and excluded from default runs.
+- **`snapshots/`** — JSON reference files: every `PerformanceMetrics` field at full precision, the final balances and the fill list. A missing snapshot fails the test. After an intentional behavior change, `--update-snapshots` rewrites them, the tests pass, and the final summary lists every field and fill that changed.
 
 ### Pytest Markers
 
@@ -138,7 +141,9 @@ Deploy is automatic via GitHub Actions (`.github/workflows/docs.yml`) on push to
 
 ## Linting & Formatting
 
-Ruff is configured in `pyproject.toml` with 120-char line length, targeting Python 3.12. Pre-commit hooks run Ruff lint+format, plus checks for trailing whitespace, valid YAML/JSON/TOML, merge conflicts, debug statements, blanket `noqa`/`type: ignore`, and deprecated `log.warn()`.
+Ruff is configured in `pyproject.toml` with 120-char line length, targeting Python 3.12. mypy is configured there too, over `src/` only, and must report 0 errors. Pre-commit hooks run Ruff lint+format and mypy with the versions pinned in `pyproject.toml` (they run through `uv run --frozen --no-sync`, so they need an existing `.venv`: run `uv sync --all-extras --dev` first), plus checks for trailing whitespace, valid YAML/JSON/TOML, merge conflicts, debug statements, blanket `noqa`/`type: ignore`, and deprecated `log.warn()`. A `# type: ignore` carries its error code and a one-line reason.
+
+CI (`.github/workflows/ci.yml`) runs on every push to `master` and every pull request: pytest on Python 3.12 and 3.14, and a `lint` job (`ruff check`, `ruff format --check`, `mypy`). Releases follow "Releasing" in `docs/contributing/guide.md`: a `v*` tag must match the `pyproject.toml` version and sit on `master`, and publishing to PyPI waits for approval of the `pypi` environment.
 
 ## Behavioral Guidelines (Karpathy/Multica)
 
