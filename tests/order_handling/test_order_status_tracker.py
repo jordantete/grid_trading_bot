@@ -203,21 +203,29 @@ class TestTrackingLifecycle:
         tracker, _, _, _ = setup_tracker
         tracker.start_tracking()
         task = tracker._monitoring_task
+        await asyncio.sleep(0.05)
+        assert not task.done()
 
         await tracker.stop_tracking()
 
         assert task.done()
         assert tracker._monitoring_task is None
 
-    async def test_track_open_order_statuses_handles_cancellation(self, setup_tracker):
+    async def test_track_open_order_statuses_handles_cancellation(self, setup_tracker, caplog):
         tracker, _, _, _ = setup_tracker
-        tracker.start_tracking()
+        caplog.set_level(logging.INFO, logger=TRACKER_LOGGER)
+        task = asyncio.create_task(tracker._track_open_order_statuses())
         await asyncio.sleep(0.1)
+        assert not task.done()
 
-        await tracker.stop_tracking()
+        task.cancel()
+        await asyncio.wait_for(task, timeout=1)
 
-        assert tracker._monitoring_task is None
+        assert task.done()
+        assert not task.cancelled()
         assert tracker._active_tasks == set()
+        assert _messages(caplog, logging.INFO) == ["OrderStatusTracker monitoring task was cancelled."]
+        assert _messages(caplog, logging.ERROR) == []
 
     async def test_track_open_order_statuses_handles_unexpected_error(self, setup_tracker, caplog):
         tracker, order_book, _, _ = setup_tracker

@@ -55,6 +55,7 @@ def setup_order_manager():
 @pytest.fixture
 def setup_tracker():
     order_book = Mock()
+    order_book.get_open_orders.return_value = []
     order_execution_strategy = Mock()
     order_update_handler = Mock()
     order_update_handler.apply_order_update = AsyncMock()
