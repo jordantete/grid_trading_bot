@@ -73,3 +73,6 @@ jobs:
 
       - name: ruff format
         run: uv run --python 3.12 ruff format --check .
+
+      - name: mypy
+        run: uv run --python 3.12 mypy

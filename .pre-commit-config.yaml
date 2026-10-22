@@ -14,6 +14,13 @@ repos:
         language: system
         types_or: [python, pyi]
         require_serial: true
+      - id: mypy
+        name: mypy
+        entry: uv run --frozen --no-sync mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
 
   # Built-in hooks for basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
