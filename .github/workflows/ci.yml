@@ -1,4 +1,4 @@
-name: unit_tests
+name: ci
 
 on:
   push:
@@ -7,6 +7,12 @@ on:
   pull_request:
     branches:
       - master
+  workflow_call:
+    inputs:
+      upload-coverage:
+        description: "Upload the Python 3.12 coverage report to Codecov"
+        type: boolean
+        default: true
 
 jobs:
   test:
@@ -36,10 +42,34 @@ jobs:
         run: uv run --python ${{ matrix.python-version }} pytest --cov=grid_trading_bot --cov-report=xml:coverage.xml --cov-report=term
 
       - name: Upload coverage reports to Codecov
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.12' && format('{0}', inputs.upload-coverage) != 'false'
         uses: codecov/codecov-action@v7
         with:
           fail_ci_if_error: true
           files: ./coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           verbose: true
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the project
+        run: uv sync --locked --python 3.12 --all-extras --dev
+
+      - name: ruff check
+        run: uv run --python 3.12 ruff check .
+
+      - name: ruff format
+        run: uv run --python 3.12 ruff format --check .

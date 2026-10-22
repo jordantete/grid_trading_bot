@@ -1,13 +1,19 @@
 repos:
-  # Ruff for linting and formatting
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.0
+  # Run from the project environment so the hooks use the versions pinned in pyproject.toml, like CI.
+  - repo: local
     hooks:
       - id: ruff
         name: ruff (linting)
-        args: [--fix]
+        entry: uv run --frozen --no-sync ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
       - id: ruff-format
         name: ruff (formatting)
+        entry: uv run --frozen --no-sync ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
 
   # Built-in hooks for basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks

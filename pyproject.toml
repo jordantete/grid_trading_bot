@@ -43,6 +43,10 @@ dev = [
     "pytest-timeout==2.4.0",
     "pre-commit==4.6.2",
     "ruff==0.17.0",
+    "mypy==2.4.0",
+    "pandas-stubs==3.0.5.260914",
+    "types-psutil==7.2.2.20260906",
+    "types-tabulate==0.10.0.20261006",
 ]
 docs = [
     "zensical>=0.0.23",
@@ -118,6 +122,18 @@ docstring-code-format = true
 [tool.ruff.lint.isort]
 known-first-party = ["grid_trading_bot"]
 force-sort-within-sections = true
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["ccxt", "ccxt.*", "plotly", "plotly.*"]
+ignore_missing_imports = true
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]
