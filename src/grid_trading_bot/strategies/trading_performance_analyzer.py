@@ -56,7 +56,7 @@ class TradingPerformanceAnalyzer:
             float: The calculated ROI percentage.
         """
         roi = (final_balance - initial_balance) / initial_balance * 100
-        return round(roi, 2)
+        return float(roi)
 
     def _calculate_grid_trading_gains(self, realized_pnl: float) -> float | None:
         """Realized PnL, or None when nothing was ever sold (liquidation sells never enter the order book)."""
@@ -120,7 +120,7 @@ class TradingPerformanceAnalyzer:
         if not std_dev > MIN_STD_DEV:  # also catches NaN
             return 0.0
         sharpe_ratio = excess_returns.mean() / std_dev * np.sqrt(periods_per_year)
-        return round(sharpe_ratio, 2)
+        return float(sharpe_ratio)
 
     def _calculate_sortino_ratio(self, data: pd.DataFrame) -> float:
         """
@@ -140,10 +140,10 @@ class TradingPerformanceAnalyzer:
         downside_std = downside_returns.std()
 
         if len(downside_returns) == 0 or not downside_std > MIN_STD_DEV:
-            return round(excess_returns.mean() * np.sqrt(periods_per_year), 2)  # Positive ratio if no downside
+            return float(excess_returns.mean() * np.sqrt(periods_per_year))  # Positive ratio if no downside
 
         sortino_ratio = excess_returns.mean() / downside_std * np.sqrt(periods_per_year)
-        return round(sortino_ratio, 2)
+        return float(sortino_ratio)
 
     def get_formatted_orders(self) -> list[list[str | float | None]]:
         """

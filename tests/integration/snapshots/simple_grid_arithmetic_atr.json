@@ -1,10 +1,10 @@
 {
   "metrics": {
-    "roi_pct": -11.32,
+    "roi_pct": -11.320993740000006,
     "max_drawdown_pct": 13.218976191466671,
     "max_drawdown_duration_hours": 45.65,
-    "sharpe_ratio": -36.82,
-    "sortino_ratio": -43.2,
+    "sharpe_ratio": -36.821334934194084,
+    "sortino_ratio": -43.1965310983809,
     "buy_and_hold_return_pct": -10.709504685408303,
     "grid_trading_gains": -16.98148201,
     "unrealized_pnl": 9.58989500676e-07,

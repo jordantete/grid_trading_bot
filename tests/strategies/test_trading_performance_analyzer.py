@@ -1,12 +1,14 @@
 import logging
+import math
 from unittest.mock import Mock
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from grid_trading_bot.core.grid_management.grid_level import GridLevel
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
-from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
+from grid_trading_bot.strategies.trading_performance_analyzer import ANNUAL_RISK_FREE_RATE, TradingPerformanceAnalyzer
 
 
 class TestPerformanceAnalyzer:
@@ -42,6 +44,53 @@ class TestPerformanceAnalyzer:
         analyzer, _, _ = setup_performance_analyzer
         roi = analyzer._calculate_roi(10000, 10000)
         assert roi == 0.0  # Expected 0% ROI when final balance matches initial balance
+
+    def test_roi_is_kept_at_full_precision(self, setup_performance_analyzer):
+        analyzer, _, _ = setup_performance_analyzer
+
+        assert analyzer._calculate_roi(150, 150.1006633) == pytest.approx(0.06710886666667193, rel=1e-12)
+
+    def test_sharpe_is_kept_at_full_precision(self, setup_performance_analyzer):
+        analyzer, config_manager, _ = setup_performance_analyzer
+        config_manager.get_timeframe.return_value = "1d"
+        data = pd.DataFrame(
+            {"account_value": [10000, 10100, 10050, 10200, 10150, 10300]},
+            index=pd.date_range("2024-01-01", periods=6, freq="1D"),
+        )
+        periods = analyzer._periods_per_year()
+        excess = data["account_value"].pct_change() - ANNUAL_RISK_FREE_RATE / periods
+        expected = excess.mean() / excess.std() * np.sqrt(periods)
+
+        sharpe = analyzer._calculate_sharpe_ratio(data)
+
+        assert sharpe == pytest.approx(expected, rel=1e-12)
+        assert sharpe != round(sharpe, 2)
+
+    def test_sortino_is_kept_at_full_precision(self, setup_performance_analyzer):
+        analyzer, config_manager, _ = setup_performance_analyzer
+        config_manager.get_timeframe.return_value = "1d"
+        data = pd.DataFrame(
+            {"account_value": [10000, 10100, 10050, 10200, 10150, 10300]},
+            index=pd.date_range("2024-01-01", periods=6, freq="1D"),
+        )
+        periods = analyzer._periods_per_year()
+        excess = data["account_value"].pct_change() - ANNUAL_RISK_FREE_RATE / periods
+        expected = excess.mean() / excess[excess < 0].std() * np.sqrt(periods)
+
+        sortino = analyzer._calculate_sortino_ratio(data)
+
+        assert sortino == pytest.approx(expected, rel=1e-12)
+        assert sortino != round(sortino, 2)
+
+    def test_a_sortino_without_returns_stays_nan_and_displays_as_before(self, setup_performance_analyzer):
+        analyzer, config_manager, _ = setup_performance_analyzer
+        config_manager.get_timeframe.return_value = "1d"
+        data = pd.DataFrame({"account_value": [10000]}, index=pd.date_range("2024-01-01", periods=1, freq="1D"))
+
+        sortino = analyzer._calculate_sortino_ratio(data)
+
+        assert math.isnan(sortino)
+        assert f"{sortino:.2f}" == "nan"
 
     def test_calculate_drawdown(self, setup_performance_analyzer, mock_account_data):
         analyzer, _, _ = setup_performance_analyzer
