@@ -92,7 +92,7 @@ class GridTradingBot:
             quote_currency: str = self.config_manager.config.pair.quote_currency
             trading_pair = f"{base_currency}/{quote_currency}"
             self.trading_pair = trading_pair
-            strategy_type: StrategyType = self.config_manager.get_strategy_type()
+            strategy_type: StrategyType = self.config_manager.config.grid_strategy.type
             self.logger.info(
                 f"Starting Grid Trading Bot in {self.trading_mode.value} mode with strategy: {strategy_type.value}",
             )

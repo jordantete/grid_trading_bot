@@ -15,7 +15,6 @@ from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
-from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import RunFiles, read_halt_marker
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
@@ -50,11 +49,6 @@ class BotFixtures:
     def config_manager(self, valid_config):
         mock_config = Mock(spec=ConfigManager)
         mock_config.config = _live_config(valid_config)
-        mock_config.get_spacing_type.return_value = "arithmetic"
-        mock_config.get_top_range.return_value = 2000
-        mock_config.get_bottom_range.return_value = 1500
-        mock_config.get_num_grids.return_value = 10
-        mock_config.get_strategy_type.return_value = StrategyType.SIMPLE_GRID
         mock_config.is_persistence_enabled.return_value = False
         return mock_config
 
@@ -506,11 +500,6 @@ class TestStrategyStatePersistenceWiring:
     def config_manager(self, tmp_path, valid_config):
         mock_config = Mock(spec=ConfigManager)
         mock_config.config = _live_config(valid_config)
-        mock_config.get_spacing_type.return_value = "arithmetic"
-        mock_config.get_top_range.return_value = 2000
-        mock_config.get_bottom_range.return_value = 1500
-        mock_config.get_num_grids.return_value = 10
-        mock_config.get_strategy_type.return_value = StrategyType.SIMPLE_GRID
         mock_config.is_persistence_enabled.return_value = True
         mock_config.get_state_db_path.return_value = str(tmp_path / "state.db")
         mock_config.get_checkpoint_interval_seconds.return_value = 60.0

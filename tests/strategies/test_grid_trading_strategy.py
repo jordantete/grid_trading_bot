@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import logging
 from unittest.mock import AsyncMock, Mock
 
@@ -7,6 +8,7 @@ import pytest
 from tests.fakes.config import bot_config_from
 
 from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.config.schema import DynamicSpacingConfig
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
@@ -23,6 +25,14 @@ from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
 from grid_trading_bot.strategies.plotter import Plotter
 from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
+
+
+def _use_dynamic_spacing(strategy, **fields):
+    config = strategy.config_manager.config
+    grid_strategy = dataclasses.replace(
+        config.grid_strategy, dynamic_spacing=DynamicSpacingConfig(enabled=True, **fields)
+    )
+    strategy.config_manager.config = dataclasses.replace(config, grid_strategy=grid_strategy)
 
 
 def _order_manager_regrid(rebuilt=True):
@@ -78,7 +88,6 @@ def strategy_fixture(valid_config):
     config_manager.is_take_profit_enabled.return_value = False
     config_manager.is_stop_loss_enabled.return_value = False
     config_manager.is_trailing_stop_loss_enabled.return_value = False
-    config_manager.is_dynamic_spacing_enabled.return_value = False
     config_manager.get_trailing_atr_multiplier.return_value = 2.5
 
     order_manager.initialize_grid_orders = AsyncMock()
@@ -119,7 +128,6 @@ class TestGridTradingStrategy:
         config_manager.get_take_profit_threshold.return_value = 20000
         config_manager.get_stop_loss_threshold.return_value = 10000
         config_manager.is_trailing_stop_loss_enabled.return_value = False
-        config_manager.is_dynamic_spacing_enabled.return_value = False
 
         def create_strategy(trading_mode: TradingMode = TradingMode.BACKTEST):
             return GridTradingStrategy(
@@ -760,7 +768,7 @@ class TestTrailingStopOrchestration:
         s = strategy_fixture
         s.config_manager.is_trailing_stop_loss_enabled.return_value = True
         s.config_manager.get_trailing_on_trigger.return_value = "regrid"
-        s.config_manager.is_dynamic_spacing_enabled.return_value = True
+        _use_dynamic_spacing(s)
         s.balance_tracker.crypto_balance = 1.0
         s.order_manager.regrid = _order_manager_regrid()
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -919,9 +927,7 @@ class TestStrategyStateExportRestore:
 class TestVolatilityRegrid:
     def _setup_dynamic(self, s):
         s.config_manager.is_trailing_stop_loss_enabled.return_value = False
-        s.config_manager.is_dynamic_spacing_enabled.return_value = True
-        s.config_manager.get_regrid_threshold.return_value = 0.3
-        s.config_manager.get_cooldown_bars.return_value = 5
+        _use_dynamic_spacing(s, regrid_threshold=0.3, cooldown_bars=5)
         s.grid_manager.is_initialized = True
         s.order_manager.regrid = _order_manager_regrid()
 
@@ -1061,7 +1067,6 @@ class TestLiveAtrRefresh:
         s = strategy_fixture
         s.trading_mode = TradingMode.LIVE
         s.config_manager.is_trailing_stop_loss_enabled.return_value = False
-        s.config_manager.is_dynamic_spacing_enabled.return_value = False
 
         refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
 

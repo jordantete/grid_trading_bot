@@ -1003,11 +1003,12 @@ class TestStateRecoveryService:
         service,
         mock_repository,
         config_manager,
+        valid_config,
     ):
         """A checkpoint written after a runtime regrid carries the regridded price_grids.
         Recovery must apply that geometry before matching persisted levels by price, so the
         level states restore onto the runtime grid rather than the config-derived one."""
-        real_gm = _make_real_grid_manager()
+        real_gm = _make_real_grid_manager(valid_config)
         service.grid_manager = real_gm
 
         regridded = [96.0, 98.0, 100.0, 102.0, 104.0]
@@ -1048,10 +1049,11 @@ class TestStateRecoveryService:
         service,
         mock_repository,
         config_manager,
+        valid_config,
     ):
         """A checkpoint written before the geometry-persistence fix (no price_grids/central_price)
         must still recover successfully without applying any geometry."""
-        real_gm = _make_real_grid_manager()
+        real_gm = _make_real_grid_manager(valid_config)
         real_gm.initialize_grids_and_levels()
         original_keys = set(real_gm.grid_levels.keys())
         service.grid_manager = real_gm
@@ -1140,16 +1142,10 @@ class TestStateRecoveryService:
         mock_repository.save_state.assert_not_called()
 
 
-def _make_real_grid_manager() -> GridManager:
+def _make_real_grid_manager(valid_config) -> GridManager:
     """Builds a real arithmetic SIMPLE_GRID GridManager for geometry-restore tests."""
-    cfg = MagicMock()
-    cfg.get_num_grids.return_value = 5
-    cfg.get_atr_spacing_multiplier.return_value = 1.0
-    cfg.get_buy_ratio.return_value = 1.0
-    cfg.get_sell_ratio.return_value = 1.0
-    cfg.get_bottom_range.return_value = 90.0
-    cfg.get_top_range.return_value = 110.0
-    from grid_trading_bot.core.domain.spacing_type import SpacingType
-
-    cfg.get_spacing_type.return_value = SpacingType.ARITHMETIC
+    cfg = config_manager_from(
+        valid_config,
+        {"grid_strategy": {"spacing": "arithmetic", "num_grids": 5, "range": {"top": 110, "bottom": 90}}},
+    )
     return GridManager(cfg, StrategyType.SIMPLE_GRID)

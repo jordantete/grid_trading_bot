@@ -12,7 +12,7 @@ class TestLiveExampleConfig:
         assert cm.is_persistence_enabled() is True
         assert cm.get_checkpoint_interval_seconds() == 60.0
         assert cm.is_trailing_stop_loss_enabled() is True
-        assert cm.is_dynamic_spacing_enabled() is True
+        assert cm.config.grid_strategy.dynamic_spacing.enabled is True
 
     def test_example_declares_maker_taker_fees_and_post_only(self):
         """

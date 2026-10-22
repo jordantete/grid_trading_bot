@@ -284,7 +284,10 @@ def test_the_traceback_of_a_failed_bot_reaches_that_bot_log_file_only(tmp_path, 
         return BotOutcome(0)
 
     with (
-        patch("grid_trading_bot.cli.generate_config_name", side_effect=lambda cm: f"bot_{cm.get_num_grids()}"),
+        patch(
+            "grid_trading_bot.cli.generate_config_name",
+            side_effect=lambda cm: f"bot_{cm.config.grid_strategy.num_grids}",
+        ),
         patch("grid_trading_bot.cli._run_bot", side_effect=fake_run_bot),
     ):
         result = CliRunner().invoke(cli.main, ["run", "--config", paths[0], "--config", paths[1]])

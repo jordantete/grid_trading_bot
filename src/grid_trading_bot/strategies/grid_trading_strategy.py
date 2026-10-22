@@ -115,7 +115,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         Initializes the trading strategy by setting up the grid and levels.
         This method prepares the strategy to be ready for trading.
         """
-        if self.config_manager.is_dynamic_spacing_enabled() and self.config_manager.get_top_range() is None:
+        grid_strategy = self.config_manager.config.grid_strategy
+        if grid_strategy.dynamic_spacing.enabled and grid_strategy.range is None:
             self.logger.info("Dynamic spacing without static range: grid initialization deferred to ATR warm-up.")
             return
         self.grid_manager.initialize_grids_and_levels()
@@ -193,9 +194,10 @@ class GridTradingStrategy(TradingStrategyInterface):
         """
         self.logger.info(f"Starting {'live' if self.trading_mode == TradingMode.LIVE else 'paper'} trading")
 
-        if self.config_manager.is_dynamic_spacing_enabled() and not self.grid_manager.is_initialized:
+        dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
+        if dynamic_spacing.enabled and not self.grid_manager.is_initialized:
             timeframe = self.config_manager.config.trading_settings.timeframe
-            period = self.config_manager.get_dynamic_atr_period()
+            period = dynamic_spacing.atr_period
             candles = await self.exchange_service.fetch_recent_ohlcv(self.trading_pair, timeframe, period * 3)
             atr = ATRCalculator.compute(candles, period)
             current_price = await self.exchange_service.get_current_price(self.trading_pair)
@@ -247,7 +249,7 @@ class GridTradingStrategy(TradingStrategyInterface):
                 # closed candle, not on every ~3s ticker tick.
                 if fresh_candle:
                     dynamic_atr = self._live_atr.get(
-                        self.config_manager.get_dynamic_atr_period(),
+                        self.config_manager.config.grid_strategy.dynamic_spacing.atr_period,
                         math.nan,
                     )
                     await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
@@ -516,7 +518,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         Rebuilds the grid when the ATR regime has drifted beyond the configured threshold,
         subject to a cooldown period between regrids.
         """
-        if not self.config_manager.is_dynamic_spacing_enabled() or not self.grid_manager.is_initialized:
+        dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
+        if not dynamic_spacing.enabled or not self.grid_manager.is_initialized:
             return
         if math.isnan(atr) or atr <= 0:
             return
@@ -526,9 +529,9 @@ class GridTradingStrategy(TradingStrategyInterface):
         if self.grid_manager.atr_grid is None or self.grid_manager.atr_grid <= 0:
             self.grid_manager.atr_grid = atr  # baseline for grids built from a static range
             return
-        if self._bars_since_regrid < self.config_manager.get_cooldown_bars():
+        if self._bars_since_regrid < dynamic_spacing.cooldown_bars:
             return
-        if abs(atr / self.grid_manager.atr_grid - 1) <= self.config_manager.get_regrid_threshold():
+        if abs(atr / self.grid_manager.atr_grid - 1) <= dynamic_spacing.regrid_threshold:
             return
 
         self.logger.info(
@@ -590,11 +593,9 @@ class GridTradingStrategy(TradingStrategyInterface):
                 self.data,
                 self.config_manager.get_trailing_atr_period(),
             )
-        if self.config_manager.is_dynamic_spacing_enabled():
-            self._dynamic_atr_series = ATRCalculator.compute_series(
-                self.data,
-                self.config_manager.get_dynamic_atr_period(),
-            )
+        dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
+        if dynamic_spacing.enabled:
+            self._dynamic_atr_series = ATRCalculator.compute_series(self.data, dynamic_spacing.atr_period)
 
     def _backtest_atr_at(self, series: pd.Series | None, index: int) -> float:
         """Returns the ATR value at the given candle index, or NaN if the series is disabled."""
@@ -612,8 +613,9 @@ class GridTradingStrategy(TradingStrategyInterface):
         periods: set[int] = set()
         if self.config_manager.is_trailing_stop_loss_enabled():
             periods.add(self.config_manager.get_trailing_atr_period())
-        if self.config_manager.is_dynamic_spacing_enabled():
-            periods.add(self.config_manager.get_dynamic_atr_period())
+        dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
+        if dynamic_spacing.enabled:
+            periods.add(dynamic_spacing.atr_period)
         return periods
 
     async def _maybe_refresh_live_atr(self, now: pd.Timestamp) -> bool:
@@ -656,10 +658,11 @@ class GridTradingStrategy(TradingStrategyInterface):
         builds the initial grid from the first available ATR.
         Returns the candle index at which the trading loop may start.
         """
-        if not self.config_manager.is_dynamic_spacing_enabled() or self.grid_manager.is_initialized:
+        dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
+        if not dynamic_spacing.enabled or self.grid_manager.is_initialized:
             return 0
 
-        period = self.config_manager.get_dynamic_atr_period()
+        period = dynamic_spacing.atr_period
         warmup_index = period + 1
         if self.data is None or len(self.data) <= warmup_index:
             raise ValueError("Not enough candles to warm up ATR for dynamic grid initialization.")

@@ -158,6 +158,11 @@ def test_an_empty_period_names_both_dates_as_missing(valid_config):
 
 
 class TestGridSettings:
+    def test_the_range_bounds_are_read(self, valid_config):
+        grid_range = load_config(valid_config).grid_strategy.range
+
+        assert (grid_range.top, grid_range.bottom) == (3100, 2850)
+
     def test_an_unknown_grid_type_is_refused(self, valid_config):
         valid_config["grid_strategy"]["type"] = "invalid_type"
 
@@ -311,6 +316,20 @@ class TestTrailingStopLoss:
 
 
 class TestDynamicSpacing:
+    def test_an_absent_section_loads_with_the_defaults(self, valid_config):
+        assert load_config(valid_config).grid_strategy.dynamic_spacing == DynamicSpacingConfig(
+            enabled=False, atr_period=14, atr_spacing_multiplier=1.0, regrid_threshold=0.3, cooldown_bars=60
+        )
+
+    def test_every_configured_value_is_read(self, valid_config):
+        _enable_dynamic(
+            valid_config, atr_period=10, atr_spacing_multiplier=1.5, regrid_threshold=0.5, cooldown_bars=120
+        )
+
+        assert load_config(valid_config).grid_strategy.dynamic_spacing == DynamicSpacingConfig(
+            enabled=True, atr_period=10, atr_spacing_multiplier=1.5, regrid_threshold=0.5, cooldown_bars=120
+        )
+
     def test_a_valid_section_loads(self, valid_config):
         _enable_dynamic(valid_config, atr_spacing_multiplier=0.5)
 

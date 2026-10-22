@@ -25,11 +25,13 @@ def generate_config_name(config_manager: ConfigManager) -> str:
     """
     trading_pair = f"{config_manager.config.pair.base_currency}_{config_manager.config.pair.quote_currency}"
     trading_mode = config_manager.config.exchange.trading_mode.name
-    grid_strategy_type = config_manager.get_strategy_type().name
-    grid_spacing_type = config_manager.get_spacing_type().name
-    grid_size = config_manager.get_num_grids()
-    grid_top = _bound(config_manager.get_top_range())
-    grid_bottom = _bound(config_manager.get_bottom_range())
+    grid_strategy = config_manager.config.grid_strategy
+    grid_strategy_type = grid_strategy.type.name
+    grid_spacing_type = grid_strategy.spacing.name
+    grid_size = grid_strategy.num_grids
+    grid_range = grid_strategy.range
+    grid_top = _bound(None if grid_range is None else grid_range.top)
+    grid_bottom = _bound(None if grid_range is None else grid_range.bottom)
     start_time = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M")
 
     return (

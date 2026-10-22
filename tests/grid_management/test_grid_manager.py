@@ -1,10 +1,10 @@
+import dataclasses
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from tests.fakes.config import config_manager_from
 
-from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.core.domain.spacing_type import SpacingType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
@@ -13,15 +13,16 @@ from grid_trading_bot.core.order_handling.order import Order, OrderSide
 
 class TestGridManager:
     @pytest.fixture
-    def config_manager(self):
-        mock_config_manager = Mock(spec=ConfigManager)
-        mock_config_manager.get_bottom_range.return_value = 1000
-        mock_config_manager.get_top_range.return_value = 2000
-        mock_config_manager.get_num_grids.return_value = 10
-        mock_config_manager.get_spacing_type.return_value = SpacingType.ARITHMETIC
-        mock_config_manager.get_buy_ratio.return_value = 1.0
-        mock_config_manager.get_sell_ratio.return_value = 1.0
-        return mock_config_manager
+    def make_config_manager(self, valid_config):
+        def make(**grid_strategy):
+            grid = {"spacing": "arithmetic", "num_grids": 10, "range": {"top": 2000, "bottom": 1000}, **grid_strategy}
+            return config_manager_from(valid_config, {"grid_strategy": grid})
+
+        return make
+
+    @pytest.fixture
+    def config_manager(self, make_config_manager):
+        return make_config_manager()
 
     @pytest.fixture
     def grid_manager(self, config_manager):
@@ -101,9 +102,8 @@ class TestGridManager:
         result = grid_manager.get_order_size_for_grid_level(total_balance, current_price, OrderSide.BUY)
         assert result == expected_order_size
 
-    def test_get_order_size_with_buy_ratio(self, config_manager):
-        config_manager.get_buy_ratio.return_value = 0.8
-        grid_manager = GridManager(config_manager, StrategyType.SIMPLE_GRID)
+    def test_get_order_size_with_buy_ratio(self, make_config_manager):
+        grid_manager = GridManager(make_config_manager(buy_ratio=0.8), StrategyType.SIMPLE_GRID)
         grid_manager.initialize_grids_and_levels()
         current_price = 2000
         total_balance = 10000
@@ -111,9 +111,8 @@ class TestGridManager:
         result = grid_manager.get_order_size_for_grid_level(total_balance, current_price, OrderSide.BUY)
         assert result == pytest.approx(base_size * 0.8)
 
-    def test_get_order_size_with_sell_ratio(self, config_manager):
-        config_manager.get_sell_ratio.return_value = 0.5
-        grid_manager = GridManager(config_manager, StrategyType.SIMPLE_GRID)
+    def test_get_order_size_with_sell_ratio(self, make_config_manager):
+        grid_manager = GridManager(make_config_manager(sell_ratio=0.5), StrategyType.SIMPLE_GRID)
         grid_manager.initialize_grids_and_levels()
         current_price = 2000
         total_balance = 10000
@@ -151,10 +150,9 @@ class TestGridManager:
         ],
     )
     def test_get_initial_order_quantity_covers_sell_orders_above_price(
-        self, config_manager, price, fiat, crypto, sell_ratio, expected_quantity
+        self, make_config_manager, price, fiat, crypto, sell_ratio, expected_quantity
     ):
-        config_manager.get_sell_ratio.return_value = sell_ratio
-        grid_manager = GridManager(config_manager, StrategyType.SIMPLE_GRID)
+        grid_manager = GridManager(make_config_manager(sell_ratio=sell_ratio), StrategyType.SIMPLE_GRID)
         grid_manager.initialize_grids_and_levels()
 
         result = grid_manager.get_initial_order_quantity(fiat, crypto, price)
@@ -458,19 +456,16 @@ class TestGridManager:
         np.testing.assert_array_almost_equal(grids, expected_grids, decimal=10)
         assert central_price == 1500
 
-    @pytest.mark.parametrize("missing_bound", ["get_top_range", "get_bottom_range"])
-    def test_a_range_grid_missing_a_bound_is_refused(self, config_manager, missing_bound):
-        getattr(config_manager, missing_bound).return_value = None
+    def test_a_range_grid_without_a_range_is_refused(self, config_manager):
+        grid_strategy = dataclasses.replace(config_manager.config.grid_strategy, range=None)
+        config_manager.config = dataclasses.replace(config_manager.config, grid_strategy=grid_strategy)
         grid_manager = GridManager(config_manager, StrategyType.SIMPLE_GRID)
 
         with pytest.raises(ValueError, match=r"needs grid_strategy\.range"):
             grid_manager.initialize_grids_and_levels()
 
-    def test_calculate_price_grids_and_central_price_geometric(self, config_manager):
-        config_manager.get_spacing_type.return_value = SpacingType.GEOMETRIC
-        config_manager.get_top_range.return_value = 2000
-        config_manager.get_bottom_range.return_value = 1000
-        grid_manager = GridManager(config_manager, StrategyType.HEDGED_GRID)
+    def test_calculate_price_grids_and_central_price_geometric(self, make_config_manager):
+        grid_manager = GridManager(make_config_manager(spacing="geometric"), StrategyType.HEDGED_GRID)
 
         expected_grids = [
             1000,
@@ -490,13 +485,18 @@ class TestGridManager:
 
 
 @pytest.fixture
-def config_manager_simple():
-    mock_config_manager = Mock(spec=ConfigManager)
-    mock_config_manager.get_num_grids.return_value = 5
-    mock_config_manager.get_atr_spacing_multiplier.return_value = 1.0
-    mock_config_manager.get_buy_ratio.return_value = 1.0
-    mock_config_manager.get_sell_ratio.return_value = 1.0
-    return mock_config_manager
+def config_manager_simple(valid_config):
+    return config_manager_from(
+        valid_config,
+        {
+            "grid_strategy": {
+                "spacing": "arithmetic",
+                "num_grids": 5,
+                "range": None,
+                "dynamic_spacing": {"enabled": True, "atr_spacing_multiplier": 1.0},
+            }
+        },
+    )
 
 
 @pytest.fixture

@@ -24,8 +24,8 @@ class GridManager:
         self.central_price: float
         self.sorted_buy_grids: list[float]
         self.sorted_sell_grids: list[float]
-        self.buy_ratio: float = config_manager.get_buy_ratio()
-        self.sell_ratio: float = config_manager.get_sell_ratio()
+        self.buy_ratio: float = config_manager.config.grid_strategy.buy_ratio
+        self.sell_ratio: float = config_manager.config.grid_strategy.sell_ratio
         self.grid_levels: dict[float, GridLevel] = {}
         self._sorted_prices: list[float] = []
         self._price_index_map: dict[float, int] = {}
@@ -96,8 +96,9 @@ class GridManager:
         if math.isnan(atr) or atr <= 0:
             raise ValueError(f"Cannot regrid with non-positive or NaN ATR: {atr}")
 
-        num_grids = self.config_manager.get_num_grids()
-        spacing = self.config_manager.get_atr_spacing_multiplier() * atr
+        grid_strategy = self.config_manager.config.grid_strategy
+        num_grids = grid_strategy.num_grids
+        spacing = grid_strategy.dynamic_spacing.atr_spacing_multiplier * atr
         bottom = center_price - (num_grids - 1) / 2 * spacing
         if bottom <= 0:
             raise ValueError(f"Regrid would produce non-positive bottom price: {bottom}")
@@ -314,15 +315,14 @@ class GridManager:
         """
         self.grid_strategy.rollback_order_placement(grid_level, order_side, has_open_orders, self.logger)
 
-    def _extract_grid_config(self) -> tuple[float | None, float | None, int, SpacingType]:
+    def _extract_grid_config(self) -> tuple[float, float, int, SpacingType]:
         """
         Extracts grid configuration parameters from the configuration manager.
         """
-        bottom_range = self.config_manager.get_bottom_range()
-        top_range = self.config_manager.get_top_range()
-        num_grids = self.config_manager.get_num_grids()
-        spacing_type = self.config_manager.get_spacing_type()
-        return bottom_range, top_range, num_grids, spacing_type
+        grid_strategy = self.config_manager.config.grid_strategy
+        if grid_strategy.range is None:
+            raise ValueError("A static grid needs grid_strategy.range.bottom and top.")
+        return grid_strategy.range.bottom, grid_strategy.range.top, grid_strategy.num_grids, grid_strategy.spacing
 
     def _calculate_price_grids_and_central_price(self) -> tuple[list[float], float]:
         """
@@ -334,8 +334,6 @@ class GridManager:
                 - central_price (float): The central price of the grid.
         """
         bottom_range, top_range, num_grids, spacing_type = self._extract_grid_config()
-        if bottom_range is None or top_range is None:
-            raise ValueError("A static grid needs grid_strategy.range.bottom and top.")
 
         if spacing_type == SpacingType.ARITHMETIC:
             grids = [bottom_range + i * (top_range - bottom_range) / (num_grids - 1) for i in range(num_grids)]

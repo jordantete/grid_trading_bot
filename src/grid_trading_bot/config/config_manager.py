@@ -3,9 +3,6 @@ import logging
 import os
 from typing import Any
 
-from grid_trading_bot.core.domain.spacing_type import SpacingType
-from grid_trading_bot.core.domain.strategy_type import StrategyType
-
 from .exceptions import ConfigFileNotFoundError, ConfigParseError
 from .schema import BotConfig, load_config
 
@@ -40,45 +37,6 @@ class ConfigManager:
         from grid_trading_bot.core.persistence.serializers import compute_config_hash
 
         return compute_config_hash(self.config)
-
-    # --- Grid Accessor Methods ---
-    def get_strategy_type(self) -> StrategyType:
-        return self.config.grid_strategy.type
-
-    def get_spacing_type(self) -> SpacingType:
-        return self.config.grid_strategy.spacing
-
-    def get_num_grids(self) -> int:
-        return self.config.grid_strategy.num_grids
-
-    def get_top_range(self) -> float | None:
-        grid_range = self.config.grid_strategy.range
-        return None if grid_range is None else grid_range.top
-
-    def get_bottom_range(self) -> float | None:
-        grid_range = self.config.grid_strategy.range
-        return None if grid_range is None else grid_range.bottom
-
-    def get_buy_ratio(self) -> float:
-        return self.config.grid_strategy.buy_ratio
-
-    def get_sell_ratio(self) -> float:
-        return self.config.grid_strategy.sell_ratio
-
-    def is_dynamic_spacing_enabled(self) -> bool:
-        return self.config.grid_strategy.dynamic_spacing.enabled
-
-    def get_dynamic_atr_period(self) -> int:
-        return self.config.grid_strategy.dynamic_spacing.atr_period
-
-    def get_atr_spacing_multiplier(self) -> float:
-        return self.config.grid_strategy.dynamic_spacing.atr_spacing_multiplier
-
-    def get_regrid_threshold(self) -> float:
-        return self.config.grid_strategy.dynamic_spacing.regrid_threshold
-
-    def get_cooldown_bars(self) -> int:
-        return self.config.grid_strategy.dynamic_spacing.cooldown_bars
 
     # --- Risk management (Take Profit / Stop Loss) Accessor Methods ---
     def is_take_profit_enabled(self) -> bool:

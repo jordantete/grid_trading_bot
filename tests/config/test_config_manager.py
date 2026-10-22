@@ -6,8 +6,6 @@ import pytest
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.exceptions import ConfigFileNotFoundError, ConfigParseError, ConfigValidationError
 from grid_trading_bot.config.schema import load_config
-from grid_trading_bot.core.domain.spacing_type import SpacingType
-from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
 
 
@@ -56,21 +54,6 @@ class TestConfigManager:
             ConfigManager(str(path))
         assert refused.value.invalid_fields == ["grid_strategy.num_grids"]
 
-    def test_get_spacing_type(self, config_manager):
-        assert config_manager.get_spacing_type() == SpacingType.GEOMETRIC
-
-    def test_get_strategy_type(self, config_manager):
-        assert config_manager.get_strategy_type() == StrategyType.SIMPLE_GRID
-
-    def test_get_num_grids(self, config_manager):
-        assert config_manager.get_num_grids() == 20
-
-    def test_get_top_range(self, config_manager):
-        assert config_manager.get_top_range() == 3100
-
-    def test_get_bottom_range(self, config_manager):
-        assert config_manager.get_bottom_range() == 2850
-
     def test_is_take_profit_enabled(self, config_manager):
         assert not config_manager.is_take_profit_enabled()
 
@@ -109,18 +92,6 @@ class TestConfigManager:
     def test_an_absent_take_profit_or_stop_loss_section_names_its_fields(self, valid_config, section):
         refusal = _refusal(valid_config, lambda raw: raw["risk_management"].pop(section))
         assert refusal.missing_fields == [f"risk_management.{section}.enabled", f"risk_management.{section}.threshold"]
-
-    def test_get_buy_ratio_default(self, config_manager):
-        assert config_manager.get_buy_ratio() == 1.0
-
-    def test_get_sell_ratio_default(self, config_manager):
-        assert config_manager.get_sell_ratio() == 1.0
-
-    def test_get_buy_ratio_custom(self, valid_config):
-        assert _manager(valid_config, lambda raw: raw["grid_strategy"].update(buy_ratio=0.8)).get_buy_ratio() == 0.8
-
-    def test_get_sell_ratio_custom(self, valid_config):
-        assert _manager(valid_config, lambda raw: raw["grid_strategy"].update(sell_ratio=0.5)).get_sell_ratio() == 0.5
 
     @pytest.mark.parametrize(
         ("section", "key", "field"),
@@ -217,33 +188,6 @@ class TestTrailingStopLossAccessors:
         assert config_manager.get_trailing_atr_period() == 20
         assert config_manager.get_trailing_atr_multiplier() == 3.0
         assert config_manager.get_trailing_on_trigger() == "regrid"
-
-
-class TestDynamicSpacingAccessors:
-    def test_defaults_when_section_absent(self, config_manager):
-        assert config_manager.is_dynamic_spacing_enabled() is False
-        assert config_manager.get_dynamic_atr_period() == 14
-        assert config_manager.get_atr_spacing_multiplier() == 1.0
-        assert config_manager.get_regrid_threshold() == 0.3
-        assert config_manager.get_cooldown_bars() == 60
-
-    def test_reads_configured_values(self, valid_config):
-        def edit(raw):
-            raw["grid_strategy"]["spacing"] = "arithmetic"
-            raw["grid_strategy"]["dynamic_spacing"] = {
-                "enabled": True,
-                "atr_period": 10,
-                "atr_spacing_multiplier": 1.5,
-                "regrid_threshold": 0.5,
-                "cooldown_bars": 120,
-            }
-
-        config_manager = _manager(valid_config, edit)
-        assert config_manager.is_dynamic_spacing_enabled() is True
-        assert config_manager.get_dynamic_atr_period() == 10
-        assert config_manager.get_atr_spacing_multiplier() == 1.5
-        assert config_manager.get_regrid_threshold() == 0.5
-        assert config_manager.get_cooldown_bars() == 120
 
 
 class TestPersistenceAccessors:
