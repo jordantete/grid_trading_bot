@@ -9,6 +9,12 @@ from .exceptions import ConfigValidationError
 from .trading_mode import TradingMode
 
 
+def _is_number_in_range(value: Any, low: float, high: float) -> bool:
+    return (
+        isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value) and low <= value <= high
+    )
+
+
 class ConfigValidator:
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -32,6 +38,9 @@ class ConfigValidator:
 
         if "execution" in config:
             invalid_fields += self._validate_execution(config)
+
+        if "persistence" in config:
+            invalid_fields += self._validate_persistence(config)
 
         if missing_fields or invalid_fields:
             raise ConfigValidationError(missing_fields=missing_fields, invalid_fields=invalid_fields)
@@ -305,6 +314,38 @@ class ConfigValidator:
             ):
                 self.logger.error(f"execution.{field} must be a non-negative number.")
                 invalid_fields.append(f"execution.{field}")
+
+        for field, (low, high) in {
+            "reconciliation_interval": (60.0, 3600.0),
+            "reconciliation_balance_tolerance": (0.0, 100.0),
+        }.items():
+            if field in execution and not _is_number_in_range(execution[field], low, high):
+                self.logger.error(f"execution.{field} must be a number between {low} and {high}.")
+                invalid_fields.append(f"execution.{field}")
+
+        return invalid_fields
+
+    def _validate_persistence(self, config: dict[str, Any]) -> list[str]:
+        persistence = config["persistence"]
+        if not isinstance(persistence, dict):
+            self.logger.error("persistence must be an object.")
+            return ["persistence"]
+
+        invalid_fields: list[str] = []
+        if "enabled" in persistence and not isinstance(persistence["enabled"], bool):
+            self.logger.error("persistence.enabled must be a boolean.")
+            invalid_fields.append("persistence.enabled")
+
+        db_path = persistence.get("db_path")
+        if "db_path" in persistence and not (isinstance(db_path, str) and db_path.strip()):
+            self.logger.error("persistence.db_path must be a non-empty string.")
+            invalid_fields.append("persistence.db_path")
+
+        if "checkpoint_interval_seconds" in persistence and not _is_number_in_range(
+            persistence["checkpoint_interval_seconds"], 1.0, 3600.0
+        ):
+            self.logger.error("persistence.checkpoint_interval_seconds must be a number between 1.0 and 3600.0.")
+            invalid_fields.append("persistence.checkpoint_interval_seconds")
 
         return invalid_fields
 

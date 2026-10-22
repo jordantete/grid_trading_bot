@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pytest
 
+from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.config_validator import ConfigValidator
 from grid_trading_bot.config.exceptions import ConfigValidationError
 
@@ -281,3 +284,94 @@ class TestBacktestMarketMinimums:
         with pytest.raises(ConfigValidationError) as excinfo:
             config_validator.validate(valid_config)
         assert f"execution.{field}" in excinfo.value.invalid_fields
+
+
+CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+
+
+class TestIntervalsAndPersistenceValidation:
+    @pytest.mark.parametrize(
+        ("field", "low", "high"),
+        [("reconciliation_interval", 60.0, 3600.0), ("reconciliation_balance_tolerance", 0.0, 100.0)],
+    )
+    def test_the_execution_bounds_are_accepted(self, config_validator, valid_config, field, low, high):
+        for value in (low, high, int(high)):
+            valid_config["execution"] = {field: value}
+            config_validator.validate(valid_config)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("reconciliation_interval", 0),
+            ("reconciliation_interval", 59.9),
+            ("reconciliation_interval", 3600.1),
+            ("reconciliation_interval", "300"),
+            ("reconciliation_interval", True),
+            ("reconciliation_interval", None),
+            ("reconciliation_interval", float("nan")),
+            ("reconciliation_balance_tolerance", -0.01),
+            ("reconciliation_balance_tolerance", 100.5),
+            ("reconciliation_balance_tolerance", False),
+            ("reconciliation_balance_tolerance", float("inf")),
+        ],
+    )
+    def test_an_execution_value_out_of_its_range_is_rejected(self, config_validator, valid_config, field, value):
+        valid_config["execution"] = {field: value}
+
+        with pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+
+        assert f"execution.{field}" in excinfo.value.invalid_fields
+
+    def test_a_full_persistence_section_is_accepted(self, config_validator, valid_config):
+        for interval in (1, 1.0, 60, 3600.0):
+            valid_config["persistence"] = {
+                "enabled": False,
+                "db_path": "data/state.db",
+                "checkpoint_interval_seconds": interval,
+            }
+            config_validator.validate(valid_config)
+
+    def test_an_empty_persistence_section_is_accepted(self, config_validator, valid_config):
+        valid_config["persistence"] = {}
+        config_validator.validate(valid_config)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("enabled", "false"),
+            ("enabled", 1),
+            ("enabled", 0),
+            ("enabled", None),
+            ("db_path", ""),
+            ("db_path", "   "),
+            ("db_path", 5),
+            ("db_path", None),
+            ("checkpoint_interval_seconds", 0),
+            ("checkpoint_interval_seconds", 0.5),
+            ("checkpoint_interval_seconds", 3601),
+            ("checkpoint_interval_seconds", True),
+            ("checkpoint_interval_seconds", "60"),
+            ("checkpoint_interval_seconds", None),
+            ("checkpoint_interval_seconds", float("inf")),
+        ],
+    )
+    def test_a_persistence_value_of_the_wrong_kind_is_rejected(self, config_validator, valid_config, field, value):
+        valid_config["persistence"] = {field: value}
+
+        with pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+
+        assert excinfo.value.invalid_fields == [f"persistence.{field}"]
+
+    def test_a_persistence_section_that_is_not_an_object_is_rejected(self, config_validator, valid_config):
+        valid_config["persistence"] = "on"
+
+        with pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+
+        assert excinfo.value.invalid_fields == ["persistence"]
+
+    @pytest.mark.parametrize("path", sorted(CONFIG_DIR.glob("*.json")), ids=lambda path: path.name)
+    def test_every_shipped_config_validates(self, path):
+        ConfigManager(str(path), ConfigValidator())
