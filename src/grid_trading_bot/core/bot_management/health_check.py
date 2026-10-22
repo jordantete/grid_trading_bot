@@ -178,6 +178,14 @@ class HealthCheck:
             if self._should_send_alert("bot_health:ticker_feed"):
                 alerts.append("Ticker price feed is stale (no accepted price for over 120 seconds).")
 
+        if not health_status.get("background_loops", True):
+            self.logger.warning("A background loop is failing or has stopped.")
+            if self._should_send_alert("bot_health:background_loops"):
+                alerts.append(
+                    "A background loop (order tracking, reconciliation or periodic checkpoint) is failing or has "
+                    "stopped."
+                )
+
         if alerts:
             self.logger.info(f"Bot health alerts generated: {alerts}")
             await self.notification_handler.async_send_notification(

@@ -287,6 +287,21 @@ class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
         call_args = self.notification_handler.async_send_notification.await_args[1]
         assert "Ticker price feed is stale" in call_args["alert_details"]
 
+    async def test_alert_sent_when_a_background_loop_fails(self):
+        sent = []
+
+        async def record(notification_type, **details):
+            sent.append((notification_type, details))
+
+        self.notification_handler.async_send_notification = record
+        health_status = {"strategy": True, "exchange_status": "ok", "background_loops": False, "overall": False}
+
+        await self.health_check._check_and_alert_bot_health(health_status)
+
+        assert len(sent) == 1
+        assert sent[0][0] is NotificationType.HEALTH_CHECK_ALERT
+        assert "background loop" in sent[0][1]["alert_details"]
+
     async def test_no_alert_when_ticker_feed_key_absent(self):
         """Backtest/legacy health dicts have no 'ticker_feed' key and must not alert."""
         health_status = {"strategy": True, "exchange_status": "ok"}

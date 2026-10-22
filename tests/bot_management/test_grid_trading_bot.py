@@ -242,6 +242,83 @@ class TestGridTradingBot(BotFixtures):
         assert health_status["ticker_feed"] is True
         assert health_status["overall"] is True
 
+    @pytest.mark.asyncio
+    async def test_health_status_reports_background_loops_ok_before_they_start(self, bot):
+        bot._check_strategy_health = AsyncMock(return_value=True)
+        bot._get_exchange_status = AsyncMock(return_value="ok")
+
+        health_status = await bot.get_bot_health_status()
+
+        assert health_status["background_loops"] is True
+        assert health_status["overall"] is True
+
+    @pytest.mark.asyncio
+    async def test_health_status_flags_a_failing_background_loop(self, bot):
+        bot._check_strategy_health = AsyncMock(return_value=True)
+        bot._get_exchange_status = AsyncMock(return_value="ok")
+        tracker = bot.order_status_tracker
+
+        async def broken_poll():
+            raise RuntimeError("poll broken")
+
+        tracker._process_open_orders = broken_poll
+        tracker.polling_interval = 10.0
+        tracker.start_tracking()
+        for _ in range(200):
+            if tracker.loop_state is not None and tracker.loop_state.consecutive_failures == 1:
+                break
+            await asyncio.sleep(0.005)
+
+        health_status = await bot.get_bot_health_status()
+        await tracker.stop_tracking()
+
+        assert health_status["background_loops"] is False
+        assert health_status["overall"] is False
+
+    @pytest.mark.asyncio
+    async def test_health_status_flags_a_background_loop_that_gave_up(self, bot):
+        bot._check_strategy_health = AsyncMock(return_value=True)
+        bot._get_exchange_status = AsyncMock(return_value="ok")
+        tracker = bot.order_status_tracker
+
+        async def broken_poll():
+            raise RuntimeError("poll broken")
+
+        tracker._process_open_orders = broken_poll
+        tracker.polling_interval = 0.01
+        tracker.start_tracking()
+        await asyncio.wait_for(tracker._monitoring_task, timeout=1)
+
+        health_status = await bot.get_bot_health_status()
+        await tracker.stop_tracking()
+
+        assert not tracker.loop_state.running
+        assert health_status["background_loops"] is False
+
+    @pytest.mark.asyncio
+    async def test_health_status_ignores_background_loops_stopped_by_a_clean_shutdown(self, bot):
+        bot._check_strategy_health = AsyncMock(return_value=True)
+        bot._get_exchange_status = AsyncMock(return_value="ok")
+        tracker = bot.order_status_tracker
+        reconciliation = bot.reconciliation_service
+        tracker.polling_interval = 10.0
+        reconciliation.reconciliation_interval = 10.0
+        tracker.start_tracking()
+        reconciliation.start()
+        for _ in range(200):
+            if tracker.loop_state is not None and reconciliation.loop_state is not None:
+                break
+            await asyncio.sleep(0.005)
+
+        await tracker.stop_tracking()
+        await reconciliation.stop()
+        health_status = await bot.get_bot_health_status()
+
+        assert not tracker.loop_state.running
+        assert not reconciliation.loop_state.running
+        assert health_status["background_loops"] is True
+        assert health_status["overall"] is True
+
     @patch("grid_trading_bot.core.bot_management.grid_trading_bot.GridTradingBot._generate_and_log_performance")
     @pytest.mark.asyncio
     async def test_generate_and_log_performance_direct(self, mock_performance, bot):

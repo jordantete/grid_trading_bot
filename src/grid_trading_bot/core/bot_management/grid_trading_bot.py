@@ -581,6 +581,7 @@ class GridTradingBot:
 
         if self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}:
             health_status["ticker_feed"] = self._check_ticker_feed_health()
+            health_status["background_loops"] = self._check_background_loops()
 
         health_status["overall"] = all(health_status.values())
         return health_status
@@ -600,6 +601,20 @@ class GridTradingBot:
         if last_update is None:
             return True  # feed not started yet
         return (time.monotonic() - last_update) < self.TICKER_FEED_STALENESS_THRESHOLD
+
+    def _check_background_loops(self) -> bool:
+        """False when a started background loop ended without being cancelled or is in a failure streak; a loop
+        cancelled by a shutdown is ignored."""
+        states = [
+            self.order_status_tracker.loop_state,
+            self.reconciliation_service.loop_state if self.reconciliation_service else None,
+            self.state_persistence_service.checkpoint_loop_state if self.state_persistence_service else None,
+        ]
+        return all(
+            state.running and state.consecutive_failures == 0
+            for state in states
+            if state is not None and not state.cancelled
+        )
 
     def get_balances(self) -> dict[str, float]:
         return {

@@ -57,6 +57,19 @@ def test_a_lost_feed_keeps_the_orders_and_exits_75(tmp_path):
     assert calls.count("close") == 1
 
 
+def test_three_failed_polls_in_a_row_stop_the_bot_with_its_orders_kept_and_exit_1(tmp_path):
+    run = start(tmp_path, "loop", env={"TRACKER_POLLS_BEFORE_FAILING": "3"})
+    run.wait_for_grid()
+
+    assert run.finish() == 1, run.log.read_text()
+    calls = methods(run)
+    assert "cancel_order" not in calls
+    assert calls.count("close") == 1
+    assert saved_open_order_ids(tmp_path) == run.limit_order_ids()
+    assert halt_markers(tmp_path) == []
+    assert "Order tracking failed 3 times in a row" in run.log.read_text()
+
+
 def test_halted_config_refuses_and_resume_restarts_it(tmp_path):
     first = start(tmp_path, "halt")
     first.wait_for_grid()

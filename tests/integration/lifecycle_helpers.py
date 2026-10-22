@@ -70,21 +70,22 @@ def _merged(base: dict, overrides: dict) -> dict:
 
 
 class Run:
-    def __init__(self, tmp_path, name, args, stdin=None):
+    def __init__(self, tmp_path, name, args, stdin=None, env=None):
         self.calls = tmp_path / f"{name}_calls.jsonl"
         self.log = tmp_path / f"{name}.log"
-        env = {
+        process_env = {
             **os.environ,
             "PYTHONPATH": os.pathsep.join([str(REPO_ROOT / "src"), str(REPO_ROOT)]),
             "EXCHANGE_API_KEY": "test",
             "EXCHANGE_SECRET_KEY": "test",
             "APPRISE_NOTIFICATION_URLS": "",
+            **(env or {}),
         }
         with self.log.open("w") as log:
             self.process = subprocess.Popen(  # noqa: S603
                 [sys.executable, str(HARNESS), str(exchange_path(tmp_path)), str(self.calls), *args],
                 cwd=tmp_path,
-                env=env,
+                env=process_env,
                 stdin=stdin if stdin is not None else subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -137,14 +138,14 @@ def exchange_path(tmp_path):
     return tmp_path / "exchange.json"
 
 
-def start(tmp_path, name, scenario=None, stdin=None, overrides=None):
+def start(tmp_path, name, scenario=None, stdin=None, overrides=None, env=None):
     """Starts a bot on the test's exchange and config, creating both on the first start of the test."""
     if not exchange_path(tmp_path).exists():
         ExchangeState.create(exchange_path(tmp_path), **(scenario or {}))
     config_path = tmp_path / "config.json"
     if not config_path.exists():
         config_path.write_text(json.dumps(_merged(base_config(tmp_path), overrides or {})))
-    return Run(tmp_path, name, ["run", "--config", str(config_path), "--no-plot"], stdin=stdin)
+    return Run(tmp_path, name, ["run", "--config", str(config_path), "--no-plot"], stdin=stdin, env=env)
 
 
 def methods(run):
