@@ -187,6 +187,8 @@ class GridTradingBot:
                 order_execution_strategy=order_execution_strategy,
                 order_update_handler=self.order_manager,
                 polling_interval=self.config_manager.get_order_polling_interval(),
+                event_bus=self.event_bus,
+                notify=self.notification_handler.async_send_notification,
             )
 
             order_simulator = OrderSimulator(

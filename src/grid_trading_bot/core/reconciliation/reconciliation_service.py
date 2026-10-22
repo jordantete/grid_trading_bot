@@ -7,6 +7,7 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.bot_management.stop_request import StopRequest
+from grid_trading_bot.core.bot_management.supervised_loop import LoopState, SupervisedLoop
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_book import OrderBook
 from grid_trading_bot.core.order_handling.placement_journal import PlacementJournal
@@ -54,6 +55,7 @@ class ReconciliationService:
 
         self._min_amount: float | None = None
         self._monitoring_task: asyncio.Task[None] | None = None
+        self._loop: SupervisedLoop | None = None
         self._last_alert_times: dict[str, datetime] = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -84,14 +86,23 @@ class ReconciliationService:
         self.event_bus.unsubscribe(Events.STOP_BOT, self._handle_stop)
 
     async def _reconciliation_loop(self) -> None:
+        self._loop = SupervisedLoop(
+            "Reconciliation",
+            self.reconciliation_interval,
+            self._run_reconciliation,
+            run_first=False,
+            event_bus=self.event_bus,
+            notify=self.notification_handler.async_send_notification,
+        )
         try:
-            while True:
-                await asyncio.sleep(self.reconciliation_interval)
-                await self._run_reconciliation()
+            await self._loop.run()
         except asyncio.CancelledError:
             self.logger.info("ReconciliationService loop cancelled.")
-        except Exception as e:
-            self.logger.error(f"Unexpected error in ReconciliationService: {e}", exc_info=True)
+
+    @property
+    def loop_state(self) -> LoopState | None:
+        """The reconciliation loop's state, None before it first started."""
+        return self._loop.state if self._loop is not None else None
 
     async def _run_reconciliation(self) -> None:
         self.logger.info("Starting reconciliation cycle.")

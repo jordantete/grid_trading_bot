@@ -2,6 +2,8 @@ import asyncio
 import logging
 from typing import Any
 
+from grid_trading_bot.core.bot_management.event_bus import EventBus
+from grid_trading_bot.core.bot_management.supervised_loop import LoopState, Notify, SupervisedLoop
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
@@ -30,6 +32,9 @@ class OrderStatusTracker:
         order_execution_strategy: OrderExecutionStrategyInterface,
         order_update_handler: OrderUpdateHandler,
         polling_interval: float = 15.0,
+        *,
+        event_bus: EventBus | None = None,
+        notify: Notify | None = None,
     ):
         """
         Initializes the OrderStatusTracker.
@@ -39,30 +44,45 @@ class OrderStatusTracker:
             order_execution_strategy: Strategy for querying order statuses from the exchange.
             order_update_handler: Receives the exchange's view of every order that filled or ended.
             polling_interval: Time interval (in seconds) between status checks.
+            event_bus: Receives the CRASH stop after too many failed polls in a row.
+            notify: Sends the loop's failure and recovery alerts.
         """
         self.order_book = order_book
         self.order_execution_strategy = order_execution_strategy
         self.order_update_handler = order_update_handler
         self.polling_interval = polling_interval
+        self.event_bus = event_bus
+        self.notify = notify
+        self._loop: SupervisedLoop | None = None
         self._monitoring_task: asyncio.Task[None] | None = None
         self._active_tasks: set[asyncio.Task[Any]] = set()
         self.logger = logging.getLogger(self.__class__.__name__)
 
     async def _track_open_order_statuses(self) -> None:
         """
-        Polls the open orders every `polling_interval` seconds, one poll task at a time.
+        Polls the open orders every `polling_interval` seconds, one poll task at a time, under a supervised loop.
         """
+        self._loop = SupervisedLoop(
+            "Order tracking",
+            self.polling_interval,
+            self._poll,
+            run_first=True,
+            event_bus=self.event_bus,
+            notify=self.notify,
+        )
         try:
-            while True:
-                await self._create_task(self._process_open_orders())
-                await asyncio.sleep(self.polling_interval)
-
+            await self._loop.run()
         except asyncio.CancelledError:
             self.logger.info("OrderStatusTracker monitoring task was cancelled.")
             await self._cancel_active_tasks()
 
-        except Exception as error:
-            self.logger.error(f"Unexpected error in OrderStatusTracker: {error}")
+    async def _poll(self) -> None:
+        await self._create_task(self._process_open_orders())
+
+    @property
+    def loop_state(self) -> LoopState | None:
+        """The polling loop's state, None before the tracking first started."""
+        return self._loop.state if self._loop is not None else None
 
     async def _process_open_orders(self) -> None:
         """

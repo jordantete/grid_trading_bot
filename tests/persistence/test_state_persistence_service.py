@@ -313,6 +313,26 @@ class TestPeriodicCheckpoints:
         assert service._periodic_task is task
         await service.cleanup()
 
+    async def test_an_exception_escaping_the_checkpoint_does_not_end_the_loop(self, setup_persistence_service):
+        service, *_ = setup_persistence_service
+        calls = []
+
+        async def checkpoint():
+            calls.append(len(calls))
+            if len(calls) == 1:
+                raise RuntimeError("lock broken")
+
+        service.start_periodic_checkpoints(interval_seconds=0.01, checkpoint=checkpoint)
+        for _ in range(200):
+            if len(calls) >= 3:
+                break
+            await asyncio.sleep(0.005)
+
+        assert len(calls) >= 3
+        assert not service._periodic_task.done()
+        assert service.checkpoint_loop_state.consecutive_failures == 0
+        await service.cleanup()
+
 
 def _entry() -> PendingPlacement:
     return PendingPlacement(

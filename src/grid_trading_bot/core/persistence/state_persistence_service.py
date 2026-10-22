@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
+import contextlib
 import inspect
 import json
 import logging
@@ -9,6 +10,7 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
+from grid_trading_bot.core.bot_management.supervised_loop import LoopState, SupervisedLoop
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.order_book import OrderBook
@@ -59,6 +61,7 @@ class StatePersistenceService:
         self._consecutive_failures = 0
         self._halt_task: asyncio.Task | None = None
         self._periodic_task: asyncio.Task | None = None
+        self._checkpoint_loop: SupervisedLoop | None = None
         self._alert_tasks: set[asyncio.Task] = set()
         self._last_alert: asyncio.Task | None = None
 
@@ -162,20 +165,28 @@ class StatePersistenceService:
 
     def start_periodic_checkpoints(self, interval_seconds: float, checkpoint: Callable[[], Awaitable[None]]) -> None:
         """Calls `checkpoint` on every interval, so state that changes between order operations (the trailing-stop
-        ratchet) is saved too."""
+        ratchet) is saved too. A failed write is counted by `save`; an exception that escapes `checkpoint` is handled
+        by the supervised loop."""
         if self._periodic_task and not self._periodic_task.done():
             return
-        self._periodic_task = asyncio.create_task(self._periodic_checkpoint_loop(interval_seconds, checkpoint))
+        self._checkpoint_loop = SupervisedLoop(
+            "Periodic checkpoint",
+            interval_seconds,
+            checkpoint,
+            run_first=False,
+            event_bus=self.event_bus,
+            notify=self.notification_handler.async_send_notification,
+        )
+        self._periodic_task = asyncio.create_task(self._periodic_checkpoint_loop(self._checkpoint_loop))
 
-    async def _periodic_checkpoint_loop(
-        self, interval_seconds: float, checkpoint: Callable[[], Awaitable[None]]
-    ) -> None:
-        try:
-            while True:
-                await asyncio.sleep(interval_seconds)
-                await checkpoint()
-        except asyncio.CancelledError:
-            pass
+    async def _periodic_checkpoint_loop(self, loop: SupervisedLoop) -> None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await loop.run()
+
+    @property
+    def checkpoint_loop_state(self) -> LoopState | None:
+        """The periodic checkpoint loop's state, None before it first started."""
+        return self._checkpoint_loop.state if self._checkpoint_loop is not None else None
 
     async def cleanup(self) -> None:
         if self._periodic_task:

@@ -282,6 +282,30 @@ class TestLifecycle:
         # Cleanup
         service._monitoring_task = None
 
+    @pytest.mark.asyncio
+    async def test_an_unexpected_error_in_a_cycle_does_not_end_the_loop(self, setup_reconciliation_service):
+        service, *_ = setup_reconciliation_service
+        service.reconciliation_interval = 0.01
+        cycles = []
+
+        async def flaky_cycle():
+            cycles.append(len(cycles))
+            if len(cycles) == 1:
+                raise RuntimeError("audit broken")
+
+        service._run_reconciliation = flaky_cycle
+
+        service.start()
+        for _ in range(200):
+            if len(cycles) >= 3:
+                break
+            await asyncio.sleep(0.005)
+
+        assert len(cycles) >= 3
+        assert not service._monitoring_task.done()
+        assert service.loop_state.consecutive_failures == 0
+        await service.stop()
+
 
 class TestAlertCooldown:
     @pytest.mark.asyncio

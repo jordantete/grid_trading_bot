@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from tests.fakes.trading_stack import ARMING_PRICE, build_stack, reserved_matches_open_orders
 
+from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
+from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
+from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
@@ -29,6 +32,14 @@ def _balances(stack):
 
 def _messages(caplog, level):
     return [r.getMessage() for r in caplog.records if r.name == TRACKER_LOGGER and r.levelno == level]
+
+
+async def _until(condition, timeout=1.0):
+    async def wait():
+        while not condition():
+            await asyncio.sleep(0.005)
+
+    await asyncio.wait_for(wait(), timeout)
 
 
 class TestStatusHandling:
@@ -227,16 +238,49 @@ class TestTrackingLifecycle:
         assert _messages(caplog, logging.INFO) == ["OrderStatusTracker monitoring task was cancelled."]
         assert _messages(caplog, logging.ERROR) == []
 
-    async def test_track_open_order_statuses_handles_unexpected_error(self, setup_tracker, caplog):
+    async def test_an_unexpected_error_in_a_poll_no_longer_ends_the_tracking(self, setup_tracker):
         tracker, order_book, _, _ = setup_tracker
-        order_book.get_open_orders.side_effect = Exception("Unexpected error")
+        polls = []
 
-        monitoring_task = asyncio.create_task(tracker._track_open_order_statuses())
-        await asyncio.wait_for(monitoring_task, timeout=1)
+        def failing_once():
+            polls.append(len(polls))
+            if len(polls) == 1:
+                raise Exception("Unexpected error")
+            return []
 
-        assert monitoring_task.done()
-        assert not monitoring_task.cancelled()
-        assert _messages(caplog, logging.ERROR) == ["Unexpected error in OrderStatusTracker: Unexpected error"]
+        order_book.get_open_orders.side_effect = failing_once
+        tracker.polling_interval = 0.01
+
+        tracker.start_tracking()
+        await _until(lambda: len(polls) >= 3)
+
+        assert not tracker._monitoring_task.done()
+        assert tracker.loop_state.consecutive_failures == 0
+        await tracker.stop_tracking()
+
+    async def test_three_failed_polls_in_a_row_request_a_crash_stop(self):
+        order_book = Mock()
+        order_book.get_open_orders.side_effect = Exception("book broken")
+        stops = []
+        sent = []
+        bus = EventBus()
+
+        async def on_stop(request):
+            stops.append(request)
+
+        async def notify(notification_type, **_details):
+            sent.append(notification_type)
+
+        bus.subscribe(Events.STOP_BOT, on_stop)
+        tracker = OrderStatusTracker(order_book, Mock(), Mock(), polling_interval=0.01, event_bus=bus, notify=notify)
+
+        tracker.start_tracking()
+        await asyncio.wait_for(tracker._monitoring_task, timeout=1)
+        await _until(lambda: stops)
+
+        assert stops == [StopRequest(StopKind.CRASH, "Order tracking failed 3 times in a row: Exception: book broken")]
+        assert sent == [NotificationType.ERROR_OCCURRED]
+        await tracker.stop_tracking()
 
     async def test_cancel_active_tasks(self, setup_tracker):
         tracker, _, _, _ = setup_tracker
