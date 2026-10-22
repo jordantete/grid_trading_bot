@@ -87,9 +87,9 @@ class GridTradingBot:
             self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop_bot_event)
             self.save_performance_results_path = save_performance_results_path
             self.no_plot = no_plot
-            self.trading_mode: TradingMode = self.config_manager.get_trading_mode()
-            base_currency: str = self.config_manager.get_base_currency()
-            quote_currency: str = self.config_manager.get_quote_currency()
+            self.trading_mode: TradingMode = self.config_manager.config.exchange.trading_mode
+            base_currency: str = self.config_manager.config.pair.base_currency
+            quote_currency: str = self.config_manager.config.pair.quote_currency
             trading_pair = f"{base_currency}/{quote_currency}"
             self.trading_pair = trading_pair
             strategy_type: StrategyType = self.config_manager.get_strategy_type()
@@ -352,7 +352,7 @@ class GridTradingBot:
                 )
                 return False
         await self.balance_tracker.setup_balances(
-            initial_balance=self.config_manager.get_initial_balance(),
+            initial_balance=self.config_manager.config.trading_settings.initial_balance,
             initial_crypto_balance=0.0,
             exchange_service=self.exchange_service,
         )
@@ -416,7 +416,7 @@ class GridTradingBot:
         The base currency free on the exchange, which a liquidation the exchange refused falls back on. Raises
         DataFetchError when the exchange does not report it.
         """
-        base = self.config_manager.get_base_currency()
+        base = self.config_manager.config.pair.base_currency
         free = (await self.exchange_service.get_balance() or {}).get("free") or {}
         if free.get(base) is None:
             raise DataFetchError(f"The exchange reported no free {base} balance.")

@@ -1,9 +1,10 @@
 from decimal import Decimal
 import logging
 import random
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
+from tests.fakes.config import config_manager_from
 
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
@@ -45,20 +46,18 @@ def _make_order(
     )
 
 
-def _fees(rate: float = 0.001) -> FeeCalculator:
-    config = Mock()
-    config.get_trading_fee.return_value = rate
-    config.get_maker_fee.return_value = rate
-    config.get_taker_fee.return_value = rate
-    config.get_base_currency.return_value = "BTC"
-    config.get_quote_currency.return_value = "USDT"
+def _fees(valid_config: dict, rate: float = 0.001) -> FeeCalculator:
+    config = config_manager_from(
+        valid_config,
+        {"exchange": {"trading_fee": rate}, "pair": {"base_currency": "BTC", "quote_currency": "USDT"}},
+    )
     return FeeCalculator(config)
 
 
 class TestBalanceTracker:
     @pytest.fixture
-    def setup_balance_tracker(self):
-        fee_calculator = _fees()
+    def setup_balance_tracker(self, valid_config):
+        fee_calculator = _fees(valid_config)
         balance_tracker = BalanceTracker(
             fee_calculator=fee_calculator,
             trading_mode=TradingMode.LIVE,
@@ -183,11 +182,13 @@ class TestBalanceTracker:
         assert balance_tracker.balance == pytest.approx(1000 + 200 - 0.2)
 
     @pytest.mark.asyncio
-    async def test_update_balance_on_order_completion_uses_average_fill_price(self, setup_balance_tracker):
+    async def test_update_balance_on_order_completion_uses_average_fill_price(
+        self, setup_balance_tracker, valid_config
+    ):
         """Slipped fills must hit the balances at the actual fill price (order.average),
         not the requested price — otherwise backtest_slippage has zero P&L effect."""
         balance_tracker, _ = setup_balance_tracker
-        balance_tracker.fee_calculator = _fees(rate=0.0)
+        balance_tracker.fee_calculator = _fees(valid_config, rate=0.0)
         balance_tracker._balance = Decimal("1000")
         balance_tracker._crypto_balance = Decimal("5")
 
@@ -362,8 +363,8 @@ class TestBalanceTracker:
 
 
 @pytest.fixture
-def balance_tracker():
-    fee_calculator = _fees()
+def balance_tracker(valid_config):
+    fee_calculator = _fees(valid_config)
     bt = BalanceTracker(
         fee_calculator=fee_calculator,
         trading_mode=TradingMode.LIVE,
@@ -533,11 +534,18 @@ class TestBalanceTrackerLiquidityAwareFees:
     TAKER_RATE = 0.005
 
     @pytest.fixture
-    def tracker(self):
-        config = Mock()
-        config.get_trading_fee.return_value = self.MAKER_RATE
-        config.get_maker_fee.return_value = self.MAKER_RATE
-        config.get_taker_fee.return_value = self.TAKER_RATE
+    def tracker(self, valid_config):
+        config = config_manager_from(
+            valid_config,
+            {
+                "exchange": {
+                    "trading_fee": self.MAKER_RATE,
+                    "maker_fee": self.MAKER_RATE,
+                    "taker_fee": self.TAKER_RATE,
+                },
+                "pair": {"base_currency": "BTC", "quote_currency": "USDT"},
+            },
+        )
         bt = BalanceTracker(
             fee_calculator=FeeCalculator(config),
             trading_mode=TradingMode.LIVE,

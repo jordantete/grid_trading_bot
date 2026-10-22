@@ -8,7 +8,6 @@ from grid_trading_bot.core.domain.strategy_type import StrategyType
 
 from .exceptions import ConfigFileNotFoundError, ConfigParseError
 from .schema import BotConfig, load_config
-from .trading_mode import TradingMode
 
 
 class ConfigManager:
@@ -41,49 +40,6 @@ class ConfigManager:
         from grid_trading_bot.core.persistence.serializers import compute_config_hash
 
         return compute_config_hash(self.config)
-
-    # --- General Accessor Methods ---
-    def get_exchange_name(self) -> str:
-        return self.config.exchange.name
-
-    def get_trading_fee(self) -> float:
-        return self.config.exchange.trading_fee
-
-    def get_maker_fee(self) -> float:
-        """Fee charged on liquidity-adding fills, defaulting to the flat `trading_fee`."""
-        return self.config.exchange.maker_fee
-
-    def get_taker_fee(self) -> float:
-        """Fee charged on liquidity-taking fills, defaulting to the flat `trading_fee`."""
-        return self.config.exchange.taker_fee
-
-    def get_post_only(self) -> bool:
-        """Whether limit orders must be posted as maker-only (rejected instead of crossing)."""
-        return self.config.exchange.post_only
-
-    def get_trading_mode(self) -> TradingMode:
-        return self.config.exchange.trading_mode
-
-    def get_base_currency(self) -> str:
-        return self.config.pair.base_currency
-
-    def get_quote_currency(self) -> str:
-        return self.config.pair.quote_currency
-
-    def get_timeframe(self) -> str:
-        return self.config.trading_settings.timeframe
-
-    def get_start_date(self) -> str:
-        return self.config.trading_settings.period.start_date
-
-    def get_end_date(self) -> str:
-        return self.config.trading_settings.period.end_date
-
-    def get_initial_balance(self) -> float:
-        return self.config.trading_settings.initial_balance
-
-    def get_historical_data_file(self) -> str | None:
-        return self.config.trading_settings.historical_data_file
 
     # --- Grid Accessor Methods ---
     def get_strategy_type(self) -> StrategyType:
@@ -206,10 +162,8 @@ class ConfigManager:
     def get_state_db_path(self) -> str:
         if self.config.persistence.db_path is not None:
             return self.config.persistence.db_path
-        base = self.get_base_currency() or "BASE"
-        quote = self.get_quote_currency() or "QUOTE"
-        config_hash_short = self.get_config_hash()[:8]
-        return f"data/{base}_{quote}/state_{config_hash_short}.db"
+        pair = self.config.pair
+        return f"data/{pair.base_currency}_{pair.quote_currency}/state_{self.get_config_hash()[:8]}.db"
 
     def get_checkpoint_interval_seconds(self) -> float:
         return self.config.persistence.checkpoint_interval_seconds

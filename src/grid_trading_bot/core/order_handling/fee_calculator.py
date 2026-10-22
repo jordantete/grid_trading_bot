@@ -27,11 +27,11 @@ class FeeCalculator:
     ):
         self.config_manager = config_manager
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.trading_fee: float = self.config_manager.get_trading_fee()
-        self.maker_fee: float = self.config_manager.get_maker_fee()
-        self.taker_fee: float = self.config_manager.get_taker_fee()
-        self.base_currency = self.config_manager.get_base_currency()
-        self.quote_currency = self.config_manager.get_quote_currency()
+        self.trading_fee: float = self.config_manager.config.exchange.trading_fee
+        self.maker_fee: float = self.config_manager.config.exchange.maker_fee
+        self.taker_fee: float = self.config_manager.config.exchange.taker_fee
+        self.base_currency = self.config_manager.config.pair.base_currency
+        self.quote_currency = self.config_manager.config.pair.quote_currency
 
     def _rate(self, liquidity: Liquidity) -> float:
         return self.maker_fee if liquidity == Liquidity.MAKER else self.taker_fee

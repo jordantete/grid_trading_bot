@@ -3,9 +3,8 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from tests.fakes.config import bot_config_from, config_manager_from
 
-from grid_trading_bot.config.schema import load_config
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
@@ -108,17 +107,8 @@ def _make_saved_balance(
 
 
 @pytest.fixture
-def mock_config_manager(valid_config):
-    from grid_trading_bot.config.trading_mode import TradingMode
-
-    cm = MagicMock()
-    cm.config = load_config(valid_config)
-    cm.get_base_currency.return_value = "ETH"
-    cm.get_quote_currency.return_value = "USDT"
-    cm.get_exchange_name.return_value = "binance"
-    cm.get_trading_mode.return_value = TradingMode.BACKTEST
-    cm.get_timeframe.return_value = "1h"
-    return cm
+def config_manager(valid_config):
+    return config_manager_from(valid_config, {"trading_settings": {"timeframe": "1h"}})
 
 
 @pytest.fixture
@@ -188,7 +178,7 @@ def mock_notification_handler():
 @pytest.fixture
 def service(
     mock_repository,
-    mock_config_manager,
+    config_manager,
     mock_grid_manager,
     mock_order_book,
     mock_balance_tracker,
@@ -198,7 +188,7 @@ def service(
 ):
     return StateRecoveryService(
         repository=mock_repository,
-        config_manager=mock_config_manager,
+        config_manager=config_manager,
         grid_manager=mock_grid_manager,
         order_book=mock_order_book,
         balance_tracker=mock_balance_tracker,
@@ -209,9 +199,9 @@ def service(
     )
 
 
-def _set_valid_bot_state(mock_repository, mock_config_manager, **overrides):
+def _set_valid_bot_state(mock_repository, config_manager, **overrides):
     """Configure the repository to return a bot_state whose config hash matches the current config."""
-    current_hash = compute_config_hash(mock_config_manager.config)
+    current_hash = compute_config_hash(config_manager.config)
     bot_state = {
         "config_hash": current_hash,
         "initial_purchase_done": True,
@@ -257,7 +247,7 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_grid_manager,
         mock_order_book,
         mock_balance_tracker,
@@ -267,7 +257,7 @@ class TestStateRecoveryService:
         """A full recovery with matching hash, saved grid levels, saved orders,
         and working exchange balance should result in recovered=True with
         balance_source='exchange'."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         # Set up grid levels (one level at price 3000)
         gl = GridLevel(3000.0, GridCycleState.READY_TO_BUY)
@@ -320,9 +310,9 @@ class TestStateRecoveryService:
         assert call_args[0][0] == NotificationType.STATE_RECOVERY_COMPLETE
 
     async def test_accounting_restore_failure_does_not_abort_recovery(
-        self, service, mock_repository, mock_config_manager, mock_balance_tracker
+        self, service, mock_repository, config_manager, mock_balance_tracker
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         mock_repository.load_balance_state.return_value = _make_saved_balance()
         mock_balance_tracker.restore_accounting.side_effect = ValueError("corrupt avg_cost")
 
@@ -336,7 +326,7 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_exchange_service,
         mock_grid_manager,
@@ -344,7 +334,7 @@ class TestStateRecoveryService:
         """If an order was open in the DB but the exchange now reports it as CLOSED,
         the order should be marked as filled, the grid level state transitioned,
         and the order collected for paired order placement."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         # Set up grid level for the order
         gl = GridLevel(2900.0, GridCycleState.WAITING_FOR_BUY_FILL)
@@ -391,13 +381,13 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_exchange_service,
         mock_grid_manager,
     ):
         """A fill replayed on a level that still holds another open order keeps the level waiting."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         gl = GridLevel(3100.0, GridCycleState.WAITING_FOR_SELL_FILL)
         mock_grid_manager.grid_levels = {3100.0: gl}
         local_order = _make_exchange_order(identifier="s-1", status=OrderStatus.OPEN, side=OrderSide.SELL, price=3100.0)
@@ -424,14 +414,14 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_grid_manager,
         mock_balance_tracker,
     ):
         """If an order was open in the DB but the exchange now reports CANCELED,
         the order should be canceled locally."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         local_order = _make_exchange_order(
             identifier="cancel-1", status=OrderStatus.OPEN, side=OrderSide.BUY, price=2950.0, remaining=1.0
@@ -458,11 +448,11 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_grid_manager,
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         local_order = _make_exchange_order(
             identifier="rejected-1", status=OrderStatus.OPEN, side=OrderSide.BUY, price=2950.0, remaining=1.0
         )
@@ -485,18 +475,18 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_exchange_service,
         mock_notification_handler,
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         known = _make_exchange_order(identifier="known-1", status=OrderStatus.OPEN)
         mock_order_book.get_open_orders.return_value = [known]
         service.order_execution_strategy.get_order = AsyncMock(
             return_value=_make_exchange_order(identifier="known-1", status=OrderStatus.OPEN)
         )
-        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager.config))
+        own_client_id = new_client_order_id(compute_config_hash(config_manager.config))
         mock_exchange_service.fetch_open_orders = AsyncMock(
             return_value=[
                 {"id": "known-1", "side": "buy", "price": 2900.0, "amount": 1.0},
@@ -518,10 +508,10 @@ class TestStateRecoveryService:
         assert "other-1" not in alerts[0]
 
     async def test_the_orphan_check_runs_without_open_orders(
-        self, service, mock_repository, mock_config_manager, mock_exchange_service, mock_notification_handler
+        self, service, mock_repository, config_manager, mock_exchange_service, mock_notification_handler
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
-        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager.config))
+        _set_valid_bot_state(mock_repository, config_manager)
+        own_client_id = new_client_order_id(compute_config_hash(config_manager.config))
         mock_exchange_service.fetch_open_orders = AsyncMock(
             return_value=[{"id": "own-2", "clientOrderId": own_client_id, "side": "sell", "price": 3000.0}]
         )
@@ -537,10 +527,10 @@ class TestStateRecoveryService:
         assert len(alerts) == 1
 
     async def test_a_failed_orphan_alert_is_not_reported_as_a_failed_fetch(
-        self, service, mock_repository, mock_config_manager, mock_exchange_service, mock_notification_handler, caplog
+        self, service, mock_repository, config_manager, mock_exchange_service, mock_notification_handler, caplog
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
-        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager.config))
+        _set_valid_bot_state(mock_repository, config_manager)
+        own_client_id = new_client_order_id(compute_config_hash(config_manager.config))
         mock_exchange_service.fetch_open_orders = AsyncMock(
             return_value=[{"id": "own-3", "clientOrderId": own_client_id, "side": "sell", "price": 3000.0}]
         )
@@ -553,9 +543,9 @@ class TestStateRecoveryService:
         assert "Failed to fetch" not in caplog.text
 
     async def test_the_recovery_notification_lists_a_ghost_with_its_level(
-        self, service, mock_repository, mock_config_manager, mock_order_book, mock_notification_handler
+        self, service, mock_repository, config_manager, mock_order_book, mock_notification_handler
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         mock_order_book.get_open_orders.return_value = [
             _make_exchange_order(identifier="ghost-3", side=OrderSide.SELL, price=3050.0, remaining=0.5)
         ]
@@ -579,12 +569,12 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_grid_manager,
     ):
         """A cancelled order on a level that still holds another open order keeps the level busy."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         local_order = _make_exchange_order(
             identifier="cancel-2", status=OrderStatus.OPEN, side=OrderSide.SELL, price=3050.0, remaining=1.0
@@ -607,14 +597,14 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_grid_manager,
         mock_balance_tracker,
     ):
         """If an order exists locally but get_order returns None (not on exchange),
         it should be marked CANCELED as a ghost order."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         local_order = _make_exchange_order(
             identifier="ghost-1", status=OrderStatus.OPEN, side=OrderSide.SELL, price=3050.0, remaining=0.5
@@ -635,9 +625,9 @@ class TestStateRecoveryService:
         mock_grid_manager.rollback_order_placement.assert_called_once_with(gl, OrderSide.SELL, False)
 
     async def test_an_order_the_exchange_no_longer_knows_is_a_ghost(
-        self, service, mock_repository, mock_config_manager, mock_order_book, mock_grid_manager
+        self, service, mock_repository, config_manager, mock_order_book, mock_grid_manager
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         local_order = _make_exchange_order(identifier="ghost-2", side=OrderSide.SELL, price=3050.0, remaining=0.5)
         mock_order_book.get_open_orders.return_value = [local_order]
         mock_order_book.get_grid_level_for_order.return_value = MagicMock()
@@ -649,9 +639,9 @@ class TestStateRecoveryService:
         assert result.ghost_orders_found == 1
 
     async def test_an_unreadable_order_defers_the_recovery(
-        self, service, mock_repository, mock_config_manager, mock_order_book
+        self, service, mock_repository, config_manager, mock_order_book
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         mock_order_book.get_open_orders.return_value = [_make_exchange_order(identifier="o-1")]
         service.order_execution_strategy.get_order = AsyncMock(side_effect=DataFetchError("timeout"))
 
@@ -665,13 +655,13 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_exchange_service,
     ):
         """If the exchange has open orders that are not tracked locally,
         they should be counted as orphans but not auto-adopted."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         # One known local open order
         known_order = _make_exchange_order(identifier="known-1", status=OrderStatus.OPEN)
@@ -698,7 +688,7 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_balance_tracker,
         mock_exchange_service,
         mock_order_book,
@@ -706,7 +696,7 @@ class TestStateRecoveryService:
         """When the exchange balance fetch succeeds, balance_source should be 'exchange'.
         Reserved amounts should be recalculated from confirmed-still-open orders,
         not from stale DB values."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         mock_repository.load_balance_state.return_value = _make_saved_balance(
             fiat="4500", crypto="2.0", fees="15", reserved_fiat="500", reserved_crypto="0.5"
@@ -738,9 +728,9 @@ class TestStateRecoveryService:
         assert mock_balance_tracker._total_fees == Decimal("15")
 
     async def test_an_unreadable_balance_defers_the_recovery(
-        self, service, mock_repository, mock_config_manager, mock_exchange_service
+        self, service, mock_repository, config_manager, mock_exchange_service
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         mock_exchange_service.get_balance = AsyncMock(side_effect=DataFetchError("Exchange unavailable"))
 
         result = await service.attempt_recovery()
@@ -754,12 +744,12 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_grid_manager,
     ):
         """When saved grid levels have paired_buy/sell prices, the paired references
         should be re-linked between the corresponding GridLevel objects."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         gl_low = GridLevel(2900.0, GridCycleState.READY_TO_BUY)
         gl_high = GridLevel(3000.0, GridCycleState.READY_TO_SELL)
@@ -799,10 +789,10 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
     ):
         """An unexpected exception during recovery refuses the start and leaves the database alone."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         # Force an exception during grid level restoration
         mock_repository.load_grid_levels.side_effect = RuntimeError("Corrupt DB")
@@ -818,12 +808,12 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_notification_handler,
     ):
         """On successful recovery, a STATE_RECOVERY_COMPLETE notification should be sent
         with details about the recovery."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         result = await service.attempt_recovery()
 
@@ -839,7 +829,7 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_balance_tracker,
         mock_exchange_service,
         mock_order_book,
@@ -848,7 +838,7 @@ class TestStateRecoveryService:
         """After an order fills while bot is down, reserved amounts should be recalculated
         from confirmed-still-open orders, not from stale DB values that include
         the filled order's reservation."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         # DB has reserved_fiat=1000 (two orders: 500 each)
         mock_repository.load_balance_state.return_value = _make_saved_balance(
@@ -879,13 +869,13 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_grid_manager,
     ):
         """When multiple orders are found CLOSED on the exchange, all should be
         collected for paired order placement with correct grid state transitions."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         gl_buy = GridLevel(2900.0, GridCycleState.WAITING_FOR_BUY_FILL)
         gl_sell = GridLevel(3100.0, GridCycleState.WAITING_FOR_SELL_FILL)
@@ -955,13 +945,13 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
     ):
         """When the saved bot_state has a strategy_state JSON blob, it should be
         parsed into a dict and exposed on RecoveryResult."""
         _set_valid_bot_state(
             mock_repository,
-            mock_config_manager,
+            config_manager,
             strategy_state='{"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": 3.1}',
         )
 
@@ -978,11 +968,11 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
     ):
         """When the saved bot_state has no strategy_state (older DB), the result
         should expose None rather than crashing."""
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
 
         result = await service.attempt_recovery()
 
@@ -994,12 +984,12 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
     ):
         """A corrupt strategy_state blob should not discard otherwise-recovered state
         (orders/balance/grid) or fall back to a fresh start. Recovery should still
         succeed, just with strategy_state=None."""
-        _set_valid_bot_state(mock_repository, mock_config_manager, strategy_state="{corrupt")
+        _set_valid_bot_state(mock_repository, config_manager, strategy_state="{corrupt")
 
         result = await service.attempt_recovery()
 
@@ -1012,7 +1002,7 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
     ):
         """A checkpoint written after a runtime regrid carries the regridded price_grids.
         Recovery must apply that geometry before matching persisted levels by price, so the
@@ -1027,7 +1017,7 @@ class TestStateRecoveryService:
             "price_grids": regridded,
             "central_price": 100.0,
         }
-        _set_valid_bot_state(mock_repository, mock_config_manager, strategy_state=json.dumps(strategy_state))
+        _set_valid_bot_state(mock_repository, config_manager, strategy_state=json.dumps(strategy_state))
         mock_repository.load_grid_levels.return_value = [
             {
                 "price": 96.0,
@@ -1057,7 +1047,7 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
     ):
         """A checkpoint written before the geometry-persistence fix (no price_grids/central_price)
         must still recover successfully without applying any geometry."""
@@ -1067,7 +1057,7 @@ class TestStateRecoveryService:
         service.grid_manager = real_gm
 
         strategy_state = {"trailing_stop": None, "atr_grid": 2.0}
-        _set_valid_bot_state(mock_repository, mock_config_manager, strategy_state=json.dumps(strategy_state))
+        _set_valid_bot_state(mock_repository, config_manager, strategy_state=json.dumps(strategy_state))
 
         result = await service.attempt_recovery()
 
@@ -1075,10 +1065,8 @@ class TestStateRecoveryService:
         assert set(real_gm.grid_levels.keys()) == original_keys  # geometry untouched
         assert result.strategy_state == strategy_state
 
-    async def test_accounting_restored_from_db(
-        self, service, mock_repository, mock_config_manager, mock_balance_tracker
-    ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+    async def test_accounting_restored_from_db(self, service, mock_repository, config_manager, mock_balance_tracker):
+        _set_valid_bot_state(mock_repository, config_manager)
         saved = _make_saved_balance()
         saved.update(avg_cost="2900.5", realized_pnl="12.34", peak_value="15000")
         mock_repository.load_balance_state.return_value = saved
@@ -1091,9 +1079,9 @@ class TestStateRecoveryService:
         mock_balance_tracker.replay_fills_on_cost_basis.assert_not_called()
 
     async def test_v2_balance_row_restores_neutral_accounting(
-        self, service, mock_repository, mock_config_manager, mock_balance_tracker
+        self, service, mock_repository, config_manager, mock_balance_tracker
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         mock_repository.load_balance_state.return_value = _make_saved_balance()
 
         await service.attempt_recovery()
@@ -1106,12 +1094,12 @@ class TestStateRecoveryService:
         self,
         service,
         mock_repository,
-        mock_config_manager,
+        config_manager,
         mock_order_book,
         mock_grid_manager,
         mock_balance_tracker,
     ):
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        _set_valid_bot_state(mock_repository, config_manager)
         mock_repository.load_balance_state.return_value = _make_saved_balance(crypto="2.0", reserved_crypto="0.5")
         gl = GridLevel(2900.0, GridCycleState.WAITING_FOR_BUY_FILL)
         mock_grid_manager.grid_levels = {2900.0: gl}
@@ -1137,10 +1125,12 @@ class TestStateRecoveryService:
         mock_balance_tracker.replay_fills_on_cost_basis.assert_called_once_with(Decimal("2.5"), [(local_order, 1.0)])
 
     async def test_a_paper_bot_state_without_its_balance_state_refuses_and_says_so(
-        self, service, mock_repository, mock_config_manager
+        self, service, mock_repository, config_manager, valid_config
     ):
-        mock_config_manager.get_trading_mode.return_value = TradingMode.PAPER_TRADING
-        _set_valid_bot_state(mock_repository, mock_config_manager)
+        config_manager.config = bot_config_from(
+            valid_config, {"exchange": {"trading_mode": "paper_trading"}, "trading_settings": {"timeframe": "1h"}}
+        )
+        _set_valid_bot_state(mock_repository, config_manager)
         mock_repository.load_balance_state.return_value = None
 
         result = await service.attempt_recovery()

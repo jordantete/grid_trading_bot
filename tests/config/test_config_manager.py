@@ -6,7 +6,6 @@ import pytest
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.exceptions import ConfigFileNotFoundError, ConfigParseError, ConfigValidationError
 from grid_trading_bot.config.schema import load_config
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.domain.spacing_type import SpacingType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
@@ -57,41 +56,11 @@ class TestConfigManager:
             ConfigManager(str(path))
         assert refused.value.invalid_fields == ["grid_strategy.num_grids"]
 
-    def test_get_exchange_name(self, config_manager):
-        assert config_manager.get_exchange_name() == "binance"
-
-    def test_get_trading_fee(self, config_manager):
-        assert config_manager.get_trading_fee() == 0.001
-
-    def test_get_base_currency(self, config_manager):
-        assert config_manager.get_base_currency() == "ETH"
-
-    def test_get_quote_currency(self, config_manager):
-        assert config_manager.get_quote_currency() == "USDT"
-
-    def test_get_initial_balance(self, config_manager):
-        assert config_manager.get_initial_balance() == 10000
-
     def test_get_spacing_type(self, config_manager):
         assert config_manager.get_spacing_type() == SpacingType.GEOMETRIC
 
     def test_get_strategy_type(self, config_manager):
         assert config_manager.get_strategy_type() == StrategyType.SIMPLE_GRID
-
-    def test_get_trading_mode(self, config_manager):
-        assert config_manager.get_trading_mode() == TradingMode.BACKTEST
-
-    def test_get_timeframe(self, config_manager):
-        assert config_manager.get_timeframe() == "1m"
-
-    def test_get_start_date(self, config_manager):
-        assert config_manager.get_start_date() == "2024-07-04T00:00:00Z"
-
-    def test_get_end_date(self, config_manager):
-        assert config_manager.get_end_date() == "2024-07-11T00:00:00Z"
-
-    def test_get_historical_data_file(self, config_manager):
-        assert config_manager.get_historical_data_file() == "data/SOL_USDT/2024/1m.csv"
 
     def test_get_num_grids(self, config_manager):
         assert config_manager.get_num_grids() == 20
@@ -135,10 +104,6 @@ class TestConfigManager:
     def test_an_absent_timeframe_is_refused_at_load(self, valid_config):
         refusal = _refusal(valid_config, lambda raw: raw["trading_settings"].pop("timeframe"))
         assert refusal.missing_fields == ["trading_settings.timeframe"]
-
-    def test_get_historical_data_file_default(self, valid_config):
-        manager = _manager(valid_config, lambda raw: raw["trading_settings"].pop("historical_data_file"))
-        assert manager.get_historical_data_file() is None
 
     @pytest.mark.parametrize("section", ["take_profit", "stop_loss"])
     def test_an_absent_take_profit_or_stop_loss_section_names_its_fields(self, valid_config, section):
@@ -201,10 +166,6 @@ class TestConfigManagerFromDict:
     def test_from_dict_creates_valid_config_manager(self, valid_config):
         cm = ConfigManager.from_dict(valid_config)
         assert cm.config == load_config(valid_config)
-        assert cm.get_exchange_name() == "binance"
-        assert cm.get_trading_fee() == 0.001
-        assert cm.get_base_currency() == "ETH"
-        assert cm.get_quote_currency() == "USDT"
 
     def test_from_dict_validates_config(self):
         with pytest.raises(ConfigValidationError):
@@ -294,31 +255,6 @@ class TestPersistenceAccessors:
             valid_config, lambda raw: raw.update(persistence={"checkpoint_interval_seconds": 30.0})
         )
         assert config_manager.get_checkpoint_interval_seconds() == 30.0
-
-
-class TestConfigManagerFeeAndPostOnly:
-    """Maker/taker fee split and the post-only execution flag."""
-
-    def test_get_maker_fee_falls_back_to_trading_fee(self, config_manager):
-        assert config_manager.get_maker_fee() == 0.001
-
-    def test_get_taker_fee_falls_back_to_trading_fee(self, config_manager):
-        assert config_manager.get_taker_fee() == 0.001
-
-    def test_get_maker_fee_uses_explicit_value(self, valid_config):
-        assert _manager(valid_config, lambda raw: raw["exchange"].update(maker_fee=0.0016)).get_maker_fee() == 0.0016
-
-    def test_get_taker_fee_uses_explicit_value(self, valid_config):
-        assert _manager(valid_config, lambda raw: raw["exchange"].update(taker_fee=0.0026)).get_taker_fee() == 0.0026
-
-    def test_explicit_maker_fee_does_not_change_taker_fee(self, valid_config):
-        assert _manager(valid_config, lambda raw: raw["exchange"].update(maker_fee=0.0)).get_taker_fee() == 0.001
-
-    def test_get_post_only_defaults_to_false(self, config_manager):
-        assert config_manager.get_post_only() is False
-
-    def test_get_post_only_uses_explicit_value(self, valid_config):
-        assert _manager(valid_config, lambda raw: raw["exchange"].update(post_only=True)).get_post_only() is True
 
 
 class TestConfigManagerBacktestMinimums:

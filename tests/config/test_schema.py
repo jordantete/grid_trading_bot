@@ -142,6 +142,12 @@ def test_an_unknown_timeframe_is_refused(valid_config):
     assert _refused(valid_config).invalid_fields == ["trading_settings.timeframe"]
 
 
+def test_an_absent_historical_data_file_loads_as_none(valid_config):
+    del valid_config["trading_settings"]["historical_data_file"]
+
+    assert load_config(valid_config).trading_settings.historical_data_file is None
+
+
 def test_an_empty_period_names_both_dates_as_missing(valid_config):
     valid_config["trading_settings"]["period"] = {}
 
@@ -368,6 +374,18 @@ class TestMakerTakerAndPostOnly:
         exchange = load_config(valid_config).exchange
 
         assert (exchange.maker_fee, exchange.taker_fee, exchange.post_only) == (0.0, 0.0004, True)
+
+    def test_explicit_maker_and_taker_fees_are_read(self, valid_config):
+        valid_config["exchange"].update(maker_fee=0.0016, taker_fee=0.0026)
+
+        exchange = load_config(valid_config).exchange
+
+        assert (exchange.maker_fee, exchange.taker_fee) == (0.0016, 0.0026)
+
+    def test_a_maker_fee_alone_leaves_the_taker_fee_on_the_trading_fee(self, valid_config):
+        valid_config["exchange"]["maker_fee"] = 0.0
+
+        assert load_config(valid_config).exchange.taker_fee == 0.001
 
     def test_absent_maker_and_taker_fees_fall_back_to_the_trading_fee(self, valid_config):
         exchange = load_config(valid_config).exchange

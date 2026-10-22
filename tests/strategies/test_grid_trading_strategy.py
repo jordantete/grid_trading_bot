@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pandas as pd
 import pytest
+from tests.fakes.config import bot_config_from
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
@@ -55,7 +56,7 @@ def _executed_buy() -> Order:
 
 
 @pytest.fixture
-def strategy_fixture():
+def strategy_fixture(valid_config):
     """
     Builds a real GridTradingStrategy with mocked collaborators, attached directly
     as attributes (config_manager, grid_manager, order_manager, balance_tracker, etc.)
@@ -73,7 +74,7 @@ def strategy_fixture():
     order_simulator = Mock(spec=OrderSimulator)
     order_simulator.simulate_order_fills = AsyncMock()
 
-    config_manager.get_timeframe.return_value = "1d"
+    config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1d"}})
     config_manager.is_take_profit_enabled.return_value = False
     config_manager.is_stop_loss_enabled.return_value = False
     config_manager.is_trailing_stop_loss_enabled.return_value = False
@@ -100,7 +101,7 @@ def strategy_fixture():
 
 class TestGridTradingStrategy:
     @pytest.fixture
-    def setup_strategy(self):
+    def setup_strategy(self, valid_config):
         config_manager = Mock(spec=ConfigManager)
         exchange_service = Mock(spec=ExchangeInterface)
         grid_manager = Mock(spec=GridManager)
@@ -112,7 +113,7 @@ class TestGridTradingStrategy:
         order_simulator = Mock(spec=OrderSimulator)
         order_simulator.simulate_order_fills = AsyncMock()
 
-        config_manager.get_timeframe.return_value = "1d"
+        config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1d"}})
         config_manager.is_take_profit_enabled.return_value = True
         config_manager.is_stop_loss_enabled.return_value = True
         config_manager.get_take_profit_threshold.return_value = 20000
@@ -295,12 +296,13 @@ class TestGridTradingStrategy:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_initialize_historical_data_backtest_mode(self, setup_strategy):
+    async def test_initialize_historical_data_backtest_mode(self, setup_strategy, valid_config):
         create_strategy, config_manager, exchange_service, _, _, _, _, _, _ = setup_strategy
 
-        config_manager.get_timeframe.return_value = "1h"
-        config_manager.get_start_date.return_value = "2024-01-01"
-        config_manager.get_end_date.return_value = "2024-01-02"
+        config_manager.config = bot_config_from(
+            valid_config,
+            {"trading_settings": {"timeframe": "1h", "period": {"start_date": "2024-01-01", "end_date": "2024-01-02"}}},
+        )
 
         mock_data = pd.DataFrame({"close": [100, 200, 300]})
         exchange_service.fetch_ohlcv.return_value = mock_data
@@ -1008,12 +1010,12 @@ class TestGridFeasibilityOrchestration:
 
 
 class TestLiveAtrRefresh:
-    async def test_refresh_computes_atr_after_candle_close(self, strategy_fixture):
+    async def test_refresh_computes_atr_after_candle_close(self, strategy_fixture, valid_config):
         s = strategy_fixture
         s.trading_mode = TradingMode.LIVE
         s.config_manager.is_trailing_stop_loss_enabled.return_value = True
         s.config_manager.get_trailing_atr_period.return_value = 3
-        s.config_manager.get_timeframe.return_value = "1m"
+        s.config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1m"}})
         candles = pd.DataFrame(
             [[pd.Timestamp("2026-01-01 00:00"), 100, 101, 99, 100, 1]] * 6,
             columns=["timestamp", "open", "high", "low", "close", "volume"],
@@ -1040,12 +1042,12 @@ class TestLiveAtrRefresh:
         assert refreshed is False  # boundary not reached
         s.exchange_service.fetch_recent_ohlcv.assert_not_awaited()
 
-    async def test_first_call_arms_boundary_without_fetch(self, strategy_fixture):
+    async def test_first_call_arms_boundary_without_fetch(self, strategy_fixture, valid_config):
         s = strategy_fixture
         s.trading_mode = TradingMode.LIVE
         s.config_manager.is_trailing_stop_loss_enabled.return_value = True
         s.config_manager.get_trailing_atr_period.return_value = 3
-        s.config_manager.get_timeframe.return_value = "1m"
+        s.config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1m"}})
         s.exchange_service.fetch_recent_ohlcv = AsyncMock()
         s._next_candle_close = None
 
@@ -1065,12 +1067,12 @@ class TestLiveAtrRefresh:
 
         assert refreshed is False
 
-    async def test_fetch_failure_keeps_last_atr(self, strategy_fixture):
+    async def test_fetch_failure_keeps_last_atr(self, strategy_fixture, valid_config):
         s = strategy_fixture
         s.trading_mode = TradingMode.LIVE
         s.config_manager.is_trailing_stop_loss_enabled.return_value = True
         s.config_manager.get_trailing_atr_period.return_value = 3
-        s.config_manager.get_timeframe.return_value = "1m"
+        s.config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1m"}})
         s._live_atr[3] = 2.5
         s.exchange_service.fetch_recent_ohlcv = AsyncMock(side_effect=DataFetchError("boom"))
         s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")

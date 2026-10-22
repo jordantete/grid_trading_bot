@@ -14,8 +14,8 @@ def generate_config_name(config_manager: ConfigManager) -> str:
         str: A descriptive configuration name including trading pair, mode, strategy,
         grid spacing, grid range, and timestamp.
     """
-    trading_pair = f"{config_manager.get_base_currency()}_{config_manager.get_quote_currency()}"
-    trading_mode = config_manager.get_trading_mode().name
+    trading_pair = f"{config_manager.config.pair.base_currency}_{config_manager.config.pair.quote_currency}"
+    trading_mode = config_manager.config.exchange.trading_mode.name
     grid_strategy_type = config_manager.get_strategy_type().name
     grid_spacing_type = config_manager.get_spacing_type().name
     grid_size = config_manager.get_num_grids()

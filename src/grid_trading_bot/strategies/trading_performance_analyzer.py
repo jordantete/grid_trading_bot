@@ -35,9 +35,9 @@ class TradingPerformanceAnalyzer:
         Returns:
             Tuple[str, str, float]: Base currency, quote currency, and trading fee.
         """
-        base_currency = self.config_manager.get_base_currency()
-        quote_currency = self.config_manager.get_quote_currency()
-        trading_fee = self.config_manager.get_trading_fee()
+        base_currency = self.config_manager.config.pair.base_currency
+        quote_currency = self.config_manager.config.pair.quote_currency
+        trading_fee = self.config_manager.config.exchange.trading_fee
         return base_currency, quote_currency, trading_fee
 
     def _calculate_roi(
@@ -100,7 +100,7 @@ class TradingPerformanceAnalyzer:
 
     def _periods_per_year(self) -> float:
         """Number of candles in a year for the configured timeframe (crypto trades 24/7)."""
-        return MS_PER_YEAR / TIMEFRAME_MAPPINGS[self.config_manager.get_timeframe()]
+        return MS_PER_YEAR / TIMEFRAME_MAPPINGS[self.config_manager.config.trading_settings.timeframe]
 
     def _calculate_sharpe_ratio(self, data: pd.DataFrame) -> float:
         """

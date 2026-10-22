@@ -67,7 +67,7 @@ def initialize_config(config_path: str) -> ConfigManager:
 def initialize_notification_handler(config_manager: ConfigManager) -> NotificationHandler:
     notification_urls_str = os.getenv("APPRISE_NOTIFICATION_URLS", "")
     notification_urls = [url.strip() for url in notification_urls_str.split(",") if url.strip()]
-    trading_mode = config_manager.get_trading_mode()
+    trading_mode = config_manager.config.exchange.trading_mode
     return NotificationHandler(notification_urls, trading_mode)
 
 
@@ -87,7 +87,7 @@ async def run_bot(
         add_bot_log_file(config_name, log_level)
     event_bus = EventBus()
     notification_handler = initialize_notification_handler(config_manager)
-    live_or_paper = config_manager.get_trading_mode() in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
+    live_or_paper = config_manager.config.exchange.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
     run_files = RunFiles.for_config(config_manager) if live_or_paper else None
     run_lock = RunLock(run_files.lock_path) if run_files is not None else None
 
@@ -272,7 +272,7 @@ def run(config, save_performance_results, no_plot, profile):
     config_managers = [initialize_config(config_path) for config_path in config]
     config_names = [generate_config_name(config_manager) for config_manager in config_managers]
     live_or_paper = any(
-        config_manager.get_trading_mode() in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
+        config_manager.config.exchange.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
         for config_manager in config_managers
     )
 

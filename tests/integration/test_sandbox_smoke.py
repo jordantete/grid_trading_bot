@@ -10,9 +10,10 @@ All tests skip gracefully if the network is unavailable.
 
 import asyncio
 import os
-from unittest.mock import Mock
 
 import pytest
+
+from tests.fakes.config import config_manager_from
 
 
 def _network_unavailable() -> bool:
@@ -124,22 +125,20 @@ skip_without_testnet_keys = pytest.mark.skipif(
 @skip_without_testnet_keys
 @skip_if_no_network
 @pytest.mark.timeout(60)
-async def test_a_testnet_order_is_found_by_its_client_id_before_and_after_its_cancel(monkeypatch):
+async def test_a_testnet_order_is_found_by_its_client_id_before_and_after_its_cancel(monkeypatch, valid_config):
     """A tiny post-only buy far under the price, placed with a client id, is found by it while open and cancelled."""
-    from grid_trading_bot.config.config_manager import ConfigManager
     from grid_trading_bot.core.order_handling.placement_journal import new_client_order_id
     from grid_trading_bot.core.services.live_exchange_service import LiveExchangeService
 
     monkeypatch.setenv("EXCHANGE_API_KEY", os.environ["BINANCE_TESTNET_API_KEY"])
     monkeypatch.setenv("EXCHANGE_SECRET_KEY", os.environ["BINANCE_TESTNET_SECRET_KEY"])
-    config_manager = Mock(spec=ConfigManager)
-    config_manager.get_exchange_name.return_value = "binance"
-    config_manager.get_websocket_max_retries.return_value = 1
-    config_manager.get_websocket_retry_base_delay.return_value = 1
-    config_manager.get_circuit_breaker_failure_threshold.return_value = 5
-    config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
-    config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
-    config_manager.get_post_only.return_value = True
+    config_manager = config_manager_from(
+        valid_config,
+        {
+            "exchange": {"name": "binance", "post_only": True},
+            "execution": {"websocket_max_retries": 1, "websocket_retry_base_delay": 1},
+        },
+    )
     service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
     assert "testnet" in str(service.exchange.urls["api"]), "refusing to place an order outside the testnet"
 

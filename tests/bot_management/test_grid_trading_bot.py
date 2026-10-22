@@ -1,14 +1,14 @@
 import asyncio
-import copy
 import json
 import os
 import time
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from tests.fakes.config import bot_config_from, deep_merge
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.schema import BotConfig, load_config
+from grid_trading_bot.config.schema import BotConfig
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
@@ -35,13 +35,14 @@ def mock_env_vars():
         yield
 
 
-def _live_config(valid_config) -> BotConfig:
+def _live_config(valid_config, overrides=None) -> BotConfig:
     """The schema objects the getter stubs of the fixtures stand for."""
-    raw = copy.deepcopy(valid_config)
-    raw["exchange"]["trading_mode"] = "live"
-    raw["trading_settings"] |= {"initial_balance": 1000, "timeframe": "1h"}
-    raw["grid_strategy"] |= {"spacing": "arithmetic", "num_grids": 10, "range": {"top": 2000, "bottom": 1500}}
-    return load_config(raw)
+    live = {
+        "exchange": {"name": "binance", "trading_mode": "live"},
+        "trading_settings": {"initial_balance": 1000, "timeframe": "1h"},
+        "grid_strategy": {"spacing": "arithmetic", "num_grids": 10, "range": {"top": 2000, "bottom": 1500}},
+    }
+    return bot_config_from(valid_config, deep_merge(live, overrides or {}))
 
 
 class BotFixtures:
@@ -49,16 +50,12 @@ class BotFixtures:
     def config_manager(self, valid_config):
         mock_config = Mock(spec=ConfigManager)
         mock_config.config = _live_config(valid_config)
-        mock_config.get_trading_mode.return_value = TradingMode.LIVE
-        mock_config.get_initial_balance.return_value = 1000
-        mock_config.get_exchange_name.return_value = "binance"
         mock_config.get_spacing_type.return_value = "arithmetic"
         mock_config.get_top_range.return_value = 2000
         mock_config.get_bottom_range.return_value = 1500
         mock_config.get_num_grids.return_value = 10
         mock_config.get_strategy_type.return_value = StrategyType.SIMPLE_GRID
         mock_config.is_persistence_enabled.return_value = False
-        mock_config.get_timeframe.return_value = "1h"
         return mock_config
 
     @pytest.fixture
@@ -170,13 +167,12 @@ class TestGridTradingBot(BotFixtures):
 
     def test_initialization_with_missing_config(self, notification_handler, mock_event_bus):
         config_manager = Mock(spec=ConfigManager)
-        config_manager.get_trading_mode.side_effect = AttributeError("Missing configuration")
 
         with patch("grid_trading_bot.core.bot_management.grid_trading_bot.logging.getLogger") as mock_logger:
             logger_instance = Mock()
             mock_logger.return_value = logger_instance
 
-            with pytest.raises(AttributeError, match="Missing configuration"):
+            with pytest.raises(AttributeError, match="no attribute 'config'"):
                 GridTradingBot("config.json", config_manager, notification_handler, mock_event_bus)
 
             logger_instance.error.assert_any_call("An unexpected error occurred.")
@@ -510,9 +506,6 @@ class TestStrategyStatePersistenceWiring:
     def config_manager(self, tmp_path, valid_config):
         mock_config = Mock(spec=ConfigManager)
         mock_config.config = _live_config(valid_config)
-        mock_config.get_trading_mode.return_value = TradingMode.LIVE
-        mock_config.get_initial_balance.return_value = 1000
-        mock_config.get_exchange_name.return_value = "binance"
         mock_config.get_spacing_type.return_value = "arithmetic"
         mock_config.get_top_range.return_value = 2000
         mock_config.get_bottom_range.return_value = 1500
@@ -521,7 +514,6 @@ class TestStrategyStatePersistenceWiring:
         mock_config.is_persistence_enabled.return_value = True
         mock_config.get_state_db_path.return_value = str(tmp_path / "state.db")
         mock_config.get_checkpoint_interval_seconds.return_value = 60.0
-        mock_config.get_timeframe.return_value = "1h"
         return mock_config
 
     @pytest.fixture
@@ -558,8 +550,10 @@ class TestStrategyStatePersistenceWiring:
         assert bot.order_manager.journal is bot.state_persistence_service.journal
         assert len(bot.order_manager.journal) == 0
 
-    def test_paper_trading_persists_and_recovers(self, config_manager, notification_handler, mock_event_bus):
-        config_manager.get_trading_mode.return_value = TradingMode.PAPER_TRADING
+    def test_paper_trading_persists_and_recovers(
+        self, config_manager, notification_handler, mock_event_bus, valid_config
+    ):
+        config_manager.config = _live_config(valid_config, {"exchange": {"trading_mode": "paper_trading"}})
         with patch("grid_trading_bot.core.bot_management.grid_trading_bot.SQLiteStateRepository") as repo_cls:
             repo_cls.return_value = MagicMock()
             paper_bot = GridTradingBot(
@@ -1502,11 +1496,15 @@ class TestLiquidationBalanceWiring(BotFixtures):
     @pytest.mark.asyncio
     @pytest.mark.parametrize("trading_mode", [TradingMode.LIVE, TradingMode.PAPER_TRADING])
     async def test_a_refused_liquidation_reads_the_free_base_on_the_exchange(
-        self, config_manager, notification_handler, mock_event_bus, trading_mode
+        self, config_manager, notification_handler, mock_event_bus, trading_mode, valid_config
     ):
-        config_manager.get_trading_mode.return_value = trading_mode
-        config_manager.get_base_currency.return_value = "BTC"
-        config_manager.get_quote_currency.return_value = "USDT"
+        config_manager.config = _live_config(
+            valid_config,
+            {
+                "exchange": {"trading_mode": trading_mode.value},
+                "pair": {"base_currency": "BTC", "quote_currency": "USDT"},
+            },
+        )
         bot = GridTradingBot("config.json", config_manager, notification_handler, mock_event_bus, no_plot=True)
         bot.exchange_service.get_balance = AsyncMock(return_value={"free": {"BTC": 1.25, "USDT": 10.0}})
 
@@ -1515,11 +1513,9 @@ class TestLiquidationBalanceWiring(BotFixtures):
     @pytest.mark.asyncio
     @pytest.mark.parametrize("balances", [{"free": {"BTC": None, "USDT": 10.0}}, {"free": {"USDT": 10.0}}, {}])
     async def test_a_free_base_the_exchange_does_not_report_is_unreadable_not_zero(
-        self, config_manager, notification_handler, mock_event_bus, balances
+        self, config_manager, notification_handler, mock_event_bus, balances, valid_config
     ):
-        config_manager.get_trading_mode.return_value = TradingMode.LIVE
-        config_manager.get_base_currency.return_value = "BTC"
-        config_manager.get_quote_currency.return_value = "USDT"
+        config_manager.config = _live_config(valid_config, {"pair": {"base_currency": "BTC", "quote_currency": "USDT"}})
         bot = GridTradingBot("config.json", config_manager, notification_handler, mock_event_bus, no_plot=True)
         bot.exchange_service.get_balance = AsyncMock(return_value=balances)
 

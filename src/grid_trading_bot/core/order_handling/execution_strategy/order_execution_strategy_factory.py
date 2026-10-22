@@ -15,7 +15,7 @@ class OrderExecutionStrategyFactory:
         exchange_service: ExchangeInterface,
         backtest_clock: BacktestClock | None = None,
     ) -> OrderExecutionStrategyInterface:
-        trading_mode = config_manager.get_trading_mode()
+        trading_mode = config_manager.config.exchange.trading_mode
 
         if trading_mode == TradingMode.LIVE or trading_mode == TradingMode.PAPER_TRADING:
             return LiveOrderExecutionStrategy(

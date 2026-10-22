@@ -1,10 +1,11 @@
 import asyncio
+import dataclasses
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import ccxt
 import pytest
+from tests.fakes.config import config_manager_from
 
-from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.services.circuit_breaker import CircuitState
 from grid_trading_bot.core.services.exceptions import (
@@ -21,19 +22,17 @@ from grid_trading_bot.core.services.exceptions import (
 from grid_trading_bot.core.services.live_exchange_service import LiveExchangeService
 
 
+def _with_exchange(config_manager, **fields):
+    exchange = dataclasses.replace(config_manager.config.exchange, **fields)
+    config_manager.config = dataclasses.replace(config_manager.config, exchange=exchange)
+
+
 class TestLiveExchangeService:
     @pytest.fixture
-    def config_manager(self):
-        config_manager = Mock(spec=ConfigManager)
-        config_manager.get_exchange_name.return_value = "binance"
-        config_manager.get_trading_mode.return_value = TradingMode.LIVE
-        config_manager.get_websocket_max_retries.return_value = 5
-        config_manager.get_websocket_retry_base_delay.return_value = 5
-        config_manager.get_circuit_breaker_failure_threshold.return_value = 5
-        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
-        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
-        config_manager.get_post_only.return_value = False
-        return config_manager
+    def config_manager(self, valid_config):
+        return config_manager_from(
+            valid_config, {"exchange": {"name": "binance", "trading_mode": "live", "post_only": False}}
+        )
 
     @pytest.fixture
     def mock_exchange_instance(self):
@@ -91,7 +90,7 @@ class TestLiveExchangeService:
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_sandbox_mode_initialization(self, mock_getattr, mock_ccxtpropro, config_manager, setup_env_vars):
-        config_manager.get_trading_mode.return_value = TradingMode.PAPER_TRADING
+        _with_exchange(config_manager, trading_mode=TradingMode.PAPER_TRADING)
 
         mock_exchange_instance = MagicMock()
         mock_exchange_instance.urls = {"api": "https://api.binance.com"}  # Initial URL setup
@@ -121,7 +120,7 @@ class TestLiveExchangeService:
 
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
     def test_unsupported_exchange_raises_error(self, mock_getattr, config_manager, setup_env_vars):
-        config_manager.get_exchange_name.return_value = "unsupported_exchange"
+        _with_exchange(config_manager, name="unsupported_exchange")
         mock_getattr.side_effect = AttributeError
 
         with pytest.raises(UnsupportedExchangeError, match=r"The exchange 'unsupported_exchange' is not supported."):
@@ -740,7 +739,7 @@ class TestLiveExchangeService:
     async def test_paper_mode_switches_a_sandbox_exchange_to_its_test_environment(
         self, config_manager, setup_env_vars, exchange_name
     ):
-        config_manager.get_exchange_name.return_value = exchange_name
+        _with_exchange(config_manager, name=exchange_name)
 
         service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
         try:
@@ -750,7 +749,7 @@ class TestLiveExchangeService:
 
     @pytest.mark.asyncio
     async def test_paper_mode_on_okx_trades_in_its_demo_environment(self, config_manager, setup_env_vars):
-        config_manager.get_exchange_name.return_value = "okx"
+        _with_exchange(config_manager, name="okx")
 
         service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
         try:
@@ -760,7 +759,7 @@ class TestLiveExchangeService:
 
     @pytest.mark.asyncio
     async def test_paper_mode_on_an_exchange_without_a_sandbox_is_refused(self, config_manager, setup_env_vars):
-        config_manager.get_exchange_name.return_value = "kraken"
+        _with_exchange(config_manager, name="kraken")
 
         with pytest.raises(
             UnsupportedExchangeError, match=r"^kraken has no test environment; paper trading refused\.$"
@@ -769,7 +768,7 @@ class TestLiveExchangeService:
 
     @pytest.mark.asyncio
     async def test_live_mode_keeps_an_exchange_without_a_sandbox_on_its_api(self, config_manager, setup_env_vars):
-        config_manager.get_exchange_name.return_value = "kraken"
+        _with_exchange(config_manager, name="kraken")
 
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
         try:
@@ -781,7 +780,7 @@ class TestLiveExchangeService:
     async def test_paper_mode_on_a_name_ccxt_does_not_know_is_an_unsupported_exchange(
         self, config_manager, setup_env_vars
     ):
-        config_manager.get_exchange_name.return_value = "notanexchange"
+        _with_exchange(config_manager, name="notanexchange")
 
         with pytest.raises(UnsupportedExchangeError, match=r"The exchange 'notanexchange' is not supported\."):
             LiveExchangeService(config_manager, is_paper_trading_activated=True)
@@ -1092,17 +1091,14 @@ class TestLiveExchangeService:
 
 class TestLiveExchangeServiceCircuitBreaker:
     @pytest.fixture
-    def config_manager(self):
-        config_manager = Mock(spec=ConfigManager)
-        config_manager.get_exchange_name.return_value = "binance"
-        config_manager.get_trading_mode.return_value = TradingMode.LIVE
-        config_manager.get_websocket_max_retries.return_value = 5
-        config_manager.get_websocket_retry_base_delay.return_value = 5
-        config_manager.get_circuit_breaker_failure_threshold.return_value = 2
-        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
-        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
-        config_manager.get_post_only.return_value = False
-        return config_manager
+    def config_manager(self, valid_config):
+        return config_manager_from(
+            valid_config,
+            {
+                "exchange": {"name": "binance", "trading_mode": "live", "post_only": False},
+                "execution": {"circuit_breaker_failure_threshold": 2},
+            },
+        )
 
     @pytest.fixture
     def mock_exchange_instance(self):
@@ -1306,17 +1302,10 @@ class TestLiveExchangeServiceCircuitBreaker:
 
 class TestFetchRecentOhlcv:
     @pytest.fixture
-    def config_manager(self):
-        config_manager = Mock(spec=ConfigManager)
-        config_manager.get_exchange_name.return_value = "binance"
-        config_manager.get_trading_mode.return_value = TradingMode.LIVE
-        config_manager.get_websocket_max_retries.return_value = 5
-        config_manager.get_websocket_retry_base_delay.return_value = 5
-        config_manager.get_circuit_breaker_failure_threshold.return_value = 5
-        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
-        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
-        config_manager.get_post_only.return_value = False
-        return config_manager
+    def config_manager(self, valid_config):
+        return config_manager_from(
+            valid_config, {"exchange": {"name": "binance", "trading_mode": "live", "post_only": False}}
+        )
 
     @pytest.fixture
     def mock_exchange_instance(self):
@@ -1369,17 +1358,10 @@ class TestFetchRecentOhlcv:
 
 class TestDeviationAnchorRelease:
     @pytest.fixture
-    def config_manager(self):
-        config_manager = Mock(spec=ConfigManager)
-        config_manager.get_exchange_name.return_value = "binance"
-        config_manager.get_trading_mode.return_value = TradingMode.LIVE
-        config_manager.get_websocket_max_retries.return_value = 5
-        config_manager.get_websocket_retry_base_delay.return_value = 5
-        config_manager.get_circuit_breaker_failure_threshold.return_value = 5
-        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
-        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
-        config_manager.get_post_only.return_value = False
-        return config_manager
+    def config_manager(self, valid_config):
+        return config_manager_from(
+            valid_config, {"exchange": {"name": "binance", "trading_mode": "live", "post_only": False}}
+        )
 
     @pytest.fixture
     def setup_env_vars(self, monkeypatch):
@@ -1429,17 +1411,10 @@ class TestDeviationAnchorRelease:
 
 class TestWebSocketFailureHandling:
     @pytest.fixture
-    def config_manager(self):
-        config_manager = Mock(spec=ConfigManager)
-        config_manager.get_exchange_name.return_value = "binance"
-        config_manager.get_trading_mode.return_value = TradingMode.LIVE
-        config_manager.get_websocket_max_retries.return_value = 5
-        config_manager.get_websocket_retry_base_delay.return_value = 5
-        config_manager.get_circuit_breaker_failure_threshold.return_value = 5
-        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
-        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
-        config_manager.get_post_only.return_value = False
-        return config_manager
+    def config_manager(self, valid_config):
+        return config_manager_from(
+            valid_config, {"exchange": {"name": "binance", "trading_mode": "live", "post_only": False}}
+        )
 
     @pytest.fixture
     def setup_env_vars(self, monkeypatch):
@@ -1544,17 +1519,10 @@ class TestLiveExchangeServicePostOnly:
     """
 
     @pytest.fixture
-    def config_manager(self):
-        config_manager = Mock(spec=ConfigManager)
-        config_manager.get_exchange_name.return_value = "binance"
-        config_manager.get_trading_mode.return_value = TradingMode.LIVE
-        config_manager.get_websocket_max_retries.return_value = 5
-        config_manager.get_websocket_retry_base_delay.return_value = 5
-        config_manager.get_circuit_breaker_failure_threshold.return_value = 5
-        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
-        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
-        config_manager.get_post_only.return_value = False
-        return config_manager
+    def config_manager(self, valid_config):
+        return config_manager_from(
+            valid_config, {"exchange": {"name": "binance", "trading_mode": "live", "post_only": False}}
+        )
 
     @pytest.fixture
     def mock_exchange_instance(self):
@@ -1584,7 +1552,7 @@ class TestLiveExchangeServicePostOnly:
         setup_env_vars,
         mock_exchange_instance,
     ):
-        config_manager.get_post_only.return_value = True
+        _with_exchange(config_manager, post_only=True)
         service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
 
         await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0)
@@ -1603,7 +1571,7 @@ class TestLiveExchangeServicePostOnly:
         setup_env_vars,
         mock_exchange_instance,
     ):
-        config_manager.get_post_only.return_value = True
+        _with_exchange(config_manager, post_only=True)
         service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
 
         await service.place_order("BTC/USD", "market", "buy", 1, 50000.0)
@@ -1640,7 +1608,7 @@ class TestLiveExchangeServicePostOnly:
         setup_env_vars,
         mock_exchange_instance,
     ):
-        config_manager.get_post_only.return_value = True
+        _with_exchange(config_manager, post_only=True)
         service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
 
         await service.place_order("BTC/USD", "limit", "buy", 1, 50000.0, client_order_id="g1")
@@ -1657,17 +1625,14 @@ class TestLiveExchangeServicePostOnlyRejection:
     """
 
     @pytest.fixture
-    def config_manager(self):
-        config_manager = Mock(spec=ConfigManager)
-        config_manager.get_exchange_name.return_value = "binance"
-        config_manager.get_trading_mode.return_value = TradingMode.LIVE
-        config_manager.get_websocket_max_retries.return_value = 5
-        config_manager.get_websocket_retry_base_delay.return_value = 5
-        config_manager.get_circuit_breaker_failure_threshold.return_value = 3
-        config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
-        config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
-        config_manager.get_post_only.return_value = True
-        return config_manager
+    def config_manager(self, valid_config):
+        return config_manager_from(
+            valid_config,
+            {
+                "exchange": {"name": "binance", "trading_mode": "live", "post_only": True},
+                "execution": {"circuit_breaker_failure_threshold": 3},
+            },
+        )
 
     @pytest.fixture
     def mock_exchange_instance(self):
@@ -1732,7 +1697,7 @@ class TestLiveExchangeServicePostOnlyRejection:
         self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance
     ):
         """With post_only off no maker-only order was ever sent, so this cannot be that rejection."""
-        config_manager.get_post_only.return_value = False
+        _with_exchange(config_manager, post_only=False)
         service = self._service(mock_getattr, mock_ccxtpro, config_manager, mock_exchange_instance)
         mock_exchange_instance.create_order.side_effect = ccxt.InvalidOrder("EOrder:Post only order")
 

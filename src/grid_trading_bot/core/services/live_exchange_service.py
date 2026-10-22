@@ -73,7 +73,7 @@ class LiveExchangeService(ExchangeInterface):
         self.config_manager = config_manager
         self.is_paper_trading_activated = is_paper_trading_activated
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.exchange_name = self.config_manager.get_exchange_name()
+        self.exchange_name = self.config_manager.config.exchange.name
         self.api_key = self._get_env_variable("EXCHANGE_API_KEY")
         self.secret_key = self._get_env_variable("EXCHANGE_SECRET_KEY")
         self.exchange = self._initialize_exchange()
@@ -82,7 +82,7 @@ class LiveExchangeService(ExchangeInterface):
         self._exchange_closed = False
         self.websocket_max_retries: int = self.config_manager.get_websocket_max_retries()
         self.websocket_retry_base_delay: int = self.config_manager.get_websocket_retry_base_delay()
-        self.post_only: bool = self.config_manager.get_post_only()
+        self.post_only: bool = self.config_manager.config.exchange.post_only
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=self.config_manager.get_circuit_breaker_failure_threshold(),
             recovery_timeout=self.config_manager.get_circuit_breaker_recovery_timeout(),

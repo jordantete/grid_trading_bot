@@ -24,8 +24,8 @@ class BacktestExchangeService(ExchangeInterface):
     def __init__(self, config_manager: ConfigManager):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.config_manager = config_manager
-        self.historical_data_file = self.config_manager.get_historical_data_file()
-        self.exchange_name = self.config_manager.get_exchange_name()
+        self.historical_data_file = self.config_manager.config.trading_settings.historical_data_file
+        self.exchange_name = self.config_manager.config.exchange.name
         self.exchange = self._initialize_exchange()
 
     def _initialize_exchange(self) -> Any:

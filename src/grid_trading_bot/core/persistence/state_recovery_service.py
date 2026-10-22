@@ -538,7 +538,7 @@ class StateRecoveryService:
         tracker._crypto_balance = crypto_total - tracker._reserved_crypto
 
     async def _restore_balance(self, executions: list[tuple[Order, float]]) -> str:
-        if self.config_manager.get_trading_mode() == TradingMode.PAPER_TRADING:
+        if self.config_manager.config.exchange.trading_mode == TradingMode.PAPER_TRADING:
             await self._restore_balance_from_db(executions)
             return "db"
         await self._restore_balance_from_exchange()
@@ -578,8 +578,8 @@ class StateRecoveryService:
         saved_balance = self.repository.load_balance_state()
 
         exchange_balance = await self.exchange_service.get_balance()
-        base = self.config_manager.get_base_currency()
-        quote = self.config_manager.get_quote_currency()
+        base = self.config_manager.config.pair.base_currency
+        quote = self.config_manager.config.pair.quote_currency
         exchange_fiat = Decimal(str(exchange_balance.get("free", {}).get(quote, 0)))
         exchange_crypto = Decimal(str(exchange_balance.get("free", {}).get(base, 0)))
 

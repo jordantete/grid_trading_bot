@@ -129,7 +129,7 @@ def _assert_value_change_splits_into_realized_and_unrealized(bot, result):
     final_price = bot.strategy.close_prices[-1]
     snapshot = bot.balance_tracker.snapshot(final_price)
 
-    value_change = snapshot.value - bot.config_manager.get_initial_balance()
+    value_change = snapshot.value - bot.config_manager.config.trading_settings.initial_balance
     # BalanceTracker rounds the crypto position to 1e-8 per fill while the ledger keeps the exact quantity.
     assert value_change == pytest.approx(snapshot.realized_pnl + snapshot.unrealized_pnl, abs=1e-4)
 

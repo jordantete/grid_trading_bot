@@ -4,35 +4,27 @@ import asyncio
 import multiprocessing
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import ccxt
 import pytest
 
-from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.core.services import live_exchange_service
 from grid_trading_bot.core.services.exceptions import OrderNotFoundError
 from grid_trading_bot.core.services.live_exchange_service import LiveExchangeService
+from tests.fakes.config import config_manager_from
 from tests.fakes.fake_exchange import PAIR, ExchangeState, FakeExchange
 
 CLIENT_ORDER_ID = "g3f2a9c1d00112233aabbccdd"
 
 
 @pytest.fixture
-def service(tmp_path, monkeypatch):
+def service(tmp_path, monkeypatch, valid_config):
     state = ExchangeState.create(tmp_path / "exchange.json")
     monkeypatch.setattr(FakeExchange, "state_path", state.path)
     monkeypatch.setattr(live_exchange_service, "ccxtpro", SimpleNamespace(binance=FakeExchange))
     monkeypatch.setenv("EXCHANGE_API_KEY", "test")
     monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test")
-    config_manager = Mock(spec=ConfigManager)
-    config_manager.get_exchange_name.return_value = "binance"
-    config_manager.get_websocket_max_retries.return_value = 5
-    config_manager.get_websocket_retry_base_delay.return_value = 5
-    config_manager.get_circuit_breaker_failure_threshold.return_value = 5
-    config_manager.get_circuit_breaker_recovery_timeout.return_value = 60.0
-    config_manager.get_circuit_breaker_half_open_max_calls.return_value = 1
-    config_manager.get_post_only.return_value = False
+    config_manager = config_manager_from(valid_config, {"exchange": {"name": "binance", "post_only": False}})
     return LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
 

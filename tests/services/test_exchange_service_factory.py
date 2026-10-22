@@ -1,8 +1,8 @@
 from unittest.mock import Mock, patch
 
 import pytest
+from tests.fakes.config import config_manager_from
 
-from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.services.backtest_exchange_service import BacktestExchangeService
 from grid_trading_bot.core.services.exchange_service_factory import ExchangeServiceFactory
@@ -11,11 +11,8 @@ from grid_trading_bot.core.services.live_exchange_service import LiveExchangeSer
 
 class TestExchangeServiceFactory:
     @pytest.fixture
-    def config_manager(self):
-        config_manager = Mock(spec=ConfigManager)
-        config_manager.get_trading_mode.return_value = TradingMode.LIVE
-        config_manager.get_exchange_name.return_value = "binance"
-        return config_manager
+    def config_manager(self, valid_config):
+        return config_manager_from(valid_config, {"exchange": {"name": "binance", "trading_mode": "live"}})
 
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
@@ -41,8 +38,8 @@ class TestExchangeServiceFactory:
 
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_create_backtest_exchange_service(self, mock_getattr, mock_ccxtpro, config_manager):
-        config_manager.get_trading_mode.return_value = TradingMode.BACKTEST
+    def test_create_backtest_exchange_service(self, mock_getattr, mock_ccxtpro, valid_config):
+        config_manager = config_manager_from(valid_config, {"exchange": {"trading_mode": "backtest"}})
         service = ExchangeServiceFactory.create_exchange_service(config_manager, TradingMode.BACKTEST)
         assert isinstance(service, BacktestExchangeService), "Expected a BacktestExchangeService instance"
 
@@ -65,6 +62,5 @@ class TestExchangeServiceFactory:
         mock_exchange_instance.set_sandbox_mode.assert_called_once_with(True)
 
     def test_invalid_trading_mode(self, config_manager):
-        config_manager.get_trading_mode.return_value = "invalid_mode"
         with pytest.raises(ValueError, match="Unsupported trading mode: invalid_mode"):
             ExchangeServiceFactory.create_exchange_service(config_manager, "invalid_mode")

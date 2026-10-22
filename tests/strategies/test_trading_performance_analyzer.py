@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import math
 from unittest.mock import Mock
@@ -5,21 +6,29 @@ from unittest.mock import Mock
 import numpy as np
 import pandas as pd
 import pytest
+from tests.fakes.config import config_manager_from
 
 from grid_trading_bot.core.grid_management.grid_level import GridLevel
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.strategies.trading_performance_analyzer import ANNUAL_RISK_FREE_RATE, TradingPerformanceAnalyzer
 
 
+def _use_timeframe(config_manager, timeframe):
+    settings = dataclasses.replace(config_manager.config.trading_settings, timeframe=timeframe)
+    config_manager.config = dataclasses.replace(config_manager.config, trading_settings=settings)
+
+
 class TestPerformanceAnalyzer:
     @pytest.fixture
-    def setup_performance_analyzer(self):
-        config_manager = Mock()
-        config_manager.get_initial_balance.return_value = 10000
-        config_manager.get_base_currency.return_value = "BTC"
-        config_manager.get_quote_currency.return_value = "USDT"
-        config_manager.get_trading_fee.return_value = 0.001
-        config_manager.get_timeframe.return_value = "1d"
+    def setup_performance_analyzer(self, valid_config):
+        config_manager = config_manager_from(
+            valid_config,
+            {
+                "trading_settings": {"initial_balance": 10000, "timeframe": "1d"},
+                "pair": {"base_currency": "BTC", "quote_currency": "USDT"},
+                "exchange": {"trading_fee": 0.001},
+            },
+        )
         order_book = Mock()
         analyzer = TradingPerformanceAnalyzer(config_manager, order_book)
         return analyzer, config_manager, order_book
@@ -51,8 +60,7 @@ class TestPerformanceAnalyzer:
         assert analyzer._calculate_roi(150, 150.1006633) == pytest.approx(0.06710886666667193, rel=1e-12)
 
     def test_sharpe_is_kept_at_full_precision(self, setup_performance_analyzer):
-        analyzer, config_manager, _ = setup_performance_analyzer
-        config_manager.get_timeframe.return_value = "1d"
+        analyzer, _, _ = setup_performance_analyzer
         data = pd.DataFrame(
             {"account_value": [10000, 10100, 10050, 10200, 10150, 10300]},
             index=pd.date_range("2024-01-01", periods=6, freq="1D"),
@@ -67,8 +75,7 @@ class TestPerformanceAnalyzer:
         assert sharpe != round(sharpe, 2)
 
     def test_sortino_is_kept_at_full_precision(self, setup_performance_analyzer):
-        analyzer, config_manager, _ = setup_performance_analyzer
-        config_manager.get_timeframe.return_value = "1d"
+        analyzer, _, _ = setup_performance_analyzer
         data = pd.DataFrame(
             {"account_value": [10000, 10100, 10050, 10200, 10150, 10300]},
             index=pd.date_range("2024-01-01", periods=6, freq="1D"),
@@ -83,8 +90,7 @@ class TestPerformanceAnalyzer:
         assert sortino != round(sortino, 2)
 
     def test_a_sortino_without_returns_stays_nan_and_displays_as_before(self, setup_performance_analyzer):
-        analyzer, config_manager, _ = setup_performance_analyzer
-        config_manager.get_timeframe.return_value = "1d"
+        analyzer, _, _ = setup_performance_analyzer
         data = pd.DataFrame({"account_value": [10000]}, index=pd.date_range("2024-01-01", periods=1, freq="1D"))
 
         sortino = analyzer._calculate_sortino_ratio(data)
@@ -205,10 +211,10 @@ class TestPerformanceAnalyzer:
             index=pd.date_range("2024-01-01", periods=6, freq="1D"),
         )
 
-        config_manager.get_timeframe.return_value = "1d"
+        _use_timeframe(config_manager, "1d")
         sharpe_daily = analyzer._calculate_sharpe_ratio(data)
 
-        config_manager.get_timeframe.return_value = "1m"
+        _use_timeframe(config_manager, "1m")
         sharpe_minute = analyzer._calculate_sharpe_ratio(data)
 
         assert sharpe_daily != 0.0
@@ -221,10 +227,10 @@ class TestPerformanceAnalyzer:
             index=pd.date_range("2024-01-01", periods=6, freq="1D"),
         )
 
-        config_manager.get_timeframe.return_value = "1d"
+        _use_timeframe(config_manager, "1d")
         sortino_daily = analyzer._calculate_sortino_ratio(data)
 
-        config_manager.get_timeframe.return_value = "1m"
+        _use_timeframe(config_manager, "1m")
         sortino_minute = analyzer._calculate_sortino_ratio(data)
 
         assert sortino_daily != 0.0
@@ -362,7 +368,8 @@ class TestPerformanceAnalyzer:
 
         # Assertions for performance summary
         assert (
-            performance_summary["Pair"] == f"{config_manager.get_base_currency()}/{config_manager.get_quote_currency()}"
+            performance_summary["Pair"]
+            == f"{config_manager.config.pair.base_currency}/{config_manager.config.pair.quote_currency}"
         )
         assert performance_summary["Start Date"] == mock_account_data.index[0]
         assert performance_summary["End Date"] == mock_account_data.index[-1]
@@ -382,11 +389,11 @@ class TestPerformanceAnalyzer:
         )
         assert (
             performance_summary["Final Crypto Balance"]
-            == f"{final_crypto_balance:.4f} {config_manager.get_base_currency()}"
+            == f"{final_crypto_balance:.4f} {config_manager.config.pair.base_currency}"
         )
         assert (
             performance_summary["Remaining Fiat Balance"]
-            == f"{final_fiat_balance:.2f} {config_manager.get_quote_currency()}"
+            == f"{final_fiat_balance:.2f} {config_manager.config.pair.quote_currency}"
         )
         assert performance_summary["Number of Buy Trades"] == 1
         assert performance_summary["Number of Sell Trades"] == 1

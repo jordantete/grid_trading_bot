@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import ccxt
 import pandas as pd
 import pytest
+from tests.fakes.config import config_manager_from
 
-from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.core.services.backtest_exchange_service import BacktestExchangeService
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
@@ -17,11 +17,11 @@ from grid_trading_bot.core.services.exceptions import (
 
 class TestBacktestExchangeService:
     @pytest.fixture
-    def config_manager(self):
-        mock_config = Mock(spec=ConfigManager)
-        mock_config.get_exchange_name.return_value = "binance"
-        mock_config.get_historical_data_file.return_value = "data/test_data.csv"
-        return mock_config
+    def config_manager(self, valid_config):
+        return config_manager_from(
+            valid_config,
+            {"exchange": {"name": "binance"}, "trading_settings": {"historical_data_file": "data/test_data.csv"}},
+        )
 
     @pytest.fixture
     def backtest_service(self, config_manager):
@@ -33,8 +33,8 @@ class TestBacktestExchangeService:
         mock_ccxt.assert_called_once()
         assert service.exchange_name == "binance", "Expected exchange name to be 'binance'"
 
-    def test_initialization_unsupported_exchange(self, config_manager):
-        config_manager.get_exchange_name.return_value = "unsupported_exchange"
+    def test_initialization_unsupported_exchange(self, valid_config):
+        config_manager = config_manager_from(valid_config, {"exchange": {"name": "unsupported_exchange"}})
         with pytest.raises(UnsupportedExchangeError):
             BacktestExchangeService(config_manager)
 
@@ -60,14 +60,14 @@ class TestBacktestExchangeService:
         assert len(result) == 5, "Expected 5 rows of data"
         pd.testing.assert_frame_equal(result, mock_data)
 
-    def test_a_date_range_without_candles_names_the_pair_the_dates_and_the_file(self, tmp_path, config_manager):
+    def test_a_date_range_without_candles_names_the_pair_the_dates_and_the_file(self, tmp_path, valid_config):
         csv = tmp_path / "candles.csv"
         csv.write_text(
             "timestamp,open,high,low,close,volume\n"
             "2024-08-01 00:00:00,171.7,172.15,171.57,171.81,8036.24\n"
             "2024-08-01 00:01:00,171.8,171.97,171.74,171.86,3712.19\n"
         )
-        config_manager.get_historical_data_file.return_value = str(csv)
+        config_manager = config_manager_from(valid_config, {"trading_settings": {"historical_data_file": str(csv)}})
         service = BacktestExchangeService(config_manager)
 
         with pytest.raises(DataFetchError) as raised:

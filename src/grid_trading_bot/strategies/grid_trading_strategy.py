@@ -107,10 +107,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         Returns:
             tuple: A tuple containing the timeframe, start date, and end date as strings.
         """
-        timeframe = self.config_manager.get_timeframe()
-        start_date = self.config_manager.get_start_date()
-        end_date = self.config_manager.get_end_date()
-        return timeframe, start_date, end_date
+        settings = self.config_manager.config.trading_settings
+        return settings.timeframe, settings.period.start_date, settings.period.end_date
 
     def initialize_strategy(self):
         """
@@ -196,7 +194,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.logger.info(f"Starting {'live' if self.trading_mode == TradingMode.LIVE else 'paper'} trading")
 
         if self.config_manager.is_dynamic_spacing_enabled() and not self.grid_manager.is_initialized:
-            timeframe = self.config_manager.get_timeframe()
+            timeframe = self.config_manager.config.trading_settings.timeframe
             period = self.config_manager.get_dynamic_atr_period()
             candles = await self.exchange_service.fetch_recent_ohlcv(self.trading_pair, timeframe, period * 3)
             atr = ATRCalculator.compute(candles, period)
@@ -632,7 +630,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         if not periods:
             return False
 
-        timeframe = self.config_manager.get_timeframe()
+        timeframe = self.config_manager.config.trading_settings.timeframe
         interval = pd.Timedelta(seconds=self._timeframe_to_seconds(timeframe))
         if self._next_candle_close is None:
             self._next_candle_close = now.ceil(interval)

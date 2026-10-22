@@ -1,7 +1,7 @@
 import logging
-from unittest.mock import Mock
 
 import pytest
+from tests.fakes.config import config_manager_from
 
 from grid_trading_bot.core.order_handling.fee_calculator import Fee, FeeCalculator
 from grid_trading_bot.core.order_handling.order import Liquidity, Order, OrderSide, OrderStatus, OrderType
@@ -11,12 +11,8 @@ class TestFeeCalculator:
     """Single-rate config: `maker_fee`/`taker_fee` absent, both fall back to `trading_fee`."""
 
     @pytest.fixture
-    def config_manager(self):
-        mock_config = Mock()
-        mock_config.get_trading_fee.return_value = 0.001  # 0.1% trading fee
-        mock_config.get_maker_fee.return_value = 0.001
-        mock_config.get_taker_fee.return_value = 0.001
-        return mock_config
+    def config_manager(self, valid_config):
+        return config_manager_from(valid_config, {"exchange": {"trading_fee": 0.001}})
 
     @pytest.fixture
     def fee_calculator(self, config_manager):
@@ -48,7 +44,7 @@ class TestFeeCalculator:
         )
 
     def test_trading_fee_from_config(self, config_manager, fee_calculator):
-        assert fee_calculator.trading_fee == config_manager.get_trading_fee()
+        assert fee_calculator.trading_fee == config_manager.config.exchange.trading_fee
 
     def test_calculate_fee_tiny_trade_value_case(self, fee_calculator):
         trade_value = 0.0000001
@@ -60,12 +56,11 @@ class TestFeeCalculatorMakerTaker:
     """Fees must be charged at the rate matching the fill's liquidity role."""
 
     @pytest.fixture
-    def config_manager(self):
-        mock_config = Mock()
-        mock_config.get_trading_fee.return_value = 0.001
-        mock_config.get_maker_fee.return_value = 0.0016  # Kraken-like spot maker
-        mock_config.get_taker_fee.return_value = 0.0026  # Kraken-like spot taker
-        return mock_config
+    def config_manager(self, valid_config):
+        # Kraken-like spot maker and taker rates
+        return config_manager_from(
+            valid_config, {"exchange": {"trading_fee": 0.001, "maker_fee": 0.0016, "taker_fee": 0.0026}}
+        )
 
     @pytest.fixture
     def fee_calculator(self, config_manager):
@@ -77,8 +72,10 @@ class TestFeeCalculatorMakerTaker:
     def test_taker_fill_is_charged_the_taker_rate(self, fee_calculator):
         assert fee_calculator.calculate_fee(1000, Liquidity.TAKER) == pytest.approx(2.6)
 
-    def test_zero_maker_fee_is_honoured_rather_than_falling_back(self, config_manager):
-        config_manager.get_maker_fee.return_value = 0.0
+    def test_zero_maker_fee_is_honoured_rather_than_falling_back(self, valid_config):
+        config_manager = config_manager_from(
+            valid_config, {"exchange": {"trading_fee": 0.001, "maker_fee": 0.0, "taker_fee": 0.0026}}
+        )
         calculator = FeeCalculator(config_manager)
         assert calculator.calculate_fee(1000, Liquidity.MAKER) == 0.0
         assert calculator.calculate_fee(1000, Liquidity.TAKER) == pytest.approx(2.6)
@@ -119,13 +116,14 @@ class TestFeesInTheCurrencyReceived:
     OKX charge spot fees."""
 
     @pytest.fixture
-    def calculator(self):
-        config = Mock()
-        config.get_trading_fee.return_value = 0.001
-        config.get_maker_fee.return_value = 0.001
-        config.get_taker_fee.return_value = 0.002
-        config.get_base_currency.return_value = "BTC"
-        config.get_quote_currency.return_value = "USDT"
+    def calculator(self, valid_config):
+        config = config_manager_from(
+            valid_config,
+            {
+                "exchange": {"trading_fee": 0.001, "maker_fee": 0.001, "taker_fee": 0.002},
+                "pair": {"base_currency": "BTC", "quote_currency": "USDT"},
+            },
+        )
         return FeeCalculator(config)
 
     def test_a_buy_pays_its_fee_in_base(self, calculator):
@@ -214,13 +212,11 @@ class TestReportAfterFillsBookedAtTheModel:
     with it."""
 
     @pytest.fixture
-    def calculator(self):
-        config = Mock()
-        config.get_trading_fee.return_value = 0.001
-        config.get_maker_fee.return_value = 0.001
-        config.get_taker_fee.return_value = 0.001
-        config.get_base_currency.return_value = "BTC"
-        config.get_quote_currency.return_value = "USDT"
+    def calculator(self, valid_config):
+        config = config_manager_from(
+            valid_config,
+            {"exchange": {"trading_fee": 0.001}, "pair": {"base_currency": "BTC", "quote_currency": "USDT"}},
+        )
         return FeeCalculator(config)
 
     @staticmethod
