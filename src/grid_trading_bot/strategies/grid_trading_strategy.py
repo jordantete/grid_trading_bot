@@ -387,6 +387,9 @@ class GridTradingStrategy(TradingStrategyInterface):
             tuple: The typed metrics (None without data), their display summary and the formatted orders.
         """
         if self.trading_mode == TradingMode.BACKTEST:
+            if self.data is None or self.close_prices is None or self._starting_account_value is None:
+                self.logger.warning("No backtest data; no performance report.")
+                return None, {}, []
             initial_price = self.close_prices[0]
             final_price = self.close_prices[-1]
             snapshot = self.balance_tracker.snapshot(final_price)
@@ -437,6 +440,9 @@ class GridTradingStrategy(TradingStrategyInterface):
         in live or paper trading mode, plotting is not available.
         """
         if self.trading_mode == TradingMode.BACKTEST:
+            if self.data is None or self.plotter is None:
+                self.logger.warning("No backtest data to plot.")
+                return
             self.plotter.plot_results(self.data)
         else:
             self.logger.info("Plotting is not available for live/paper trading mode.")

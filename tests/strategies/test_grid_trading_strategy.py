@@ -1095,3 +1095,16 @@ class TestTickDrain:
         assert "ticker update" in warnings[0].getMessage()
         may_finish.set()
         await asyncio.wait_for(run, timeout=1)
+
+
+async def test_a_backtest_without_candles_reports_no_metrics_and_plots_nothing(strategy_fixture, caplog):
+    strategy = strategy_fixture
+    strategy.exchange_service.fetch_ohlcv.side_effect = DataFetchError("no candles")
+
+    await strategy.run()
+
+    assert strategy.generate_performance_report() == (None, {}, [])
+    caplog.clear()
+    strategy.plot_results()
+    assert "No backtest data to plot." in [record.getMessage() for record in caplog.records]
+    strategy.plotter.plot_results.assert_not_called()
