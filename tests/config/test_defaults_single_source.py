@@ -72,3 +72,19 @@ def test_no_schema_default_is_repeated_in_src():
                 if name in schema_field_names or (owner, name) in constructor_parameters:
                     hits.append(f"{path.relative_to(SRC)}:{default.lineno} {name}={ast.unparse(default)}")
     assert hits == []
+
+
+def test_no_schema_default_is_hard_coded_at_a_construction_site():
+    parameters_by_class: dict[str, set[str]] = {}
+    for cls, parameter, _ in CONSTRUCTOR_PARAMETERS:
+        parameters_by_class.setdefault(cls.__name__, set()).add(parameter)
+    hits = []
+    for path in sorted(SRC.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name | ast.Attribute)):
+                continue
+            callee = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            for keyword in node.keywords:
+                if keyword.arg in parameters_by_class.get(callee, ()) and isinstance(keyword.value, ast.Constant):
+                    hits.append(f"{path.relative_to(SRC)}:{keyword.value.lineno} {keyword.arg}={keyword.value.value!r}")
+    assert hits == []
