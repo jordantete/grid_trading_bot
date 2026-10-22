@@ -145,12 +145,12 @@ class TradingPerformanceAnalyzer:
         sortino_ratio = excess_returns.mean() / downside_std * np.sqrt(periods_per_year)
         return round(sortino_ratio, 2)
 
-    def get_formatted_orders(self) -> list[list[str | float]]:
+    def get_formatted_orders(self) -> list[list[str | float | None]]:
         """
         Retrieve a formatted list of filled buy and sell orders.
 
         Returns:
-            List[List[Union[str, float]]]: Formatted orders with details like side, type,
+            List[List[Union[str, float, None]]]: Formatted orders with details like side, type,
             status, price, quantity, timestamp, etc.
         """
         orders = []
@@ -168,15 +168,14 @@ class TradingPerformanceAnalyzer:
         orders.sort(key=lambda x: (x[5] is None, x[5]))  # x[5] is the timestamp, sort None to the end
         return orders
 
-    def _format_order(self, order: Order, grid_level: GridLevel | None) -> list[str | float]:
-        grid_level_price = grid_level.price if grid_level else "N/A"
-        if grid_level and order.average is not None:
-            # Assuming order.price is the execution price and grid level price the expected price
-            slippage = ((order.average - grid_level_price) / grid_level_price) * 100
+    def _format_order(self, order: Order, grid_level: GridLevel | None) -> list[str | float | None]:
+        if grid_level is not None and order.average is not None:
+            # The average fill price is the execution price, the grid level price the expected one.
+            slippage = (order.average - grid_level.price) / grid_level.price * 100
             slippage_str = f"{slippage:.2f}%"
         else:
-            slippage = "N/A"
             slippage_str = "N/A"
+        grid_level_price: float | str = grid_level.price if grid_level is not None else "N/A"
         return [
             order.side.name,
             order.order_type.name,
@@ -238,7 +237,7 @@ class TradingPerformanceAnalyzer:
         initial_balance: float,
         armed: bool,
         stop_reason: str | None,
-    ) -> tuple[PerformanceMetrics, dict[str, Any], list[list[str | float]]]:
+    ) -> tuple[PerformanceMetrics, dict[str, Any], list[list[str | float | None]]]:
         """
         Generate a detailed performance summary for the trading session.
 

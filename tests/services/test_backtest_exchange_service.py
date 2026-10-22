@@ -1,4 +1,4 @@
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import ccxt
 import pandas as pd
@@ -210,6 +210,18 @@ class TestBacktestExchangeService:
 
         with pytest.raises(NotImplementedError, match="fetch_order_by_client_id is not used in backtesting"):
             await service.fetch_order_by_client_id("g1", "BTC/USD")
+
+    @pytest.mark.asyncio
+    async def test_the_live_only_calls_are_not_used_in_backtesting(self, config_manager):
+        service = BacktestExchangeService(config_manager)
+
+        with pytest.raises(NotImplementedError, match="fetch_order is not used in backtesting"):
+            await service.fetch_order("1", "BTC/USDT")
+        with pytest.raises(NotImplementedError, match="fetch_recent_ohlcv is not used in backtesting"):
+            await service.fetch_recent_ohlcv("BTC/USDT", "1h", 10)
+        with pytest.raises(NotImplementedError, match="listen_to_ticker_updates is not used in backtesting"):
+            await service.listen_to_ticker_updates("BTC/USDT", AsyncMock(), 3)
+        assert service.last_price is None
 
     def test_rounding_keeps_the_values(self, config_manager):
         service = BacktestExchangeService(config_manager)

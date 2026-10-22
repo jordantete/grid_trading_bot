@@ -60,7 +60,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.trading_pair = trading_pair
         self.plotter = plotter
         self.data: pd.DataFrame | None = None
-        self.close_prices = None
+        self.close_prices: np.ndarray | None = None
         self.live_trading_metrics: deque = deque(maxlen=self.MAX_LIVE_METRICS)
         self._running = True
         self._tick_lock = asyncio.Lock()
@@ -284,17 +284,18 @@ class GridTradingStrategy(TradingStrategyInterface):
             return
 
         self.logger.info("Starting backtest simulation")
-        self.close_prices = self.data["close"].values
-        high_prices = self.data["high"].values
-        low_prices = self.data["low"].values
+        close_prices = self.data["close"].to_numpy()
+        self.close_prices = close_prices
+        high_prices = self.data["high"].to_numpy()
+        low_prices = self.data["low"].to_numpy()
         timestamps = self.data.index
         account_values = np.full(len(self.data), np.nan)
         crypto_values = np.full(len(self.data), np.nan)
         grid_orders_initialized = False
-        self._starting_account_value = self.balance_tracker.get_total_balance_value(self.close_prices[0])
+        self._starting_account_value = self.balance_tracker.get_total_balance_value(close_prices[0])
 
         for i, (current_price, high_price, low_price, timestamp) in enumerate(
-            zip(self.close_prices, high_prices, low_prices, timestamps, strict=False),
+            zip(close_prices, high_prices, low_prices, timestamps, strict=False),
         ):
             if i >= start_index and self.stop_reason is None:
                 if not grid_orders_initialized:
@@ -321,6 +322,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         Fills the orders the candle crosses, then applies the trailing stop, TP/SL and the
         volatility regrid at its close. A stop sets `stop_reason`, which ends trading.
         """
+        assert self.order_simulator is not None
         await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
 
         trailing_atr = self._backtest_atr_at(self._trailing_atr_series, index)

@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 import logging
 import os
 import time
@@ -27,7 +28,7 @@ class BacktestExchangeService(ExchangeInterface):
         self.exchange_name = self.config_manager.get_exchange_name()
         self.exchange = self._initialize_exchange()
 
-    def _initialize_exchange(self) -> ccxt.Exchange | None:
+    def _initialize_exchange(self) -> Any:
         try:
             return getattr(ccxt, self.exchange_name)()
         except AttributeError:
@@ -170,8 +171,8 @@ class BacktestExchangeService(ExchangeInterface):
     async def place_order(
         self,
         pair: str,
-        order_side: str,
         order_type: str,
+        order_side: str,
         amount: float,
         price: float | None = None,
         client_order_id: str | None = None,
@@ -180,6 +181,24 @@ class BacktestExchangeService(ExchangeInterface):
 
     async def fetch_order_by_client_id(self, client_order_id: str, pair: str) -> dict[str, str | float]:
         raise NotImplementedError("fetch_order_by_client_id is not used in backtesting")
+
+    async def fetch_order(self, order_id: str, pair: str) -> dict[str, str | float]:
+        raise NotImplementedError("fetch_order is not used in backtesting")
+
+    async def fetch_recent_ohlcv(self, pair: str, timeframe: str, limit: int) -> pd.DataFrame:
+        raise NotImplementedError("fetch_recent_ohlcv is not used in backtesting")
+
+    async def listen_to_ticker_updates(
+        self,
+        pair: str,
+        on_price_update: Callable[[float], Awaitable[None]],
+        update_interval: float,
+    ) -> None:
+        raise NotImplementedError("listen_to_ticker_updates is not used in backtesting")
+
+    @property
+    def last_price(self) -> float | None:
+        return None
 
     def round_amount(self, pair: str, amount: float) -> float:
         return amount

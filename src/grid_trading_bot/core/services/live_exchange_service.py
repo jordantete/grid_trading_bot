@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import logging
 import math
 import os
@@ -184,7 +184,7 @@ class LiveExchangeService(ExchangeInterface):
     async def _subscribe_to_ticker_updates(
         self,
         pair: str,
-        on_ticker_update: Callable[[float], None],
+        on_ticker_update: Callable[[float], Awaitable[None]],
         update_interval: float,
     ) -> None:
         if self._closing:
@@ -252,7 +252,7 @@ class LiveExchangeService(ExchangeInterface):
     async def listen_to_ticker_updates(
         self,
         pair: str,
-        on_price_update: Callable[[float], None],
+        on_price_update: Callable[[float], Awaitable[None]],
         update_interval: float,
     ) -> None:
         await self._subscribe_to_ticker_updates(pair, on_price_update, update_interval)

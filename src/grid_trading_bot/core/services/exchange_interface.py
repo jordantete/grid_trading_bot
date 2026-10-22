@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pandas as pd
@@ -14,8 +15,8 @@ class ExchangeInterface(ABC):
     async def place_order(
         self,
         pair: str,
-        order_side: str,
         order_type: str,
+        order_side: str,
         amount: float,
         price: float | None = None,
         client_order_id: str | None = None,
@@ -24,12 +25,17 @@ class ExchangeInterface(ABC):
 
         Args:
             pair: Trading pair symbol (e.g., "BTC/USDT").
-            order_side: Order side as expected by CCXT — "buy" or "sell".
             order_type: Order type as expected by CCXT — "market" or "limit".
+            order_side: Order side as expected by CCXT — "buy" or "sell".
             amount: Order quantity in base currency.
             price: Limit price in quote currency. Required for limit orders, None for market orders.
             client_order_id: Id the exchange stores with the order, so an order whose answer was lost can be found.
         """
+        pass
+
+    @abstractmethod
+    async def fetch_order(self, order_id: str, pair: str) -> dict[str, str | float]:
+        """Fetches the order `order_id` on `pair`."""
         pass
 
     @abstractmethod
@@ -59,6 +65,27 @@ class ExchangeInterface(ABC):
         Fetches historical OHLCV data as a list of dictionaries, each containing open, high, low,
         close, and volume for the specified time period.
         """
+        pass
+
+    @abstractmethod
+    async def fetch_recent_ohlcv(self, pair: str, timeframe: str, limit: int) -> pd.DataFrame:
+        """The last `limit` candles of `pair`, with their open time in the `timestamp` column."""
+        pass
+
+    @abstractmethod
+    async def listen_to_ticker_updates(
+        self,
+        pair: str,
+        on_price_update: Callable[[float], Awaitable[None]],
+        update_interval: float,
+    ) -> None:
+        """Calls `on_price_update` with each accepted ticker price until the feed is closed."""
+        pass
+
+    @property
+    @abstractmethod
+    def last_price(self) -> float | None:
+        """The last price the ticker feed accepted, None before the first one."""
         pass
 
     @abstractmethod
