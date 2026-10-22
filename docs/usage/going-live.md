@@ -27,7 +27,9 @@ To create Binance API keys:
 3. Copy the key and secret into your `.env` file.
 
 !!! tip "Use the testnet first"
-    Binance provides a free testnet with fake funds at [testnet.binance.vision](https://testnet.binance.vision). Create a separate API key/secret pair there and use them for `paper_trading` mode — the bot automatically points sandbox-capable exchanges (including Binance) at their testnet REST endpoint when `trading_mode` is `paper_trading`.
+    Binance provides a free testnet with fake funds at [testnet.binance.vision](https://testnet.binance.vision). Create a separate API key/secret pair there and use them for `paper_trading` mode. In `paper_trading` the bot calls ccxt's `set_sandbox_mode(True)`, which points the exchange at its test environment, and refuses to start (exit 78) on an exchange that has none, so a paper config can never trade real funds. With ccxt 4.5.87, Binance, Bybit and OKX have one; Kraken, Coinbase and KuCoin do not. To check another exchange: `uv run python -c "import ccxt; print(ccxt.<name>().has.get('sandbox'))"` prints `True` when paper trading is possible.
+
+    In paper trading on Binance, prices come from the testnet's own ticker, which ccxt's sandbox mode also switches to. Testnet prices can drift from the real market.
 
 ### Fees
 
@@ -87,6 +89,8 @@ A take-profit, stop-loss or trailing stop cancels the grid, then sells the free 
 - when the exchange holds no more free crypto while the books still show some, it stops and alerts ("Liquidation stopped: the exchange holds no more free X; the books still show Y").
 
 The sale stays in the placement journal from the first attempt until the liquidation ends, so a crash between two attempts restarts on a halt, never on the grid. A sale the exchange never received is sent again under the same `clientOrderId`; one that ended without a fill (closed included) or was refused, under a new one. The take-profit or stop-loss notification says "position liquidated" only when the books hold no crypto left; otherwise it says "liquidation stopped with X left" or "liquidation incomplete".
+
+A market order (the initial purchase or a liquidation leg) is booked before it leaves the placement journal. If the exchange executed it but the bot cannot book it (a malformed answer, a bug), the bot never sends it again: it halts (RISK, halt marker, exit 0) with an alert giving the order id, the quantity, the average price, the fee and the error, and the entry stays in the journal. Check the exchange for the executed order and read the alert before anything else. `resume` moves the state database aside, so the next start is a fresh grid: in live it starts from the exchange balances (which already count the executed order), in paper trading from the config balances (the crypto bought by an unbooked purchase stays on the testnet, outside the paper books). To keep the database instead, once you know why the booking failed, delete the halt marker by hand: the recovery at the next start looks the order up by its `clientOrderId` and books what the exchange reports. A liquidation halts again as above, an initial purchase that books cleanly resumes the grid, and one whose booking fails again refuses the start with the database untouched. The same recovery runs after a crash that left no halt marker.
 
 An alert goes out at the first failure, then every 10 minutes with the number of attempts and the position still open. A SIGTERM or a `stop` during the retries ends them after the current attempt: the position stays open, the alert says how much ("Liquidation interrupted by the shutdown, X still open"), and the bot is halted like after any take-profit or stop-loss. Sell what is left by hand before running `resume`.
 
@@ -176,8 +180,11 @@ A background health check runs every `execution.health_check_interval` seconds (
 - **Strategy alive** — the trading loop is still running.
 - **Exchange status** — the exchange's own status endpoint.
 - **Ticker feed freshness** (live/paper only) — alerts if no accepted price update has been received for over 120 seconds.
+- **Background loops** (live/paper only): alerts when the order tracking, the reconciliation or the periodic checkpoint is failing or has stopped.
 
 If the WebSocket ticker feed dies and exhausts `execution.websocket_max_retries` reconnect attempts, the bot treats this as fatal: the bot keeps its open orders, writes a checkpoint, sends a notification and exits with code 75 so the supervisor relaunches it. Recovery reconciles the state with the exchange on restart.
+
+The order tracking, the reconciliation (live only) and the periodic checkpoint each run in a supervised loop. An unexpected error in one pass is logged, alerted at the first failure ("Error Occurred", naming the loop), and the loop runs again at its next interval; the first pass that succeeds after failures sends "Background Loop Recovered". After 3 failures in a row of the same loop, the bot stops as a crash: it keeps its open orders, writes a checkpoint and exits with code 1, so the supervisor relaunches it and the recovery reconciles the state with the exchange. Failed checkpoint writes keep their own count ("Checkpoint Failed", halt after 3 in a row).
 
 ### Notifications
 

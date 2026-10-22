@@ -97,6 +97,10 @@ Every order the bot places goes through one helper in `OrderManager` and a `Plac
 
 The tracker applies the fills of one poll in the order the price reaches them (buys from the highest price down, then sells from the lowest up), as the backtest simulator does. Exceptions derive from `GridBotError`: a `DataFetchError` is a transient exchange failure and is retried, an `OrderRefusedError` (the bot's own checks or the exchange refusing the order) is expected and logged at WARNING.
 
+### Supervised Background Loops
+
+The order tracker, the reconciliation service and the periodic checkpoint each run in a `SupervisedLoop` (`core/bot_management/supervised_loop.py`). An unexpected error in one pass is logged and alerted at the first failure of a streak, and the loop runs again at its next interval; a success after failures sends `LOOP_RECOVERED`. After 3 failures in a row the loop publishes `STOP_BOT` with a CRASH request from its own task and ends, so the bot stops with its orders kept and exits 1 for the supervisor to relaunch it. Each loop exposes its state, which `get_bot_health_status` reports as `background_loops`.
+
 ### State Machine
 
 Each `GridLevel` transitions through `GridCycleState` as orders are placed and filled:

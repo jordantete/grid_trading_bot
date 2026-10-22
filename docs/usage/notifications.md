@@ -44,7 +44,7 @@ See the [Environment Variables](../configuration/environment-variables.md) page 
 
 | Type | Title | Trigger |
 |------|-------|---------|
-| `ERROR_OCCURRED` | Error Occurred | When an unexpected error occurs; when a liquidation fails (first failure, then every 10 minutes), stops on a remainder under the exchange minimum or on an exchange holding less free crypto than the books, or is interrupted by the shutdown; when an open order carrying the bot's `clientOrderId` prefix is unknown at restart; when a liquidation was in progress at restart (the position may still be open, the bot halts) |
+| `ERROR_OCCURRED` | Error Occurred | When an unexpected error occurs; when a liquidation fails (first failure, then every 10 minutes), stops on a remainder under the exchange minimum or on an exchange holding less free crypto than the books, or is interrupted by the shutdown; when an open order carrying the bot's `clientOrderId` prefix is unknown at restart; when a liquidation was in progress at restart (the position may still be open, the bot halts); when a background loop fails for the first time in a row; when a market order executed by the exchange cannot be booked (the bot halts) |
 | `HEALTH_CHECK_ALERT` | Health Check Alert | When the health check detects an issue |
 | `STATE_RECOVERY_COMPLETE` | State Recovery Complete | After a successful state recovery on restart; lists the rejected and ghost orders that were not re-placed |
 | `BOT_HALTED` | Bot Halted | When the bot halts. The text asks you to check the exchange for orders left open before running `resume` |
@@ -54,6 +54,7 @@ See the [Environment Variables](../configuration/environment-variables.md) page 
 | `START_DEFERRED` | Start Deferred | When the exchange is unreachable while the saved state is loaded or the open orders are checked. Exit 75, so the supervisor relaunches the bot |
 | `CHECKPOINT_FAILED` | Checkpoint Failed | At the first failed write of the state database; trading continues. After 3 failures in a row the bot halts |
 | `CHECKPOINT_RESTORED` | Checkpoint Restored | At the first successful write after one or more failures |
+| `LOOP_RECOVERED` | Background Loop Recovered | When the order tracking, the reconciliation or the periodic checkpoint succeeds again after one or more failed passes. The first failure sends `ERROR_OCCURRED`; 3 in a row stop the bot with its orders kept (exit 1) |
 
 ### Reconciliation Notifications
 

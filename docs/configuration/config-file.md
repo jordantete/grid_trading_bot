@@ -82,7 +82,7 @@ The bot is configured via a JSON file (typically `config/config.json`). This pag
 | `maker_fee` | float | No | Fee charged on liquidity-adding fills — resting grid limit orders. Defaults to `trading_fee`. |
 | `taker_fee` | float | No | Fee charged on liquidity-taking fills — the initial purchase, take-profit, stop-loss and liquidation market orders. Defaults to `trading_fee`. |
 | `post_only` | bool | No | Post grid limit orders maker-only. Defaults to `false`. |
-| `trading_mode` | string | Yes | One of `backtest`, `paper_trading`, or `live`. |
+| `trading_mode` | string | Yes | One of `backtest`, `paper_trading`, or `live`. `paper_trading` needs an exchange with a test environment in ccxt (Binance, Bybit, OKX with ccxt 4.5.87); any other exchange is refused at start. |
 
 #### Maker and taker fees
 
@@ -179,6 +179,8 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 | `reconciliation_interval` | float | `300.0` | 60.0–3600.0 | Seconds between reconciliation cycles that audit local state vs exchange (live mode only). |
 | `reconciliation_balance_tolerance` | float | `0.01` | 0.0–100.0 | Balance drift tolerated before an alert, as a value in the quote currency. The crypto check converts it at the last price and never goes below the exchange's minimum order amount. |
 
+`reconciliation_interval` and `reconciliation_balance_tolerance` are checked against their ranges at start, like the other `execution` fields; a value outside them refuses the config (exit 78).
+
 ### `logging`
 
 | Parameter | Type | Required | Description |
@@ -190,7 +192,8 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 
 SQLite state persistence for crash recovery. The state is saved in `live` and `paper_trading` modes and ignored in `backtest`.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `enabled` | bool | `true` | Whether to persist bot state to SQLite. |
-| `db_path` | string | `data/{BASE}_{QUOTE}/state_{hash}.db` | Path to the SQLite database file. The default path includes a short config hash so different grid configurations for the same pair use separate databases. |
+| Parameter | Type | Default | Range | Description |
+|-----------|------|---------|-------|-------------|
+| `enabled` | bool | `true` | `true` or `false` | Whether to persist bot state to SQLite. A string such as `"false"` is refused. |
+| `db_path` | string | `data/{BASE}_{QUOTE}/state_{hash}.db` | non-empty | Path to the SQLite database file. The default path includes a short config hash so different grid configurations for the same pair use separate databases. |
+| `checkpoint_interval_seconds` | float | `60.0` | 1.0–3600.0 | Seconds between periodic checkpoints, which save the state that changes between order operations (the trailing-stop ratchet). |
