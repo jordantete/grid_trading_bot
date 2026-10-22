@@ -6,7 +6,27 @@ on:
       - "v*"
 
 jobs:
-  test:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check the tag against the version and master
+        env:
+          TAG: ${{ github.ref_name }}
+        run: bash scripts/verify_release_tag.sh "$TAG" "$GITHUB_SHA"
+
+  ci:
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+    with:
+      upload-coverage: false
+    secrets: inherit
+
+  build:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -17,27 +37,11 @@ jobs:
         with:
           python-version-file: "pyproject.toml"
 
-      - name: Install dependencies
-        run: uv sync --locked --all-extras --dev
-
-      - name: Run tests
-        run: uv run pytest --cov=grid_trading_bot --cov-report=term
-
-  build:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version-file: "pyproject.toml"
-
-      - name: Install build
-        run: pip install build
-
       - name: Build package
-        run: python -m build
+        run: uv build
+
+      - name: Check package metadata
+        run: uvx twine check dist/*
 
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v7
