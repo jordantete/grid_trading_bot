@@ -148,6 +148,15 @@ class TestGridTradingStrategy:
         )
 
     @pytest.mark.asyncio
+    async def test_a_backtest_candle_without_an_order_simulator_raises(self, setup_strategy):
+        create_strategy, *_ = setup_strategy
+        strategy = create_strategy()
+        strategy.order_simulator = None
+
+        with pytest.raises(RuntimeError, match="order simulator"):
+            await strategy._simulate_backtest_candle(0, 100.0, 101.0, 99.0, pd.Timestamp("2024-01-01"))
+
+    @pytest.mark.asyncio
     async def test_initialize_strategy(self, setup_strategy):
         create_strategy, _, _, grid_manager, *_ = setup_strategy
         strategy = create_strategy()

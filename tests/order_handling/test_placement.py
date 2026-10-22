@@ -15,7 +15,7 @@ from grid_trading_bot.core.order_handling import order_manager as order_manager_
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
-from grid_trading_bot.core.order_handling.placement_journal import PlacementPurpose
+from grid_trading_bot.core.order_handling.placement_journal import PendingPlacement, PlacementPurpose
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     OrderNotPlacedError,
@@ -549,6 +549,29 @@ class TestRetries:
         assert stack.grid.grid_levels[80.0].state == GridCycleState.WAITING_FOR_BUY_FILL
         assert reserved_matches_open_orders(stack)
         assert any("placed after 2 attempts" in record.getMessage() for record in caplog.records)
+
+    async def test_a_limit_entry_without_a_level_is_reported_and_the_next_entry_is_still_retried(self, caplog):
+        stack = build_stack(store=RecordingStore())
+        broken = PendingPlacement(
+            client_order_id="gbroken00000000000000000",
+            order_type=OrderType.LIMIT,
+            side=OrderSide.BUY,
+            quantity=0.1,
+            price=85.0,
+            purpose=PlacementPurpose.GRID,
+        )
+        stack.journal.add(broken)
+        stack.execution.fail_next_limit_order = OrderNotPlacedError("exchange down")
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+        assert len(stack.journal.limit_entries()) == 2
+        orders_before = len(stack.execution.orders)
+
+        await stack.manager.retry_pending_placements()
+
+        assert stack.journal.limit_entries() == [broken]
+        assert len(stack.execution.orders) == orders_before + 1
+        assert _sent(stack).count(NotificationType.ERROR_OCCURRED) == 1
+        assert any("has no level price" in message for message in _errors(caplog))
 
     async def test_a_sent_entry_the_exchange_holds_is_adopted_without_a_second_order(self):
         stack, _entry, held = await _arm_with_one_lost_placement(OrderOutcomeUnknownError("timeout"))
@@ -1324,6 +1347,30 @@ class TestLiquidation:
         assert _market_sells(stack) == []
         assert stack.balances.crypto_balance == 2.0
         assert not stack.manager._liquidated
+
+    async def test_a_liquidation_without_the_current_price_leaves_the_grid_untouched(self):
+        stack, _ = _liquidating_stack(crypto=20.0, fiat=2700.0)
+        await stack.manager.initialize_grid_orders(ARMING_PRICE)
+        open_before = {order.identifier for order in stack.book.get_open_orders()}
+        balances_before = (
+            stack.balances.balance,
+            stack.balances.crypto_balance,
+            stack.balances.reserved_fiat,
+            stack.balances.reserved_crypto,
+        )
+
+        with pytest.raises(ValueError, match="needs the current price"):
+            await stack.manager.close_positions(liquidate=True)
+
+        assert "cancel_order" not in stack.execution.calls
+        assert {order.identifier for order in stack.book.get_open_orders()} == open_before
+        assert (
+            stack.balances.balance,
+            stack.balances.crypto_balance,
+            stack.balances.reserved_fiat,
+            stack.balances.reserved_crypto,
+        ) == balances_before
+        assert not stack.manager._positions_closed
 
     async def test_closing_without_liquidation_cancels_the_grid_and_keeps_the_crypto(self):
         stack, _ = _liquidating_stack(crypto=20.0, fiat=2700.0)

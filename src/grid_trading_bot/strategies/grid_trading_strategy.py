@@ -323,7 +323,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         Fills the orders the candle crosses, then applies the trailing stop, TP/SL and the
         volatility regrid at its close. A stop sets `stop_reason`, which ends trading.
         """
-        assert self.order_simulator is not None
+        if self.order_simulator is None:
+            raise RuntimeError("A backtest needs its order simulator.")
         await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
 
         trailing_atr = self._backtest_atr_at(self._trailing_atr_series, index)

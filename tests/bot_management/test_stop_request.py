@@ -65,3 +65,12 @@ def test_aggregate_prefers_failure_then_feed_then_signal_then_success():
 
 def test_config_error_code_is_ex_config():
     assert EXIT_CONFIG == 78
+
+
+def test_a_signal_request_that_lost_its_number_raises_instead_of_asserting():
+    request = StopRequest(StopKind.SIGNAL, "SIGTERM", signal_number=15)
+    # The only way past __post_init__ and the frozen dataclass; nothing in the bot can do this.
+    object.__setattr__(request, "signal_number", None)
+
+    with pytest.raises(RuntimeError, match="signal_number"):
+        _ = request.exit_code

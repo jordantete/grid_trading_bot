@@ -433,24 +433,31 @@ class OrderManager:
                 await self._save_state()
 
     async def _retry_entry(self, entry: PendingPlacement) -> None:
+        level_price = entry.level_price
+        if level_price is None:
+            self._report_retry_error(entry, RuntimeError(f"limit placement {entry.client_order_id} has no level price"))
+            return
         try:
             if entry.sent and await self._resolve_sent_entry(entry) is not None:
                 return
             await self._send_entry(entry)
         except OrderRefusedError as e:
-            assert entry.level_price is not None
             if entry.purpose is PlacementPurpose.GRID:
-                self._report_unfunded([(entry.side, entry.level_price)])
+                self._report_unfunded([(entry.side, level_price)])
             else:
-                self._report_refusal(entry.purpose, entry.level_price, e)
+                self._report_refusal(entry.purpose, level_price, e)
         except DataFetchError as e:
             self.logger.warning(f"Could not look up placement {entry.client_order_id}; retried at the next poll: {e}")
         except Exception as e:
-            details = f"Retry of placement {entry.client_order_id} failed: {e}"
-            self.logger.error(details, exc_info=True)
-            if entry.client_order_id not in self._retry_errors_alerted:
-                self._retry_errors_alerted.add(entry.client_order_id)
-                self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
+            self._report_retry_error(entry, e)
+
+    def _report_retry_error(self, entry: PendingPlacement, error: Exception) -> None:
+        """Logs a retry that failed unexpectedly, and alerts once per entry."""
+        details = f"Retry of placement {entry.client_order_id} failed: {error}"
+        self.logger.error(details, exc_info=error)
+        if entry.client_order_id not in self._retry_errors_alerted:
+            self._retry_errors_alerted.add(entry.client_order_id)
+            self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
 
     async def _resolve_sent_entry(self, entry: PendingPlacement) -> Order | None:
         """
@@ -866,11 +873,14 @@ class OrderManager:
         """
         Cancels every open grid order and drops the journal's limit entries, once; then, when asked, sells the crypto
         until it is sold, under the exchange minimum, or interrupted. A liquidation that failed or was interrupted
-        runs again on the next call that asks for it.
+        runs again on the next call that asks for it. A liquidation without the current price is refused before
+        anything is cancelled.
 
         Note: `cancel_open_grid_orders` acquires `self._lock` itself, so it must be awaited outside any lock held by
         this method to avoid deadlocking.
         """
+        if liquidate and current_price is None:
+            raise ValueError("A liquidation needs the current price.")
         if not self._positions_closed:
             self._positions_closed = True
             cancelled = await self.cancel_open_grid_orders()
@@ -883,13 +893,12 @@ class OrderManager:
         elif not liquidate:
             self.logger.info("close_positions already executed; skipping.")
             return
-        if not liquidate:
+        # The first check already refused a liquidation without a price; this one narrows the type for _liquidate.
+        if not liquidate or current_price is None:
             return
         if self._liquidated:
             self.logger.info("Positions already liquidated; skipping.")
             return
-        if current_price is None:
-            raise ValueError("A liquidation needs the current price.")
         await self._liquidate(current_price)
 
     def interrupt_liquidation(self) -> None:

@@ -41,7 +41,8 @@ class StopRequest:
         if self.kind.halts or self.kind is StopKind.START_REFUSED:
             return EXIT_OK
         if self.kind is StopKind.SIGNAL:
-            assert self.signal_number is not None
+            if self.signal_number is None:
+                raise RuntimeError("A SIGNAL stop request lost its signal_number.")
             return 128 + int(self.signal_number)
         if self.kind in {StopKind.FEED_LOST, StopKind.EXCHANGE_UNAVAILABLE}:
             return EXIT_FEED_LOST
