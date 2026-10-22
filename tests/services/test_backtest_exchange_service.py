@@ -7,6 +7,7 @@ import pytest
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.core.services.backtest_exchange_service import BacktestExchangeService
 from grid_trading_bot.core.services.exceptions import (
+    DataFetchError,
     HistoricalMarketDataFileNotFoundError,
     UnsupportedExchangeError,
     UnsupportedPairError,
@@ -58,6 +59,23 @@ class TestBacktestExchangeService:
         assert isinstance(result, pd.DataFrame), "Expected result to be a DataFrame"
         assert len(result) == 5, "Expected 5 rows of data"
         pd.testing.assert_frame_equal(result, mock_data)
+
+    def test_a_date_range_without_candles_names_the_pair_the_dates_and_the_file(self, tmp_path, config_manager):
+        csv = tmp_path / "candles.csv"
+        csv.write_text(
+            "timestamp,open,high,low,close,volume\n"
+            "2024-08-01 00:00:00,171.7,172.15,171.57,171.81,8036.24\n"
+            "2024-08-01 00:01:00,171.8,171.97,171.74,171.86,3712.19\n"
+        )
+        config_manager.get_historical_data_file.return_value = str(csv)
+        service = BacktestExchangeService(config_manager)
+
+        with pytest.raises(DataFetchError) as raised:
+            service.fetch_ohlcv("SOL/USDT", "1m", "2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z")
+
+        assert str(raised.value) == (
+            f"No candles for SOL/USDT between 2025-01-01T00:00:00Z and 2025-01-02T00:00:00Z in {csv}"
+        )
 
     @patch("pandas.read_csv")
     def test_load_ohlcv_file_not_found(self, mock_read_csv, config_manager):

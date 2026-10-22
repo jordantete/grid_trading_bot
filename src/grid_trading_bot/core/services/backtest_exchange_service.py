@@ -58,7 +58,7 @@ class BacktestExchangeService(ExchangeInterface):
                 )
 
             self.logger.info(f"Loading OHLCV data from file: {self.historical_data_file}")
-            return self._load_ohlcv_from_file(self.historical_data_file, start_date, end_date)
+            return self._load_ohlcv_from_file(self.historical_data_file, pair, start_date, end_date)
 
         if not self._is_pair_supported(pair):
             raise UnsupportedPairError(f"Pair: {pair} is not supported by {self.exchange_name}")
@@ -85,6 +85,7 @@ class BacktestExchangeService(ExchangeInterface):
     def _load_ohlcv_from_file(
         self,
         file_path: str,
+        pair: str,
         start_date: str,
         end_date: str,
     ) -> pd.DataFrame:
@@ -95,11 +96,13 @@ class BacktestExchangeService(ExchangeInterface):
             start_timestamp = pd.to_datetime(start_date).tz_localize(None)
             end_timestamp = pd.to_datetime(end_date).tz_localize(None)
             filtered_df = df.loc[start_timestamp:end_timestamp]
-            self.logger.debug(f"Loaded {len(filtered_df)} rows of OHLCV data from file.")
-            return filtered_df
-
         except (FileNotFoundError, pd.errors.ParserError, pd.errors.EmptyDataError, KeyError, ValueError) as e:
             raise DataFetchError(f"Failed to load OHLCV data from file: {e!s}") from e
+
+        if filtered_df.empty:
+            raise DataFetchError(f"No candles for {pair} between {start_date} and {end_date} in {file_path}")
+        self.logger.debug(f"Loaded {len(filtered_df)} rows of OHLCV data from file.")
+        return filtered_df
 
     def _fetch_ohlcv_single_batch(
         self,

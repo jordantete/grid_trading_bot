@@ -184,6 +184,29 @@ def test_a_backtest_whose_candles_failed_to_load_exits_1_and_saves_no_results(tm
     assert not results_path.exists()
 
 
+def test_a_backtest_whose_dates_hold_no_candle_exits_1_and_saves_no_results(tmp_path, valid_config):
+    csv = tmp_path / "candles.csv"
+    csv.write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "2024-08-01 00:00:00,171.7,172.15,171.57,171.81,8036.24\n"
+        "2024-08-01 00:01:00,171.8,171.97,171.74,171.86,3712.19\n"
+    )
+    config = json.loads(json.dumps(valid_config))
+    config["trading_settings"]["historical_data_file"] = str(csv)
+    config["trading_settings"]["period"] = {"start_date": "2025-01-01T00:00:00Z", "end_date": "2025-01-02T00:00:00Z"}
+    config["logging"] = {"log_level": "INFO", "log_to_file": False}
+    path = tmp_path / "config_backtest.json"
+    path.write_text(json.dumps(config))
+    results_path = tmp_path / "results.json"
+
+    result = CliRunner().invoke(
+        cli.main, ["run", "--config", str(path), "--no-plot", "--save_performance_results", str(results_path)]
+    )
+
+    assert result.exit_code == 1
+    assert not results_path.exists()
+
+
 def test_resume_archives_the_state_and_clears_the_halt(tmp_path, valid_config):
     path = _write_config(tmp_path, valid_config)
     files = RunFiles.for_config(_config_manager(path))
