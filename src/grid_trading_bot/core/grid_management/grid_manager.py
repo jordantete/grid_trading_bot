@@ -314,7 +314,7 @@ class GridManager:
         """
         self.grid_strategy.rollback_order_placement(grid_level, order_side, has_open_orders, self.logger)
 
-    def _extract_grid_config(self) -> tuple[float, float, int, str]:
+    def _extract_grid_config(self) -> tuple[float | None, float | None, int, SpacingType]:
         """
         Extracts grid configuration parameters from the configuration manager.
         """
@@ -334,6 +334,8 @@ class GridManager:
                 - central_price (float): The central price of the grid.
         """
         bottom_range, top_range, num_grids, spacing_type = self._extract_grid_config()
+        if bottom_range is None or top_range is None:
+            raise ValueError("A static grid needs grid_strategy.range.bottom and top.")
 
         if spacing_type == SpacingType.ARITHMETIC:
             grids = [bottom_range + i * (top_range - bottom_range) / (num_grids - 1) for i in range(num_grids)]

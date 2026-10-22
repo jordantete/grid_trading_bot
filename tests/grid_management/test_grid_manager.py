@@ -458,6 +458,14 @@ class TestGridManager:
         np.testing.assert_array_almost_equal(grids, expected_grids, decimal=10)
         assert central_price == 1500
 
+    @pytest.mark.parametrize("missing_bound", ["get_top_range", "get_bottom_range"])
+    def test_a_range_grid_missing_a_bound_is_refused(self, config_manager, missing_bound):
+        getattr(config_manager, missing_bound).return_value = None
+        grid_manager = GridManager(config_manager, StrategyType.SIMPLE_GRID)
+
+        with pytest.raises(ValueError, match=r"needs grid_strategy\.range"):
+            grid_manager.initialize_grids_and_levels()
+
     def test_calculate_price_grids_and_central_price_geometric(self, config_manager):
         config_manager.get_spacing_type.return_value = SpacingType.GEOMETRIC
         config_manager.get_top_range.return_value = 2000
