@@ -119,7 +119,7 @@ async def run_bot(
     run_lock = RunLock(run_files.lock_path) if run_files is not None else None
 
     if run_lock is not None and not run_lock.acquire():
-        logging.error(f"Another process is already running {config_path} (lock file {run_files.lock_path}).")
+        logging.error(f"Another process is already running {config_path} (lock file {run_lock.path}).")
         return BotOutcome(EXIT_FAILURE)
     try:
         if run_files is not None:

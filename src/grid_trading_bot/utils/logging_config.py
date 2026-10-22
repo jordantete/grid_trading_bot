@@ -20,7 +20,7 @@ def setup_logging(
         max_file_size (int): Maximum size of log file in bytes before rotation.
         backup_count (int): Number of backup log files to keep.
     """
-    handlers = []
+    handlers: list[logging.Handler] = []
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))

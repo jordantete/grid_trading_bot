@@ -4,6 +4,8 @@ import inspect
 import logging
 from typing import Any
 
+Subscriber = Callable[[Any], None] | Callable[[Any], Awaitable[None]]
+
 
 class Events:
     """
@@ -23,12 +25,12 @@ class EventBus:
         Initializes the EventBus with an empty subscriber list.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.subscribers: dict[str, list[Callable[[Any], None]]] = {}
+        self.subscribers: dict[str, list[Subscriber]] = {}
 
     def subscribe(
         self,
         event_type: str,
-        callback: Callable[[Any], None] | Callable[[Any], Awaitable[None]],
+        callback: Subscriber,
     ) -> None:
         """
         Subscribes a callback to a specific event type.
@@ -52,7 +54,7 @@ class EventBus:
     def unsubscribe(
         self,
         event_type: str,
-        callback: Callable[[Any], None] | Callable[[Any], Awaitable[None]],
+        callback: Subscriber,
     ) -> None:
         """
         Unsubscribes a callback from a specific event type.
@@ -122,7 +124,7 @@ class EventBus:
 
     async def _safe_invoke_async(
         self,
-        callback: Callable[[Any], None],
+        callback: Callable[[Any], Awaitable[Any]],
         data: Any,
     ) -> None:
         """
@@ -134,7 +136,7 @@ class EventBus:
 
     def _safe_invoke_sync(
         self,
-        callback: Callable[[Any], None],
+        callback: Callable[[Any], object],
         data: Any,
     ) -> None:
         """

@@ -29,9 +29,8 @@ class NotificationHandler:
             self.logger.warning("Notifications are disabled: APPRISE_NOTIFICATION_URLS is empty.")
         self.lock = asyncio.Lock()
         self.apprise_instance = apprise.Apprise() if self.enabled else None
-
-        if self.enabled and urls is not None:
-            for url in urls:
+        if self.apprise_instance is not None:
+            for url in urls or []:
                 self.apprise_instance.add(url)
 
     _formatter = string.Formatter()

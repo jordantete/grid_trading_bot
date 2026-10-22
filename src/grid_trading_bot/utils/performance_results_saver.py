@@ -40,7 +40,7 @@ def save_or_append_performance_results(
                 if isinstance(value, timedelta)
                 else value
             )
-            for key, value in new_results.get("performance_summary").items()
+            for key, value in new_results["performance_summary"].items()
         }
 
         order_keys = ["Order Side", "Type", "Status", "Price", "Quantity", "Timestamp", "Grid Level", "Slippage"]
@@ -49,7 +49,7 @@ def save_or_append_performance_results(
                 key: (value.isoformat() if isinstance(value, datetime | pd.Timestamp) else value)
                 for key, value in zip(order_keys, order, strict=False)
             }
-            for order in new_results.get("orders")
+            for order in new_results["orders"]
         ]
 
         cleaned_results = {

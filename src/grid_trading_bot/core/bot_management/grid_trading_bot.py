@@ -279,20 +279,20 @@ class GridTradingBot:
                 # Placed even when a stop arrived during recovery: recovery already took these orders out of the open
                 # orders, so a final checkpoint without their successors would lose them. After an interrupted
                 # liquidation the bot halts and cancels the grid, so it places none.
-                resume_grid = recovery_result is not None and not recovery_result.liquidation_in_progress
-                if resume_grid and recovery_result.orders_filled_while_down:
-                    self.logger.info(
-                        f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
-                        f"orders filled while bot was down."
-                    )
-                    await self.order_manager.place_paired_orders_for_recovered_fills(
-                        recovery_result.orders_filled_while_down
-                    )
-                if resume_grid and recovery_result.ended_while_down:
-                    self.logger.info(
-                        f"Re-placing {len(recovery_result.ended_while_down)} orders that ended while bot was down."
-                    )
-                    await self.order_manager.place_replacements_for_recovered_ends(recovery_result.ended_while_down)
+                if recovery_result is not None and not recovery_result.liquidation_in_progress:
+                    if recovery_result.orders_filled_while_down:
+                        self.logger.info(
+                            f"Placing paired orders for {len(recovery_result.orders_filled_while_down)} "
+                            f"orders filled while bot was down."
+                        )
+                        await self.order_manager.place_paired_orders_for_recovered_fills(
+                            recovery_result.orders_filled_while_down
+                        )
+                    if recovery_result.ended_while_down:
+                        self.logger.info(
+                            f"Re-placing {len(recovery_result.ended_while_down)} orders that ended while bot was down."
+                        )
+                        await self.order_manager.place_replacements_for_recovered_ends(recovery_result.ended_while_down)
             self._starting = False
 
             # _start_trading does not yield before strategy.run, so this one check covers everything it starts.
@@ -474,11 +474,11 @@ class GridTradingBot:
             await self._attempt("liquidation interrupt", self.order_manager.interrupt_liquidation)
             await self._attempt("ticker update", lambda: self.strategy.wait_for_tick_to_finish(self.TICK_DRAIN_TIMEOUT))
             self._request_settled = True
-            request = self.stop_request
+            request = self.stop_request or request
             if request.kind.halts and self._is_live_or_paper():
                 # Marked first, so a SIGKILL during a slow cancellation cannot leave a halted bot without its marker.
                 if self.run_files is not None:
-                    await self._record_halt(request)
+                    await self._record_halt(request, self.run_files.halt_path)
                 await self._attempt("order cancellation", lambda: self.order_manager.close_positions(liquidate=False))
             if self.state_persistence_service:
                 if self._state_ready:
@@ -509,29 +509,29 @@ class GridTradingBot:
             return False
         return True
 
-    async def _record_halt(self, request: StopRequest) -> None:
+    async def _record_halt(self, request: StopRequest, halt_path: str) -> None:
         """Writes the halt marker, and alerts when it cannot be written since a relaunch would then trade again."""
-        if await self._attempt("halt marker", lambda: self._write_halt_marker(request)):
+        if await self._attempt("halt marker", lambda: self._write_halt_marker(request, halt_path)):
             return
         await self._attempt(
             "halt marker alert",
             lambda: self.notification_handler.async_send_notification(
                 NotificationType.ERROR_OCCURRED,
                 error_details=(
-                    f"The halt marker could not be written to {self.run_files.halt_path}. A supervisor relaunch "
+                    f"The halt marker could not be written to {halt_path}. A supervisor relaunch "
                     "would trade again, so stop the container with `docker compose down bot`."
                 ),
             ),
         )
 
-    def _write_halt_marker(self, request: StopRequest) -> None:
+    def _write_halt_marker(self, request: StopRequest, halt_path: str) -> None:
         record = HaltRecord(
             kind=request.kind.value,
             reason=request.reason,
             pair=self.trading_pair,
             halted_at=datetime.now(UTC).isoformat(),
         )
-        write_halt_marker(self.run_files.halt_path, record)
+        write_halt_marker(halt_path, record)
 
     async def _notify_stop(self, request: StopRequest) -> None:
         if request.kind.halts:
