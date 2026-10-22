@@ -3,7 +3,7 @@ import sqlite3
 import threading
 from typing import Any
 
-from .state_repository_interface import StateRepositoryInterface, StateSnapshot
+from .state_repository_interface import SavedBalance, StateRepositoryInterface, StateSnapshot
 
 SCHEMA_VERSION = 4
 
@@ -232,7 +232,7 @@ class SQLiteStateRepository(StateRepositoryInterface):
             ),
         )
 
-    def load_balance_state(self) -> dict[str, str | None] | None:
+    def load_balance_state(self) -> SavedBalance | None:
         cursor = self._db.execute("SELECT * FROM balance_state WHERE id = 1")
         row = cursor.fetchone()
         if row is None:

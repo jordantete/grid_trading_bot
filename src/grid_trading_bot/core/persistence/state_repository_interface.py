@@ -1,6 +1,18 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypedDict
+
+
+class SavedBalance(TypedDict):
+    fiat_balance: str
+    crypto_balance: str
+    total_fees: str
+    reserved_fiat: str
+    reserved_crypto: str
+    avg_cost: str | None
+    realized_pnl: str | None
+    peak_value: str | None
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -34,7 +46,7 @@ class StateRepositoryInterface(ABC):
         pass
 
     @abstractmethod
-    def load_balance_state(self) -> dict[str, str | None] | None:
+    def load_balance_state(self) -> SavedBalance | None:
         pass
 
     @abstractmethod

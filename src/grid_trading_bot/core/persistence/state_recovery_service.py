@@ -35,7 +35,7 @@ from grid_trading_bot.core.services.exceptions import DataFetchError, OrderNotFo
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
 from .serializers import compute_config_hash, dict_to_order, dict_to_pending_placement
-from .state_repository_interface import StateRepositoryInterface
+from .state_repository_interface import SavedBalance, StateRepositoryInterface
 
 
 class RecoveryOutcome(Enum):
@@ -294,7 +294,9 @@ class StateRecoveryService:
                     self.logger.warning(f"Dropping unsent liquidation leg {entry.client_order_id}.")
                     continue
             if entry.order_type is OrderType.LIMIT:
-                grid_level = self.grid_manager.grid_levels.get(entry.level_price)
+                grid_level = (
+                    self.grid_manager.grid_levels.get(entry.level_price) if entry.level_price is not None else None
+                )
                 if grid_level is None:
                     self.logger.warning(
                         f"Dropping pending {entry.side.value} placement {entry.client_order_id}: the grid has no "
@@ -602,7 +604,7 @@ class StateRecoveryService:
             f"reserved_crypto={self.balance_tracker.reserved_crypto}"
         )
 
-    def _restore_saved_accounting(self, saved_balance: dict) -> None:
+    def _restore_saved_accounting(self, saved_balance: SavedBalance) -> None:
         self.balance_tracker.restore_accounting(
             avg_cost=_optional_decimal(saved_balance.get("avg_cost")),
             realized_pnl=Decimal(saved_balance.get("realized_pnl") or "0"),

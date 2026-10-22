@@ -182,7 +182,12 @@ class StatePersistenceService:
             self._periodic_task.cancel()
             self._periodic_task = None
         # A halt task that already started is the one running the shutdown that calls this cleanup.
-        if self._halt_task and inspect.getcoroutinestate(self._halt_task.get_coro()) == inspect.CORO_CREATED:
+        halt_coro = self._halt_task.get_coro() if self._halt_task else None
+        if (
+            self._halt_task is not None
+            and halt_coro is not None
+            and inspect.getcoroutinestate(halt_coro) == inspect.CORO_CREATED
+        ):
             self._halt_task.cancel()
         await self.wait_for_alerts(self.ALERT_DRAIN_TIMEOUT)
         self.repository.close()
