@@ -60,7 +60,6 @@
   "execution": {
     "max_retries": 3,
     "retry_delay": 1.0,
-    "max_slippage": 0.01,
     "order_polling_interval": 15.0,
     "websocket_max_retries": 5,
     "websocket_retry_base_delay": 5,
