@@ -1,4 +1,4 @@
-"""Smoke tests for exchange dependencies (ccxt, aiohttp, WebSocket).
+"""Smoke tests for ccxt against live exchange endpoints (REST, WebSocket, and the aiohttp transport ccxt brings).
 
 These tests make real network calls to public exchange endpoints.
 They are excluded from the default test run and can be invoked with:
