@@ -9,9 +9,11 @@ from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
+from grid_trading_bot.core.exceptions import BookingError
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
+from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.risk_management.trailing_stop_loss import TrailingStopLoss
@@ -31,6 +33,25 @@ def _order_manager_regrid(rebuilt=True):
         return rebuilt
 
     return AsyncMock(side_effect=regrid)
+
+
+def _executed_buy() -> Order:
+    return Order(
+        identifier="o1",
+        status=OrderStatus.CLOSED,
+        order_type=OrderType.MARKET,
+        side=OrderSide.BUY,
+        price=15100.0,
+        average=15100.0,
+        amount=0.1,
+        filled=0.1,
+        remaining=0.0,
+        timestamp=0,
+        datetime=None,
+        last_trade_timestamp=None,
+        symbol="BTC/USDT",
+        time_in_force="GTC",
+    )
 
 
 @pytest.fixture
@@ -398,6 +419,45 @@ class TestGridTradingStrategy:
         assert result is False
         assert strategy.armed is False
         order_manager.initialize_grid_orders.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_initial_purchase_that_cannot_be_booked_halts_the_bot(self, setup_strategy):
+        create_strategy, _, _, grid_manager, order_manager, *_ = setup_strategy
+        strategy = create_strategy(TradingMode.LIVE)
+        bus = EventBus()
+        requests: list[StopRequest] = []
+
+        async def record(request):
+            requests.append(request)
+
+        bus.subscribe(Events.STOP_BOT, record)
+        strategy.event_bus = bus
+        grid_manager.is_within_grid_range.return_value = True
+        order_manager.perform_initial_purchase = AsyncMock(
+            side_effect=BookingError(_executed_buy(), ValueError("could not convert string to float: 'n/a'"))
+        )
+        order_manager.initialize_grid_orders = AsyncMock()
+
+        result = await strategy._initialize_grid_orders_once(current_price=15100, grid_orders_initialized=False)
+
+        assert result is False
+        assert strategy.armed is False
+        assert strategy.stop_reason == "booking_error"
+        [request] = requests
+        assert request.kind is StopKind.RISK
+        assert request.reason.startswith("Initial purchase not booked: buy market order o1 executed (0.1 at 15100.0")
+
+    @pytest.mark.asyncio
+    async def test_an_initial_purchase_that_cannot_be_booked_fails_a_backtest(self, setup_strategy):
+        create_strategy, _, _, grid_manager, order_manager, *_ = setup_strategy
+        strategy = create_strategy(TradingMode.BACKTEST)
+        grid_manager.is_within_grid_range.return_value = True
+        order_manager.perform_initial_purchase = AsyncMock(side_effect=BookingError(_executed_buy(), ValueError("bad")))
+
+        with pytest.raises(BookingError):
+            await strategy._initialize_grid_orders_once(current_price=15100, grid_orders_initialized=False)
+
+        assert strategy.stop_reason is None
 
     def test_get_formatted_orders(self, setup_strategy):
         create_strategy, _, _, _, _, _, trading_performance_analyzer, _, _ = setup_strategy

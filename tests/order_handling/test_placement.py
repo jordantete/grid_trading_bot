@@ -9,6 +9,7 @@ from tests.fakes.recording_store import RecordingStore
 from tests.fakes.trading_stack import ARMING_PRICE, build_stack, reserved_matches_open_orders
 
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
+from grid_trading_bot.core.exceptions import BookingError
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 from grid_trading_bot.core.order_handling import order_manager as order_manager_module
 from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
@@ -36,6 +37,20 @@ async def armed():
 
 def _sent(stack):
     return [call.args[0] for call in stack.notifications.async_send_notification.await_args_list]
+
+
+def _error_alerts(stack, containing: str) -> list[str]:
+    return [
+        call.kwargs["error_details"]
+        for call in stack.notifications.async_send_notification.await_args_list
+        if call.args
+        and call.args[0] is NotificationType.ERROR_OCCURRED
+        and containing in call.kwargs.get("error_details", "")
+    ]
+
+
+def _market_orders(stack, side: OrderSide | None = None):
+    return [o for o in stack.execution.orders.values() if o.order_type is OrderType.MARKET and side in (None, o.side)]
 
 
 def _errors(caplog):
@@ -881,10 +896,6 @@ class TestBulkCancelResolvesSentEntries:
 
 class TestInitialPurchase:
     @staticmethod
-    def _market_orders(stack):
-        return [o for o in stack.execution.orders.values() if o.order_type == OrderType.MARKET]
-
-    @staticmethod
     def _quantity(stack):
         return stack.grid.get_initial_order_quantity(2700.0, 0.0, ARMING_PRICE)
 
@@ -894,7 +905,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        [order] = self._market_orders(stack)
+        [order] = _market_orders(stack)
         assert order.amount == pytest.approx(quantity)
         assert stack.balances.crypto_balance == pytest.approx(quantity * 0.999)
         assert stack.balances.balance == pytest.approx(2700.0 - quantity * ARMING_PRICE)
@@ -907,7 +918,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert self._market_orders(stack) == []
+        assert _market_orders(stack) == []
         assert stack.manager.arming.initial_purchase_done is True
 
     async def test_an_unreachable_exchange_leaves_the_purchase_to_do(self):
@@ -917,7 +928,7 @@ class TestInitialPurchase:
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is False
 
         assert stack.manager.arming.initial_purchase_done is False
-        assert self._market_orders(stack) == []
+        assert _market_orders(stack) == []
         assert stack.balances.crypto_balance == 0.0
         [entry] = stack.journal.entries()
         assert (entry.purpose, entry.order_type, entry.sent) == (
@@ -929,7 +940,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert len(self._market_orders(stack)) == 1
+        assert len(_market_orders(stack)) == 1
         assert len(stack.journal) == 0
         assert stack.manager.arming.initial_purchase_done is True
         assert _sent(stack).count(NotificationType.ORDER_PENDING) == 1
@@ -947,7 +958,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert len(self._market_orders(stack)) == 1
+        assert len(_market_orders(stack)) == 1
         assert stack.balances.crypto_balance == pytest.approx(entry.quantity * 0.999)
         assert len(stack.journal) == 0
 
@@ -958,7 +969,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        first, second = self._market_orders(stack)
+        first, second = _market_orders(stack)
         assert first.filled == pytest.approx(quantity * 0.5)
         assert second.amount == pytest.approx(quantity * 0.5)
         assert stack.balances.crypto_balance == pytest.approx(quantity * 0.999)
@@ -977,7 +988,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert len(self._market_orders(stack)) == 3
+        assert len(_market_orders(stack)) == 3
         assert stack.balances.crypto_balance == pytest.approx(quantity * (0.5 + 0.25 + 0.125) * 0.999)
         assert any(
             "stopped after 3 legs" in record.getMessage()
@@ -1003,7 +1014,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert self._market_orders(stack) == []
+        assert _market_orders(stack) == []
         assert NotificationType.ORDER_FAILED in _sent(stack)
 
     async def test_no_purchase_once_the_positions_are_closed(self):
@@ -1012,7 +1023,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert self._market_orders(stack) == []
+        assert _market_orders(stack) == []
 
     async def test_the_entry_is_saved_as_sent_before_the_market_order_goes_out(self):
         store = RecordingStore()
@@ -1021,7 +1032,7 @@ class TestInitialPurchase:
         real_save_pending = store.save_pending
 
         async def save_pending(entry):
-            seen.append((entry.purpose, entry.sent, len(self._market_orders(stack))))
+            seen.append((entry.purpose, entry.sent, len(_market_orders(stack))))
             return await real_save_pending(entry)
 
         store.save_pending = save_pending
@@ -1037,7 +1048,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is False
 
-        assert self._market_orders(stack) == []
+        assert _market_orders(stack) == []
         assert stack.manager.arming.initial_purchase_done is False
 
     async def test_an_unexpected_error_keeps_the_purchase_to_do_and_alerts_once(self):
@@ -1048,7 +1059,7 @@ class TestInitialPurchase:
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is False
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert len(self._market_orders(stack)) == 1
+        assert len(_market_orders(stack)) == 1
         assert _sent(stack).count(NotificationType.ERROR_OCCURRED) == 1
 
     @staticmethod
@@ -1118,7 +1129,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert len(self._market_orders(stack)) == 1
+        assert len(_market_orders(stack)) == 1
         assert stack.balances.crypto_balance == pytest.approx(entry.quantity * 0.999)
         assert stack.balances.balance == pytest.approx(2700.0 - entry.quantity * found.price)
         assert len(stack.journal) == 0
@@ -1195,7 +1206,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert self._market_orders(stack) == []
+        assert _market_orders(stack) == []
         assert len(stack.journal) == 0
         assert NotificationType.ORDER_FAILED in _sent(stack)
 
@@ -1216,7 +1227,7 @@ class TestInitialPurchase:
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
-        assert len(self._market_orders(stack)) == 1
+        assert len(_market_orders(stack)) == 1
         assert stack.balances.crypto_balance == pytest.approx(quantity * 0.5 * 0.999)
         assert len(stack.journal) == 0
         assert stack.manager.arming.initial_purchase_done is True
@@ -1246,21 +1257,11 @@ def _liquidating_stack(crypto: float = 2.0, fiat: float = 0.0, store=None, tradi
 
 
 def _liquidation_alerts(stack) -> list[str]:
-    return [
-        call.kwargs["error_details"]
-        for call in stack.notifications.async_send_notification.await_args_list
-        if call.args
-        and call.args[0] is NotificationType.ERROR_OCCURRED
-        and "iquidation" in call.kwargs.get("error_details", "")
-    ]
+    return _error_alerts(stack, "iquidation")
 
 
 def _market_sells(stack) -> list[float]:
-    return [
-        order.amount
-        for order in stack.execution.orders.values()
-        if order.order_type is OrderType.MARKET and order.side is OrderSide.SELL
-    ]
+    return [order.amount for order in _market_orders(stack, OrderSide.SELL)]
 
 
 def _stop_loss_report(stack) -> str:
@@ -1821,6 +1822,79 @@ class TestLiquidation:
         assert _market_sells(stack) == []
         assert len(stack.journal) == 0
         assert stack.manager._liquidated
+
+
+class TestBookingErrors:
+    @pytest.mark.timeout(5)
+    async def test_a_liquidation_sale_that_cannot_be_booked_is_never_sent_again(self):
+        stack, clock = _liquidating_stack(crypto=2.0, store=RecordingStore())
+        stack.execution.market_fee = {"cost": "n/a", "currency": "USDT"}
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        [sale] = _market_orders(stack, OrderSide.SELL)
+        assert clock.sleeps == []
+        assert not stack.manager._liquidated
+        assert stack.balances.crypto_balance == 2.0
+        assert stack.book.get_order(sale.identifier) is None
+        [entry] = stack.journal.entries()
+        assert (entry.purpose, entry.sent) == (PlacementPurpose.LIQUIDATION, True)
+        assert stack.store.pending[-1].client_order_id == entry.client_order_id
+        assert stack.store.pending[-1].sent is True
+        [alert] = _error_alerts(stack, "Liquidation sale not booked")
+        assert alert.startswith(f"Liquidation sale not booked: sell market order {sale.identifier} executed (2.0 at ")
+        assert alert.endswith("The bot halts; fix the books before resuming.")
+
+        await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert _market_sells(stack) == [2.0]
+        assert len(_error_alerts(stack, "Liquidation sale not booked")) == 2
+
+    @pytest.mark.timeout(5)
+    async def test_a_stop_loss_whose_sale_cannot_be_booked_reports_the_liquidation_incomplete(self):
+        stack, _ = _liquidating_stack(crypto=2.0)
+        stack.execution.market_fee = {"cost": "n/a", "currency": "USDT"}
+
+        await stack.manager.execute_take_profit_or_stop_loss_order(ARMING_PRICE, stop_loss_order=True)
+
+        assert "liquidation incomplete" in _stop_loss_report(stack)
+        assert _market_sells(stack) == [2.0]
+
+    async def test_a_liquidation_sale_that_cannot_be_booked_fails_a_backtest(self):
+        stack, clock = _liquidating_stack(crypto=2.0, trading_mode="backtest")
+        stack.execution.market_fee = {"cost": "n/a", "currency": "USDT"}
+
+        with pytest.raises(BookingError, match="could not be booked") as excinfo:
+            await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
+
+        assert isinstance(excinfo.value.cause, ValueError)
+        assert _market_sells(stack) == [2.0]
+        assert clock.sleeps == []
+
+    async def test_an_initial_purchase_that_cannot_be_booked_is_never_sent_again(self):
+        stack = build_stack(crypto=0.0, store=RecordingStore())
+        stack.execution.market_fee = {"cost": "n/a", "currency": "BTC"}
+
+        with pytest.raises(BookingError) as excinfo:
+            await stack.manager.perform_initial_purchase(ARMING_PRICE)
+
+        [buy] = _market_orders(stack, OrderSide.BUY)
+        assert excinfo.value.order.identifier == buy.identifier
+        assert stack.balances.crypto_balance == 0.0
+        assert stack.balances.balance == 2700.0
+        assert stack.manager.arming.initial_purchase_done is False
+        assert stack.book.get_order(buy.identifier) is None
+        [entry] = stack.journal.entries()
+        assert (entry.purpose, entry.sent) == (PlacementPurpose.INITIAL_PURCHASE, True)
+        [alert] = _error_alerts(stack, "Initial purchase not booked")
+        assert f"buy market order {buy.identifier} executed" in alert
+        assert alert.endswith("The bot halts; fix the books before resuming.")
+        assert NotificationType.ORDER_PLACED not in _sent(stack)
+
+        with pytest.raises(BookingError):
+            await stack.manager.perform_initial_purchase(ARMING_PRICE)
+
+        assert len(_market_orders(stack, OrderSide.BUY)) == 1
 
 
 async def _ended_while_down(stack, price, side):

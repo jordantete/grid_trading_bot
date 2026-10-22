@@ -112,6 +112,8 @@ def _open(
             lastTradeTimestamp=_now_ms(),
         )
         _report_fee(data, order, fee, currency)
+        if data.get("malformed_market_fee"):
+            order["fee"] = {"cost": "n/a", "currency": currency}
     elif side == "buy":
         _move(data, QUOTE, amount * price, "free", "used")
     else:
@@ -163,6 +165,7 @@ class ExchangeState:
         response_delay: float | None = None,
         cancel_delay: float | None = None,
         report_fees: bool = False,
+        malformed_market_fee: bool = False,
     ) -> "ExchangeState":
         state = cls(path)
         state._write(
@@ -172,6 +175,7 @@ class ExchangeState:
                 "order_delay": order_delay,
                 "fail_feed_after": fail_feed_after,
                 "report_fees": report_fees,
+                "malformed_market_fee": malformed_market_fee,
                 "failures": {},
                 "response_delay": response_delay,
                 "cancel_delay": cancel_delay,
@@ -237,7 +241,7 @@ class ExchangeState:
     def add_open_order(self, side: str, price: float, amount: float) -> str:
         return self.update(lambda data: _open(data, "limit", side, amount, price)["id"])
 
-    _SCENARIO_FIELDS = frozenset({"price", "order_delay", "response_delay", "cancel_delay"})
+    _SCENARIO_FIELDS = frozenset({"price", "order_delay", "response_delay", "cancel_delay", "malformed_market_fee"})
 
     def fail(self, method: str, times: int | None = None, error: str = "network", after_accept: bool = False) -> None:
         """
@@ -255,6 +259,17 @@ class ExchangeState:
         if unknown:
             raise ValueError(f"not settable: {sorted(unknown)}")
         self.update(lambda data: data.update(fields))
+
+    def repair_market_fees(self) -> None:
+        """Stops writing malformed fees and clears those already on the orders."""
+
+        def change(data):
+            data["malformed_market_fee"] = False
+            for order in data["orders"].values():
+                if order["fee"] is not None and order["fee"].get("cost") == "n/a":
+                    order["fee"] = None
+
+        self.update(change)
 
     def fill_all(self, order_ids: list[str]) -> None:
         """Fills several open orders in one write, so a single poll of the bot sees them all filled."""

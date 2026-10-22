@@ -10,7 +10,7 @@ from typing import Any
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
-from grid_trading_bot.core.exceptions import OrderRefusedError
+from grid_trading_bot.core.exceptions import BookingError, OrderRefusedError
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     OrderEndedUnfilledError,
@@ -746,8 +746,19 @@ class OrderManager:
                         NotificationType.ERROR_OCCURRED, error_details=f"Error while performing initial purchase: {e}"
                     )
                 return False
+            try:
+                await self._book_initial_purchase(order)
+            except Exception as e:
+                error = BookingError(order, e)
+                self.logger.error(f"Initial purchase not booked: {error}", exc_info=True)
+                self._notify(
+                    NotificationType.ERROR_OCCURRED,
+                    error_details=(
+                        f"Initial purchase not booked: {error}. The bot halts; fix the books before resuming."
+                    ),
+                )
+                raise error from e
             self.journal.remove(entry.client_order_id)
-            await self._book_initial_purchase(order)
             remaining = entry.quantity - order.filled
             if self._is_dust(remaining, current_price):
                 return True
@@ -841,10 +852,10 @@ class OrderManager:
     async def _book_initial_purchase(self, order: Order) -> None:
         # A leg whose remainder was cancelled is final for what it filled; the next leg buys the rest.
         order.status = OrderStatus.CLOSED
+        await self.balance_tracker.update_after_initial_purchase(initial_order=order)
         self.logger.info(f"Initial crypto purchase completed. Order details: {order}")
         self.order_book.add_order(order)
         self._notify(NotificationType.ORDER_PLACED, order_details=f"Initial purchase done: {order!s}")
-        await self.balance_tracker.update_after_initial_purchase(initial_order=order)
 
     def _is_dust(self, quantity: float, price: float) -> bool:
         if quantity <= 0:
@@ -891,10 +902,12 @@ class OrderManager:
 
     async def _liquidate(self, current_price: float) -> None:
         """
-        Sells the free crypto at market until none is left. A failed attempt, whatever it raised, is retried after a
-        growing delay, a refusal re-reads the exchange balance first, and a remainder under the exchange minimum stops
-        with an alert. Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL seconds. A backtest re-raises
-        what is neither an exchange failure nor a refusal, since nothing would ever interrupt its retries.
+        Sells the free crypto at market until none is left. A failed attempt is retried after a growing delay,
+        except a sale the exchange executed and the bot could not book, which ends the liquidation with an alert and
+        keeps its entry so it is never sent again; a refusal re-reads the exchange balance first, and a remainder under
+        the exchange minimum stops with an alert. Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL
+        seconds. A backtest re-raises what is neither an exchange failure nor a refusal, since nothing would ever
+        interrupt its retries.
         """
         failures = 0
         last_alert_at: float | None = None
@@ -907,10 +920,15 @@ class OrderManager:
                 )
                 return
             error: Exception | None = None
+            booking_error: BookingError | None = None
             sold: float | None = None
             async with self._locked():
                 try:
                     sold = await self._liquidation_attempt(current_price, exchange_cap)
+                except BookingError as e:
+                    if self.trading_mode == TradingMode.BACKTEST:
+                        raise
+                    booking_error = e
                 except (DataFetchError, OrderRefusedError) as e:
                     error = e
                 except Exception as e:
@@ -920,6 +938,11 @@ class OrderManager:
                         raise
                 finally:
                     await self._save_state()
+            if booking_error is not None:
+                await self._send_liquidation_alert(
+                    f"Liquidation sale not booked: {booking_error}. The bot halts; fix the books before resuming."
+                )
+                return
             if error is None:
                 if sold is None:
                     self._liquidated = True
@@ -960,8 +983,12 @@ class OrderManager:
             else:
                 entry.quantity = quantity
         order = await self._send_market_entry(entry)
+        try:
+            sold = await self._book_liquidation(order)
+        except Exception as e:
+            raise BookingError(order, e) from e
         self.journal.remove(entry.client_order_id)
-        return await self._book_liquidation(order)
+        return sold
 
     def _liquidation_quantity(self, current_price: float, exchange_cap: float | None) -> float | None:
         """The quantity of the next leg, or None when nothing can be sold."""

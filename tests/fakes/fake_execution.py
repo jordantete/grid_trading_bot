@@ -22,6 +22,7 @@ class FakeExecution(OrderExecutionStrategyInterface):
         self.lose_next_limit_response: Exception | None = None
         self.market_order_failures: list[Exception] = []
         self.partial_market_fill: float | None = None
+        self.market_fee: dict | None = None
         self.amount_decimals: int | None = None
         self.price_decimals: int | None = None
         self.fill_limit_orders_on_placement = False
@@ -36,6 +37,7 @@ class FakeExecution(OrderExecutionStrategyInterface):
         if self.partial_market_fill is not None:
             filled, self.partial_market_fill = quantity * self.partial_market_fill, None
         order = self._create(order_side, OrderType.MARKET, pair, quantity, self.market_price, filled, client_order_id)
+        order.fee = self.market_fee
         # A market order never rests: what did not fill is cancelled, as the live strategy reports it.
         if filled <= 0:
             order.status = OrderStatus.CANCELED

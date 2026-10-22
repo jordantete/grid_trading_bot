@@ -11,6 +11,7 @@ from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
+from grid_trading_bot.core.exceptions import BookingError
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.indicators.atr_calculator import ATRCalculator
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
@@ -368,7 +369,18 @@ class GridTradingStrategy(TradingStrategyInterface):
             self.logger.info(
                 f"Current price {current_price} is within the grid range. Will perform initial purchase",
             )
-            if not await self.order_manager.perform_initial_purchase(current_price):
+            try:
+                done = await self.order_manager.perform_initial_purchase(current_price)
+            except BookingError as e:
+                if self.trading_mode == TradingMode.BACKTEST:
+                    raise
+                self.logger.error(f"Initial purchase executed but not booked; halting: {e}")
+                self.stop_reason = "booking_error"
+                await self.event_bus.publish(
+                    Events.STOP_BOT, StopRequest(StopKind.RISK, f"Initial purchase not booked: {e}")
+                )
+                return False
+            if not done:
                 self.logger.info("Initial purchase not done yet; the grid waits for it.")
                 return False
         else:
