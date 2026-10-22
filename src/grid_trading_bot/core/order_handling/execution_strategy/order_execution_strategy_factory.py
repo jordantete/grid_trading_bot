@@ -20,12 +20,12 @@ class OrderExecutionStrategyFactory:
         if trading_mode == TradingMode.LIVE or trading_mode == TradingMode.PAPER_TRADING:
             return LiveOrderExecutionStrategy(
                 exchange_service=exchange_service,
-                max_retries=config_manager.get_max_retries(),
-                retry_delay=config_manager.get_retry_delay(),
+                max_retries=config_manager.config.execution.max_retries,
+                retry_delay=config_manager.config.execution.retry_delay,
             )
         elif trading_mode == TradingMode.BACKTEST:
             return BacktestOrderExecutionStrategy(
-                slippage=config_manager.get_backtest_slippage(),
+                slippage=config_manager.config.execution.backtest_slippage,
                 clock=backtest_clock,
             )
         else:

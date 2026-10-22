@@ -9,8 +9,8 @@ class TestLiveExampleConfig:
     def test_example_validates_and_is_paper_trading(self):
         cm = ConfigManager(EXAMPLE)
         assert cm.config.exchange.trading_mode.value == "paper_trading"
-        assert cm.is_persistence_enabled() is True
-        assert cm.get_checkpoint_interval_seconds() == 60.0
+        assert cm.config.persistence.enabled is True
+        assert cm.config.persistence.checkpoint_interval_seconds == 60.0
         assert cm.config.risk_management.trailing_stop_loss.enabled is True
         assert cm.config.grid_strategy.dynamic_spacing.enabled is True
 

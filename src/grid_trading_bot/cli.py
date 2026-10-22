@@ -81,9 +81,9 @@ async def run_bot(
     no_plot: bool = False,
 ) -> BotOutcome:
     current_bot.set(config_name)
-    log_level = logging.getLevelNamesMapping()[config_manager.get_logging_level().upper()]
+    log_level = logging.getLevelNamesMapping()[config_manager.config.logging.log_level]
     configure_console(log_level)
-    if config_manager.should_log_to_file():
+    if config_manager.config.logging.log_to_file:
         add_bot_log_file(config_name, log_level)
     event_bus = EventBus()
     notification_handler = initialize_notification_handler(config_manager)
@@ -159,7 +159,7 @@ async def _run_bot(
     )
     bot_controller = BotController(bot, event_bus)
     health_check = HealthCheck(
-        bot, notification_handler, event_bus, check_interval=config_manager.get_health_check_interval()
+        bot, notification_handler, event_bus, check_interval=config_manager.config.execution.health_check_interval
     )
 
     if profile:

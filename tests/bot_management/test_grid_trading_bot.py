@@ -40,6 +40,7 @@ def _live_config(valid_config, overrides=None) -> BotConfig:
         "exchange": {"name": "binance", "trading_mode": "live"},
         "trading_settings": {"initial_balance": 1000, "timeframe": "1h"},
         "grid_strategy": {"spacing": "arithmetic", "num_grids": 10, "range": {"top": 2000, "bottom": 1500}},
+        "persistence": {"enabled": False},
     }
     return bot_config_from(valid_config, deep_merge(live, overrides or {}))
 
@@ -49,7 +50,6 @@ class BotFixtures:
     def config_manager(self, valid_config):
         mock_config = Mock(spec=ConfigManager)
         mock_config.config = _live_config(valid_config)
-        mock_config.is_persistence_enabled.return_value = False
         return mock_config
 
     @pytest.fixture
@@ -499,10 +499,10 @@ class TestStrategyStatePersistenceWiring:
     @pytest.fixture
     def config_manager(self, tmp_path, valid_config):
         mock_config = Mock(spec=ConfigManager)
-        mock_config.config = _live_config(valid_config)
-        mock_config.is_persistence_enabled.return_value = True
+        mock_config.config = _live_config(
+            valid_config, {"persistence": {"enabled": True, "checkpoint_interval_seconds": 60.0}}
+        )
         mock_config.get_state_db_path.return_value = str(tmp_path / "state.db")
-        mock_config.get_checkpoint_interval_seconds.return_value = 60.0
         return mock_config
 
     @pytest.fixture
@@ -542,7 +542,9 @@ class TestStrategyStatePersistenceWiring:
     def test_paper_trading_persists_and_recovers(
         self, config_manager, notification_handler, mock_event_bus, valid_config
     ):
-        config_manager.config = _live_config(valid_config, {"exchange": {"trading_mode": "paper_trading"}})
+        config_manager.config = _live_config(
+            valid_config, {"exchange": {"trading_mode": "paper_trading"}, "persistence": {"enabled": True}}
+        )
         with patch("grid_trading_bot.core.bot_management.grid_trading_bot.SQLiteStateRepository") as repo_cls:
             repo_cls.return_value = MagicMock()
             paper_bot = GridTradingBot(

@@ -80,13 +80,13 @@ class LiveExchangeService(ExchangeInterface):
         self.connection_active = False
         self._closing = False
         self._exchange_closed = False
-        self.websocket_max_retries: int = self.config_manager.get_websocket_max_retries()
-        self.websocket_retry_base_delay: int = self.config_manager.get_websocket_retry_base_delay()
+        self.websocket_max_retries: int = self.config_manager.config.execution.websocket_max_retries
+        self.websocket_retry_base_delay: int = self.config_manager.config.execution.websocket_retry_base_delay
         self.post_only: bool = self.config_manager.config.exchange.post_only
         self.circuit_breaker = CircuitBreaker(
-            failure_threshold=self.config_manager.get_circuit_breaker_failure_threshold(),
-            recovery_timeout=self.config_manager.get_circuit_breaker_recovery_timeout(),
-            half_open_max_calls=self.config_manager.get_circuit_breaker_half_open_max_calls(),
+            failure_threshold=self.config_manager.config.execution.circuit_breaker_failure_threshold,
+            recovery_timeout=self.config_manager.config.execution.circuit_breaker_recovery_timeout,
+            half_open_max_calls=self.config_manager.config.execution.circuit_breaker_half_open_max_calls,
             # A refused order, an order the exchange no longer knows and a client id it already holds are normal
             # answers, not exchange faults, so a run of them must never open the breaker.
             benign_exceptions=(OrderRejectedError, OrderNotFound, DuplicateOrderId),

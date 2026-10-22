@@ -60,11 +60,11 @@ class TestConfigManager:
         assert (risk_management.take_profit.enabled, risk_management.take_profit.threshold) == (False, 3700)
         assert (risk_management.stop_loss.enabled, risk_management.stop_loss.threshold) == (False, 2830)
 
-    def test_get_log_level(self, config_manager):
-        assert config_manager.get_logging_level() == "INFO"
+    def test_the_log_level_loads_upper_case(self, config_manager):
+        assert config_manager.config.logging.log_level == "INFO"
 
-    def test_should_log_to_file_true(self, config_manager):
-        assert config_manager.should_log_to_file() is True
+    def test_log_to_file_loads_from_the_config(self, config_manager):
+        assert config_manager.config.logging.log_to_file is True
 
     @pytest.mark.parametrize(
         ("section", "key", "field"),
@@ -160,25 +160,25 @@ class TestStateDbPath:
         assert cm.get_state_db_path() == f"data/ETH_USDT/state_{cm.get_config_hash()[:8]}.db"
 
 
-class TestPersistenceAccessors:
+class TestPersistenceSettings:
     def test_checkpoint_interval_default(self, config_manager):
-        assert config_manager.get_checkpoint_interval_seconds() == 60.0
+        assert config_manager.config.persistence.checkpoint_interval_seconds == 60.0
 
     def test_checkpoint_interval_configured(self, valid_config):
         config_manager = _manager(
             valid_config, lambda raw: raw.update(persistence={"checkpoint_interval_seconds": 30.0})
         )
-        assert config_manager.get_checkpoint_interval_seconds() == 30.0
+        assert config_manager.config.persistence.checkpoint_interval_seconds == 30.0
 
 
 class TestConfigManagerBacktestMinimums:
     def test_minimums_default_to_none(self, config_manager):
-        assert config_manager.get_backtest_min_amount() is None
-        assert config_manager.get_backtest_min_cost() is None
+        assert config_manager.config.execution.backtest_min_amount is None
+        assert config_manager.config.execution.backtest_min_cost is None
 
     def test_minimums_use_explicit_values(self, valid_config):
         config_manager = _manager(
             valid_config, lambda raw: raw.update(execution={"backtest_min_amount": 0.001, "backtest_min_cost": 5.0})
         )
-        assert config_manager.get_backtest_min_amount() == 0.001
-        assert config_manager.get_backtest_min_cost() == 5.0
+        assert config_manager.config.execution.backtest_min_amount == 0.001
+        assert config_manager.config.execution.backtest_min_cost == 5.0

@@ -132,14 +132,14 @@ class GridTradingBot:
                     trading_pair=trading_pair,
                     base_currency=base_currency,
                     quote_currency=quote_currency,
-                    reconciliation_interval=self.config_manager.get_reconciliation_interval(),
-                    balance_tolerance=self.config_manager.get_reconciliation_balance_tolerance(),
+                    reconciliation_interval=self.config_manager.config.execution.reconciliation_interval,
+                    balance_tolerance=self.config_manager.config.execution.reconciliation_balance_tolerance,
                     journal=journal,
                 )
 
             self.state_persistence_service = None
             self.state_recovery_service = None
-            if self._is_live_or_paper() and self.config_manager.is_persistence_enabled():
+            if self._is_live_or_paper() and self.config_manager.config.persistence.enabled:
                 db_path = self.config_manager.get_state_db_path()
                 os.makedirs(os.path.dirname(db_path), exist_ok=True)
                 state_repository = SQLiteStateRepository(db_path)
@@ -190,7 +190,7 @@ class GridTradingBot:
                 order_book=order_book,
                 order_execution_strategy=order_execution_strategy,
                 order_update_handler=self.order_manager,
-                polling_interval=self.config_manager.get_order_polling_interval(),
+                polling_interval=self.config_manager.config.execution.order_polling_interval,
                 event_bus=self.event_bus,
                 notify=self.notification_handler.async_send_notification,
             )
@@ -199,7 +199,7 @@ class GridTradingBot:
                 order_book=order_book,
                 grid_manager=grid_manager,
                 order_update_handler=self.order_manager,
-                slippage=self.config_manager.get_backtest_slippage(),
+                slippage=self.config_manager.config.execution.backtest_slippage,
             )
 
             trading_performance_analyzer = TradingPerformanceAnalyzer(self.config_manager, order_book)
@@ -250,8 +250,8 @@ class GridTradingBot:
                 if self.reconciliation_service:
                     self.reconciliation_service.set_market_constraints(constraints)
             else:
-                min_amount = self.config_manager.get_backtest_min_amount()
-                min_cost = self.config_manager.get_backtest_min_cost()
+                min_amount = self.config_manager.config.execution.backtest_min_amount
+                min_cost = self.config_manager.config.execution.backtest_min_cost
                 if min_amount is not None or min_cost is not None:
                     self.order_manager.set_market_constraints(MarketConstraints(min_amount, min_cost))
 
@@ -394,7 +394,7 @@ class GridTradingBot:
         self.order_status_tracker.start_tracking()
         if self.state_persistence_service:
             self.state_persistence_service.start_periodic_checkpoints(
-                self.config_manager.get_checkpoint_interval_seconds(), self.order_manager.checkpoint
+                self.config_manager.config.persistence.checkpoint_interval_seconds, self.order_manager.checkpoint
             )
         if self.reconciliation_service:
             self.reconciliation_service.start()
