@@ -23,8 +23,9 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
     def __init__(
         self,
         exchange_service: ExchangeInterface,
-        max_retries: int = 3,
-        retry_delay: float = 1.0,
+        *,
+        max_retries: int,
+        retry_delay: float,
     ) -> None:
         self.exchange_service = exchange_service
         self.max_retries = max_retries

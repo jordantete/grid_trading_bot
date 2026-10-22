@@ -17,9 +17,10 @@ class CircuitState(Enum):
 class CircuitBreaker:
     def __init__(
         self,
-        failure_threshold: int = 5,
-        recovery_timeout: float = 60.0,
-        half_open_max_calls: int = 1,
+        *,
+        failure_threshold: int,
+        recovery_timeout: float,
+        half_open_max_calls: int,
         benign_exceptions: tuple[type[BaseException], ...] = (),
     ) -> None:
         """

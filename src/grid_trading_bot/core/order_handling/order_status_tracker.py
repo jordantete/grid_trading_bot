@@ -31,8 +31,8 @@ class OrderStatusTracker:
         order_book: OrderBook,
         order_execution_strategy: OrderExecutionStrategyInterface,
         order_update_handler: OrderUpdateHandler,
-        polling_interval: float = 15.0,
         *,
+        polling_interval: float,
         event_bus: EventBus | None = None,
         notify: Notify | None = None,
     ):

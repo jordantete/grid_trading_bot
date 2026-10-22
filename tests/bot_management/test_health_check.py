@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 import unittest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+from grid_trading_bot.config.schema import ExecutionConfig
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.health_check import HealthCheck, ResourceMetrics, format_account_metrics
@@ -41,6 +42,7 @@ class TestHealthCheck(unittest.IsolatedAsyncioTestCase):
             bot=self.bot,
             notification_handler=self.notification_handler,
             event_bus=self.event_bus,
+            check_interval=ExecutionConfig().health_check_interval,
         )
 
         assert health_check.metrics_history_size == 60

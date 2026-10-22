@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from grid_trading_bot.config.schema import ExecutionConfig
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.order_handling.execution_strategy.live_order_execution_strategy import (
     LiveOrderExecutionStrategy,
@@ -72,5 +73,8 @@ def setup_tracker():
 @pytest.fixture
 def setup_live_strategy():
     exchange_service = Mock()
-    strategy = LiveOrderExecutionStrategy(exchange_service=exchange_service)
+    execution = ExecutionConfig()
+    strategy = LiveOrderExecutionStrategy(
+        exchange_service=exchange_service, max_retries=execution.max_retries, retry_delay=execution.retry_delay
+    )
     return strategy, exchange_service

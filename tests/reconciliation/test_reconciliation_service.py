@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from grid_trading_bot.config.schema import ExecutionConfig
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
@@ -44,7 +45,7 @@ def setup_reconciliation_service():
         base_currency="BTC",
         quote_currency="USDT",
         reconciliation_interval=1.0,
-        balance_tolerance=0.01,
+        balance_tolerance=ExecutionConfig().reconciliation_balance_tolerance,
         alert_cooldown=900,
     )
     return service, order_book, balance_tracker, exchange_service, notification_handler, event_bus

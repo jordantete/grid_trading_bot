@@ -44,7 +44,8 @@ class HealthCheck:
         bot: GridTradingBot,
         notification_handler: NotificationHandler,
         event_bus: EventBus,
-        check_interval: int = 60,
+        *,
+        check_interval: int,
         metrics_history_size: int = 60,  # Keep 1 hour of metrics at 1-minute intervals
         alert_cooldown: int = 900,  # 15 minutes between duplicate alerts
     ):

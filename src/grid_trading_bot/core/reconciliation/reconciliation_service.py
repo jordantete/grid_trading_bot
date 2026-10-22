@@ -35,8 +35,9 @@ class ReconciliationService:
         trading_pair: str,
         base_currency: str,
         quote_currency: str,
-        reconciliation_interval: float = 300.0,
-        balance_tolerance: float = 0.01,
+        *,
+        reconciliation_interval: float,
+        balance_tolerance: float,
         alert_cooldown: int = 900,
         journal: PlacementJournal | None = None,
     ):
