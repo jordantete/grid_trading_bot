@@ -322,6 +322,28 @@ class TestPollOrder:
 
         assert calls == ["b100", "retry"]
 
+    async def test_a_cancelled_status_fetch_does_not_stop_the_poll(self, setup_tracker):
+        tracker, order_book, order_execution_strategy, order_update_handler = setup_tracker
+        calls = []
+        order_update_handler.apply_order_update = AsyncMock(side_effect=lambda update: calls.append(update.identifier))
+        order_update_handler.retry_pending_placements = AsyncMock(side_effect=lambda: calls.append("retry"))
+        filled = Mock(identifier="b90", status=OrderStatus.CLOSED, side=OrderSide.BUY, price=90.0)
+        order_book.get_open_orders.return_value = [
+            Mock(identifier="lost", symbol="BTC/USDT"),
+            Mock(identifier="b90", symbol="BTC/USDT"),
+        ]
+
+        async def get_order(order_id, _pair):
+            if order_id == "lost":
+                raise asyncio.CancelledError
+            return filled
+
+        order_execution_strategy.get_order = AsyncMock(side_effect=get_order)
+
+        await tracker._process_open_orders()
+
+        assert calls == ["b90", "retry"]
+
     async def test_a_poll_without_open_orders_still_retries(self, setup_tracker):
         tracker, order_book, _, order_update_handler = setup_tracker
         order_book.get_open_orders.return_value = []

@@ -73,7 +73,7 @@ class OrderStatusTracker:
         ended: list[Order] = []
         others: list[Order] = []
         for response in responses:
-            if isinstance(response, Exception):
+            if isinstance(response, BaseException):
                 self.logger.error(f"Error during order processing: {response}", exc_info=response)
             elif response is not None:
                 is_ended = response.status == OrderStatus.CLOSED or response.status in ENDED_UNFILLED_STATUSES
