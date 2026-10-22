@@ -292,10 +292,10 @@ class ConfigValidator:
                 self.logger.error(f"execution.{field} must be an integer between {min_val} and {max_val}.")
                 invalid_fields.append(f"execution.{field}")
 
-        for field, (min_val, max_val) in float_fields.items():
+        for field, (min_float, max_float) in float_fields.items():
             value = execution.get(field)
-            if value is not None and (not isinstance(value, int | float) or value < min_val or value > max_val):
-                self.logger.error(f"execution.{field} must be a number between {min_val} and {max_val}.")
+            if value is not None and (not isinstance(value, int | float) or value < min_float or value > max_float):
+                self.logger.error(f"execution.{field} must be a number between {min_float} and {max_float}.")
                 invalid_fields.append(f"execution.{field}")
 
         for field in ("backtest_min_amount", "backtest_min_cost"):

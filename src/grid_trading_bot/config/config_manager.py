@@ -7,7 +7,7 @@ from grid_trading_bot.core.domain.spacing_type import SpacingType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 
 from .config_validator import ConfigValidator
-from .exceptions import ConfigFileNotFoundError, ConfigParseError
+from .exceptions import ConfigFileNotFoundError, ConfigParseError, ConfigValidationError
 from .trading_mode import TradingMode
 
 
@@ -45,13 +45,17 @@ class ConfigManager:
     def get(self, key: str, default: Any = None) -> Any:
         return self.config.get(key, default)
 
+    def _required(self, value: Any, key: str) -> Any:
+        if value is None:
+            raise ConfigValidationError(missing_fields=[key])
+        return value
+
     # --- General Accessor Methods ---
     def get_exchange(self) -> dict:
         return self.config.get("exchange", {})
 
-    def get_exchange_name(self) -> str | None:
-        exchange = self.get_exchange()
-        return exchange.get("name", None)
+    def get_exchange_name(self) -> str:
+        return self._required(self.get_exchange().get("name"), "exchange.name")
 
     def get_trading_fee(self) -> float:
         exchange = self.get_exchange()
@@ -72,23 +76,18 @@ class ConfigManager:
         exchange = self.get_exchange()
         return exchange.get("post_only", False)
 
-    def get_trading_mode(self) -> TradingMode | None:
-        exchange = self.get_exchange()
-        trading_mode = exchange.get("trading_mode", None)
-
-        if trading_mode:
-            return TradingMode.from_string(trading_mode)
+    def get_trading_mode(self) -> TradingMode:
+        trading_mode = self.get_exchange().get("trading_mode") or None
+        return TradingMode.from_string(self._required(trading_mode, "exchange.trading_mode"))
 
     def get_pair(self) -> dict:
         return self.config.get("pair", {})
 
-    def get_base_currency(self) -> str | None:
-        pair = self.get_pair()
-        return pair.get("base_currency", None)
+    def get_base_currency(self) -> str:
+        return self._required(self.get_pair().get("base_currency"), "pair.base_currency")
 
-    def get_quote_currency(self) -> str | None:
-        pair = self.get_pair()
-        return pair.get("quote_currency", None)
+    def get_quote_currency(self) -> str:
+        return self._required(self.get_pair().get("quote_currency"), "pair.quote_currency")
 
     def get_trading_settings(self) -> dict:
         return self.config.get("trading_settings", {})
@@ -101,13 +100,11 @@ class ConfigManager:
         trading_settings = self.get_trading_settings()
         return trading_settings.get("period", {})
 
-    def get_start_date(self) -> str | None:
-        period = self.get_period()
-        return period.get("start_date", None)
+    def get_start_date(self) -> str:
+        return self._required(self.get_period().get("start_date"), "trading_settings.period.start_date")
 
-    def get_end_date(self) -> str | None:
-        period = self.get_period()
-        return period.get("end_date", None)
+    def get_end_date(self) -> str:
+        return self._required(self.get_period().get("end_date"), "trading_settings.period.end_date")
 
     def get_initial_balance(self) -> float:
         trading_settings = self.get_trading_settings()
@@ -121,23 +118,16 @@ class ConfigManager:
     def get_grid_settings(self) -> dict:
         return self.config.get("grid_strategy", {})
 
-    def get_strategy_type(self) -> StrategyType | None:
-        grid_settings = self.get_grid_settings()
-        strategy_type = grid_settings.get("type", None)
+    def get_strategy_type(self) -> StrategyType:
+        strategy_type = self.get_grid_settings().get("type") or None
+        return StrategyType.from_string(self._required(strategy_type, "grid_strategy.type"))
 
-        if strategy_type:
-            return StrategyType.from_string(strategy_type)
+    def get_spacing_type(self) -> SpacingType:
+        spacing_type = self.get_grid_settings().get("spacing") or None
+        return SpacingType.from_string(self._required(spacing_type, "grid_strategy.spacing"))
 
-    def get_spacing_type(self) -> SpacingType | None:
-        grid_settings = self.get_grid_settings()
-        spacing_type = grid_settings.get("spacing", None)
-
-        if spacing_type:
-            return SpacingType.from_string(spacing_type)
-
-    def get_num_grids(self) -> int | None:
-        grid_settings = self.get_grid_settings()
-        return grid_settings.get("num_grids", None)
+    def get_num_grids(self) -> int:
+        return self._required(self.get_grid_settings().get("num_grids"), "grid_strategy.num_grids")
 
     def get_grid_range(self) -> dict:
         grid_settings = self.get_grid_settings()
@@ -190,9 +180,8 @@ class ConfigManager:
         take_profit = self.get_take_profit()
         return take_profit.get("enabled", False)
 
-    def get_take_profit_threshold(self) -> float | None:
-        take_profit = self.get_take_profit()
-        return take_profit.get("threshold", None)
+    def get_take_profit_threshold(self) -> float:
+        return self._required(self.get_take_profit().get("threshold"), "risk_management.take_profit.threshold")
 
     def get_stop_loss(self) -> dict:
         risk_management = self.get_risk_management()
@@ -202,9 +191,8 @@ class ConfigManager:
         stop_loss = self.get_stop_loss()
         return stop_loss.get("enabled", False)
 
-    def get_stop_loss_threshold(self) -> float | None:
-        stop_loss = self.get_stop_loss()
-        return stop_loss.get("threshold", None)
+    def get_stop_loss_threshold(self) -> float:
+        return self._required(self.get_stop_loss().get("threshold"), "risk_management.stop_loss.threshold")
 
     def get_trailing_stop_loss(self) -> dict:
         risk_management = self.get_risk_management()

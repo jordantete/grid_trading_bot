@@ -1,4 +1,5 @@
 import json
+import re
 from unittest.mock import Mock, mock_open, patch
 
 import pytest
@@ -156,17 +157,19 @@ class TestConfigManager:
         del config_manager.config["risk_management"]["take_profit"]
         assert config_manager.is_take_profit_enabled() is False
 
-    def test_get_take_profit_threshold_default(self, config_manager):
+    def test_get_take_profit_threshold_names_the_missing_key(self, config_manager):
         del config_manager.config["risk_management"]["take_profit"]
-        assert config_manager.get_take_profit_threshold() is None
+        with pytest.raises(ConfigValidationError, match=re.escape("risk_management.take_profit.threshold")):
+            config_manager.get_take_profit_threshold()
 
     def test_is_stop_loss_enabled_default(self, config_manager):
         del config_manager.config["risk_management"]["stop_loss"]
         assert config_manager.is_stop_loss_enabled() is False
 
-    def test_get_stop_loss_threshold_default(self, config_manager):
+    def test_get_stop_loss_threshold_names_the_missing_key(self, config_manager):
         del config_manager.config["risk_management"]["stop_loss"]
-        assert config_manager.get_stop_loss_threshold() is None
+        with pytest.raises(ConfigValidationError, match=re.escape("risk_management.stop_loss.threshold")):
+            config_manager.get_stop_loss_threshold()
 
     def test_get_buy_ratio_default(self, config_manager):
         assert config_manager.get_buy_ratio() == 1.0
@@ -181,6 +184,48 @@ class TestConfigManager:
     def test_get_sell_ratio_custom(self, config_manager):
         config_manager.config["grid_strategy"]["sell_ratio"] = 0.5
         assert config_manager.get_sell_ratio() == 0.5
+
+    @pytest.mark.parametrize(
+        ("section", "key", "getter", "field"),
+        [
+            ("exchange", "name", "get_exchange_name", "exchange.name"),
+            ("exchange", "trading_mode", "get_trading_mode", "exchange.trading_mode"),
+            ("pair", "base_currency", "get_base_currency", "pair.base_currency"),
+            ("pair", "quote_currency", "get_quote_currency", "pair.quote_currency"),
+            ("grid_strategy", "type", "get_strategy_type", "grid_strategy.type"),
+            ("grid_strategy", "spacing", "get_spacing_type", "grid_strategy.spacing"),
+            ("grid_strategy", "num_grids", "get_num_grids", "grid_strategy.num_grids"),
+        ],
+    )
+    def test_a_required_getter_names_the_missing_key(self, config_manager, section, key, getter, field):
+        del config_manager.config[section][key]
+        with pytest.raises(ConfigValidationError, match=re.escape(field)):
+            getattr(config_manager, getter)()
+
+    @pytest.mark.parametrize(
+        ("key", "getter", "field"),
+        [
+            ("start_date", "get_start_date", "trading_settings.period.start_date"),
+            ("end_date", "get_end_date", "trading_settings.period.end_date"),
+        ],
+    )
+    def test_a_required_period_getter_names_the_missing_key(self, config_manager, key, getter, field):
+        del config_manager.config["trading_settings"]["period"][key]
+        with pytest.raises(ConfigValidationError, match=re.escape(field)):
+            getattr(config_manager, getter)()
+
+    @pytest.mark.parametrize(
+        ("section", "key", "getter", "field"),
+        [
+            ("exchange", "trading_mode", "get_trading_mode", "exchange.trading_mode"),
+            ("grid_strategy", "type", "get_strategy_type", "grid_strategy.type"),
+            ("grid_strategy", "spacing", "get_spacing_type", "grid_strategy.spacing"),
+        ],
+    )
+    def test_an_empty_enum_setting_counts_as_missing(self, config_manager, section, key, getter, field):
+        config_manager.config[section][key] = ""
+        with pytest.raises(ConfigValidationError, match=re.escape(field)):
+            getattr(config_manager, getter)()
 
 
 class TestConfigManagerFromDict:
