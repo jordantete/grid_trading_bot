@@ -387,6 +387,18 @@ class TestJournalRecovery:
 
         assert result.outcome is RecoveryOutcome.DEFERRED
 
+    @pytest.mark.parametrize(("side", "level_price"), [(OrderSide.SELL, 110.0), (OrderSide.BUY, 90.0)])
+    async def test_a_limit_entry_saved_without_a_price_refuses_the_recovery(self, repository, side, level_price):
+        before = await _armed_and_saved(repository)
+        limit = _limit_entry(level_price=level_price, side=side, source_level_price=None, sent=False)
+        entry = _saved_entry(repository, replace(limit, price=None))
+        balances, _, _ = _exchange_balances(before, [])
+
+        _, result, _ = await _restarted(repository, before, balances)
+
+        assert result.outcome is RecoveryOutcome.REFUSED
+        assert f"Limit placement {entry.client_order_id} has no price" in result.reason
+
     async def test_an_entry_for_a_level_the_grid_no_longer_has_is_dropped(self, repository, caplog):
         before = await _armed_and_saved(repository)
         _saved_entry(repository, _limit_entry(level_price=105.0, source_level_price=None, sent=False))

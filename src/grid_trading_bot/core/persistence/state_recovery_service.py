@@ -518,12 +518,12 @@ class StateRecoveryService:
 
     def _entry_reservations(self) -> tuple[Decimal, Decimal]:
         """What the pending limit placements hold in reserve: (fiat, crypto)."""
-        return self._reservations([(e.side, e.quantity, e.price) for e in self.journal.limit_entries()])
+        return self._reservations([(e.side, e.quantity, e.limit_price) for e in self.journal.limit_entries()])
 
     def _needed_reservations(self) -> tuple[Decimal, Decimal]:
         """What the open orders and the pending limit placements need in reserve: (fiat, crypto)."""
         held = [(o.side, o.remaining, o.price) for o in self.order_book.get_open_orders()]
-        held += [(e.side, e.quantity, e.price) for e in self.journal.limit_entries()]
+        held += [(e.side, e.quantity, e.limit_price) for e in self.journal.limit_entries()]
         return self._reservations(held)
 
     def _resplit_reservations(self) -> None:

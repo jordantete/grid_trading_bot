@@ -37,6 +37,13 @@ class PendingPlacement:
     created_at: int = 0
     attempts: int = 0
 
+    @property
+    def limit_price(self) -> float:
+        """The price of a limit entry, which every limit entry carries."""
+        if self.price is None:
+            raise ValueError(f"Limit placement {self.client_order_id} has no price.")
+        return self.price
+
 
 class PlacementJournal:
     """The placements whose outcome the bot has not settled yet, in creation order."""
@@ -66,7 +73,7 @@ class PlacementJournal:
     def reserved(self) -> tuple[float, float]:
         """The fiat and the crypto the limit entries hold reserved; market entries reserve nothing."""
         limits = self.limit_entries()
-        fiat = sum(entry.quantity * entry.price for entry in limits if entry.side == OrderSide.BUY)
+        fiat = sum(entry.quantity * entry.limit_price for entry in limits if entry.side == OrderSide.BUY)
         crypto = sum(entry.quantity for entry in limits if entry.side == OrderSide.SELL)
         return float(fiat), float(crypto)
 

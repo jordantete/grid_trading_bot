@@ -1,5 +1,6 @@
 import re
 
+import pytest
 from tests.fakes.trading_stack import build_stack
 
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
@@ -121,6 +122,15 @@ class TestPlacementJournal:
 
         assert fiat == 68.0
         assert crypto == 0.3
+
+    def test_a_limit_entry_gives_its_price(self):
+        assert _entry("g1", price=95.0).limit_price == 95.0
+
+    def test_a_limit_entry_without_a_price_is_refused(self):
+        entry = _entry("g1", price=None)
+
+        with pytest.raises(ValueError, match="has no price"):
+            _ = entry.limit_price
 
     def test_an_empty_journal_reserves_nothing(self):
         assert PlacementJournal().reserved() == (0.0, 0.0)
