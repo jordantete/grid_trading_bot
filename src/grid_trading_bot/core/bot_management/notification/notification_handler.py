@@ -1,5 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import contextvars
 import logging
 import string
 
@@ -75,8 +76,11 @@ class NotificationHandler:
         async with self.lock:
             loop = asyncio.get_running_loop()
             try:
+                context = contextvars.copy_context()
                 await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, lambda: self.send_notification(content, **kwargs)),
+                    loop.run_in_executor(
+                        self._executor, context.run, lambda: self.send_notification(content, **kwargs)
+                    ),
                     timeout=5,
                 )
             except (TimeoutError, OSError, RuntimeError) as e:

@@ -63,7 +63,7 @@ async def test_a_halted_config_refuses_to_build_the_bot(tmp_path, valid_config, 
         RunFiles.for_config(config_manager).halt_path, HaltRecord("risk", "TP or SL hit.", "ETH/USDT", "t")
     )
 
-    outcome = await run_bot(path, config_manager, ProcessLifecycle())
+    outcome = await run_bot(path, config_manager, "bot_test", ProcessLifecycle())
 
     assert outcome == BotOutcome(0)
     bot_cls.assert_not_called()
@@ -77,7 +77,7 @@ async def test_a_locked_config_refuses_to_build_the_bot(tmp_path, valid_config, 
     holder = RunLock(RunFiles.for_config(config_manager).lock_path)
     assert holder.acquire()
     try:
-        outcome = await run_bot(path, config_manager, ProcessLifecycle())
+        outcome = await run_bot(path, config_manager, "bot_test", ProcessLifecycle())
     finally:
         holder.release()
 
@@ -92,7 +92,7 @@ async def test_the_stop_request_sets_the_exit_code(tmp_path, valid_config, patch
     request = StopRequest(StopKind.SIGNAL, "Received SIGTERM", signal_number=15)
     bot_cls.return_value = _fake_bot(result={"config": path}, stop_request=request)
 
-    outcome = await run_bot(path, _config_manager(path), ProcessLifecycle())
+    outcome = await run_bot(path, _config_manager(path), "bot_test", ProcessLifecycle())
 
     assert outcome == BotOutcome(143, {"config": path})
 
@@ -103,7 +103,7 @@ async def test_a_crash_without_a_stop_request_exits_1(tmp_path, valid_config, pa
     path = _write_config(tmp_path, valid_config)
     bot_cls.return_value = _fake_bot(run_side_effect=RuntimeError("boom"))
 
-    outcome = await run_bot(path, _config_manager(path), ProcessLifecycle())
+    outcome = await run_bot(path, _config_manager(path), "bot_test", ProcessLifecycle())
 
     assert outcome.exit_code == 1
 
@@ -114,7 +114,7 @@ async def test_a_backtest_takes_no_lock_and_exits_0(tmp_path, valid_config, patc
     path = _write_config(tmp_path, valid_config, mode="backtest")
     bot_cls.return_value = _fake_bot(result={"config": path})
 
-    outcome = await run_bot(path, _config_manager(path), ProcessLifecycle())
+    outcome = await run_bot(path, _config_manager(path), "bot_test", ProcessLifecycle())
 
     assert outcome == BotOutcome(0, {"config": path})
     assert not (tmp_path / "data").exists()
@@ -129,7 +129,7 @@ async def test_the_listener_runs_only_with_a_terminal(tmp_path, valid_config, pa
 
     with patch("grid_trading_bot.cli.sys.stdin") as stdin:
         stdin.isatty.return_value = is_tty
-        await run_bot(path, _config_manager(path), ProcessLifecycle())
+        await run_bot(path, _config_manager(path), "bot_test", ProcessLifecycle())
 
     assert controller_cls.return_value.command_listener.called is listening
 
@@ -205,6 +205,35 @@ def test_a_backtest_whose_dates_hold_no_candle_exits_1_and_saves_no_results(tmp_
 
     assert result.exit_code == 1
     assert not results_path.exists()
+
+
+def test_the_traceback_of_a_failed_bot_reaches_that_bot_log_file_only(tmp_path, valid_config, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    paths = []
+    for num_grids in (10, 20):
+        config = json.loads(json.dumps(valid_config))
+        config["grid_strategy"]["num_grids"] = num_grids
+        config["logging"] = {"log_level": "INFO", "log_to_file": True}
+        path = tmp_path / f"config_{num_grids}.json"
+        path.write_text(json.dumps(config))
+        paths.append(str(path))
+
+    async def fake_run_bot(config_path, *_args, **_kwargs):
+        if config_path == paths[0]:
+            raise RuntimeError("bot 10 exploded")
+        return BotOutcome(0)
+
+    with (
+        patch("grid_trading_bot.cli.generate_config_name", side_effect=lambda cm: f"bot_{cm.get_num_grids()}"),
+        patch("grid_trading_bot.cli._run_bot", side_effect=fake_run_bot),
+    ):
+        result = CliRunner().invoke(cli.main, ["run", "--config", paths[0], "--config", paths[1]])
+
+    assert result.exit_code == 1
+    failed = (tmp_path / "logs" / "bot_10.log").read_text()
+    assert f"Error occurred while running bot for config {paths[0]}: bot 10 exploded" in failed
+    assert "RuntimeError: bot 10 exploded" in failed
+    assert "bot 10 exploded" not in (tmp_path / "logs" / "bot_20.log").read_text()
 
 
 def test_resume_archives_the_state_and_clears_the_halt(tmp_path, valid_config):

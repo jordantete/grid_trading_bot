@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import logging
 import sys
 import threading
@@ -39,7 +40,12 @@ class BotController:
         """Reads commands from stdin until end of input or a stop."""
         loop = asyncio.get_running_loop()
         lines: asyncio.Queue[str | None] = asyncio.Queue()
-        threading.Thread(target=self._read_lines, args=(loop, lines), name="CommandReader", daemon=True).start()
+        threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(self._read_lines, loop, lines),
+            name="CommandReader",
+            daemon=True,
+        ).start()
         self.logger.info("Command listener started. Commands: orders, balance, stop, quit.")
 
         while not self._stop_listening:

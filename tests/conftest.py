@@ -51,3 +51,11 @@ def valid_config():
             "log_to_file": True,
         },
     }
+
+
+@pytest.fixture(autouse=True)
+def _reset_logging():
+    yield
+    from grid_trading_bot.utils.logging_config import reset_logging
+
+    reset_logging()

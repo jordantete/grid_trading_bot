@@ -158,3 +158,27 @@ class TestNotificationHandler:
         notification_handler_enabled.send_notification(NotificationType.ERROR_OCCURRED, error_details="x")
 
         assert "Notification not delivered: Error Occurred" in caplog.text
+
+
+async def test_a_notification_logs_into_the_file_of_its_bot(tmp_path, monkeypatch):
+    import logging
+
+    from grid_trading_bot.config.trading_mode import TradingMode
+    from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
+    from grid_trading_bot.utils.logging_config import add_bot_log_file, configure_console, current_bot
+
+    monkeypatch.chdir(tmp_path)
+    current_bot.set("bot_a")
+    configure_console(logging.INFO)
+    add_bot_log_file("bot_a", logging.INFO)
+    handler = NotificationHandler(["json://localhost"], TradingMode.LIVE)
+
+    def send(content, **kwargs):
+        logging.getLogger("NotificationHandler").error("Notification not delivered: probe")
+
+    monkeypatch.setattr(handler, "send_notification", send)
+
+    await handler.async_send_notification("probe")
+
+    lines = (tmp_path / "logs" / "bot_a.log").read_text().splitlines()
+    assert any("NotificationHandler - ERROR - Notification not delivered: probe" in line for line in lines)

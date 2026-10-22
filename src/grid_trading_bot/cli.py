@@ -29,7 +29,7 @@ from grid_trading_bot.core.persistence.run_files import (
     remove_halt_marker,
 )
 from grid_trading_bot.utils.config_name_generator import generate_config_name
-from grid_trading_bot.utils.logging_config import setup_logging
+from grid_trading_bot.utils.logging_config import add_bot_log_file, configure_console, current_bot
 from grid_trading_bot.utils.performance_results_saver import save_or_append_performance_results
 
 
@@ -74,13 +74,17 @@ def initialize_notification_handler(config_manager: ConfigManager) -> Notificati
 async def run_bot(
     config_path: str,
     config_manager: ConfigManager,
+    config_name: str,
     lifecycle: ProcessLifecycle,
     profile: bool = False,
     save_performance_results_path: str | None = None,
     no_plot: bool = False,
 ) -> BotOutcome:
-    config_name = generate_config_name(config_manager)
-    setup_logging(config_manager.get_logging_level(), config_manager.should_log_to_file(), config_name)
+    current_bot.set(config_name)
+    log_level = logging.getLevelNamesMapping()[config_manager.get_logging_level().upper()]
+    configure_console(log_level)
+    if config_manager.should_log_to_file():
+        add_bot_log_file(config_name, log_level)
     event_bus = EventBus()
     notification_handler = initialize_notification_handler(config_manager)
     live_or_paper = config_manager.get_trading_mode() in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
@@ -255,6 +259,7 @@ def main():
 def run(config, save_performance_results, no_plot, profile):
     """Run the trading bot with the specified configuration."""
     config_managers = [initialize_config(config_path) for config_path in config]
+    config_names = [generate_config_name(config_manager) for config_manager in config_managers]
     live_or_paper = any(
         config_manager.get_trading_mode() in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
         for config_manager in config_managers
@@ -267,16 +272,28 @@ def run(config, save_performance_results, no_plot, profile):
         try:
             outcomes = await asyncio.gather(
                 *(
-                    run_bot(config_path, config_manager, lifecycle, profile, save_performance_results, no_plot)
-                    for config_path, config_manager in zip(config, config_managers, strict=True)
+                    run_bot(
+                        config_path,
+                        config_manager,
+                        config_name,
+                        lifecycle,
+                        profile,
+                        save_performance_results,
+                        no_plot,
+                    )
+                    for config_path, config_manager, config_name in zip(
+                        config, config_managers, config_names, strict=True
+                    )
                 ),
                 return_exceptions=True,
             )
             exit_codes = []
-            for config_path, outcome in zip(config, outcomes, strict=True):
+            for config_path, config_name, outcome in zip(config, config_names, outcomes, strict=True):
                 if isinstance(outcome, BaseException):
                     logging.error(
-                        f"Error occurred while running bot for config {config_path}: {outcome}", exc_info=outcome
+                        f"Error occurred while running bot for config {config_path}: {outcome}",
+                        exc_info=outcome,
+                        extra={"bot": config_name},
                     )
                     exit_codes.append(EXIT_FAILURE)
                     continue

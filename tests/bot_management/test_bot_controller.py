@@ -169,3 +169,28 @@ class TestBotController:
             await bot_controller._display_balance()
             mock_logger.assert_any_call(f"Current balances: {balances}")
             bot.get_balances.assert_called_once()
+
+
+async def test_the_command_reader_thread_logs_into_the_file_of_its_bot(tmp_path, monkeypatch):
+    import logging
+
+    from grid_trading_bot.core.bot_management.bot_controller.bot_controller import BotController
+    from grid_trading_bot.core.bot_management.event_bus import EventBus
+    from grid_trading_bot.utils.logging_config import add_bot_log_file, configure_console, current_bot
+
+    monkeypatch.chdir(tmp_path)
+    current_bot.set("bot_a")
+    configure_console(logging.INFO)
+    add_bot_log_file("bot_a", logging.INFO)
+
+    def read_lines(loop, lines):
+        logging.getLogger("CommandReader").info("reader thread started")
+        loop.call_soon_threadsafe(lines.put_nowait, None)
+
+    monkeypatch.setattr(BotController, "_read_lines", staticmethod(read_lines))
+    controller = BotController(Mock(), EventBus())
+
+    await controller.command_listener()
+
+    lines = (tmp_path / "logs" / "bot_a.log").read_text().splitlines()
+    assert any("CommandReader - INFO - reader thread started" in line for line in lines)

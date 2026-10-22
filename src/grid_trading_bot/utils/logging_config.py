@@ -1,47 +1,93 @@
+import contextvars
 import logging
 from logging.handlers import RotatingFileHandler
 import os
 
+current_bot: contextvars.ContextVar[str] = contextvars.ContextVar("current_bot", default="-")
 
-def setup_logging(
-    log_level: int,
-    log_to_file: bool = False,
-    config_name: str | None = None,
-    max_file_size: int = 5_000_000,  # 5MB default max file size for rotation
-    backup_count: int = 5,  # Default number of backup files
-) -> None:
-    """
-    Sets up logging with options for console, rotating file logging, and log differentiation.
+LOG_DIR = "logs"
+MAX_FILE_SIZE = 5_000_000
+BACKUP_COUNT = 5
+CONSOLE_FORMAT = "%(asctime)s - [%(bot)s] %(name)s - %(levelname)s - %(message)s"
+# Alloy parses this exact layout (monitoring/configs/alloy/config.alloy); a file holds one bot, so no bot field.
+FILE_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
-    Args:
-        log_level (int): The logging level (e.g., logging.INFO, logging.DEBUG).
-        log_to_file (bool): Whether to log to a file.
-        config_name (str | None): Name of the bot configuration to differentiate logs.
-        max_file_size (int): Maximum size of log file in bytes before rotation.
-        backup_count (int): Number of backup log files to keep.
-    """
-    handlers: list[logging.Handler] = []
 
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-    handlers.append(console_handler)
-    log_file_path = ""
+class _BotFilter(logging.Filter):
+    """Tags each record with the bot whose context emitted it and, with `only`, keeps that bot's records alone."""
 
-    if log_to_file:
-        log_dir = "logs"
-        os.makedirs(log_dir, exist_ok=True)
+    def __init__(self, only: str | None = None) -> None:
+        super().__init__()
+        self.only = only
 
-        if config_name:
-            log_file_path = os.path.join(log_dir, f"{config_name}.log")
-        else:
-            log_file_path = os.path.join(log_dir, "grid_trading_bot.log")
+    def filter(self, record: logging.LogRecord) -> bool:
+        bot = getattr(record, "bot", None)
+        if not isinstance(bot, str):
+            bot = current_bot.get()
+            record.bot = bot
+        return self.only is None or bot == self.only
 
-        file_handler = RotatingFileHandler(log_file_path, maxBytes=max_file_size, backupCount=backup_count)
-        file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-        handlers.append(file_handler)
 
-    logging.basicConfig(level=log_level, handlers=handlers)
-    logging.info(f"Logging initialized. Log level: {logging.getLevelName(log_level)}")
+_console_handler: logging.Handler | None = None
+_bot_file_handlers: dict[str, RotatingFileHandler] = {}
+_root_level_before: int | None = None
 
-    if log_to_file:
-        logging.info(f"File logging enabled. Logs are stored in: {log_file_path}")
+
+def _lower_root_level(level: int) -> None:
+    global _root_level_before
+    root = logging.getLogger()
+    if _root_level_before is None:
+        _root_level_before = root.level
+        root.setLevel(level)
+    elif level < root.level:
+        root.setLevel(level)
+
+
+def configure_console(level: int) -> None:
+    """Installs the process's console handler on first call; later calls only lower its level and the root's."""
+    global _console_handler
+    if _console_handler is None:
+        _console_handler = logging.StreamHandler()
+        _console_handler.setFormatter(logging.Formatter(CONSOLE_FORMAT))
+        _console_handler.addFilter(_BotFilter())
+        _console_handler.setLevel(level)
+        logging.getLogger().addHandler(_console_handler)
+    elif level < _console_handler.level:
+        _console_handler.setLevel(level)
+    _lower_root_level(level)
+    logging.info(f"Logging initialized. Log level: {logging.getLevelName(level)}")
+
+
+def add_bot_log_file(config_name: str, level: int) -> None:
+    """Adds `logs/<config_name>.log`, which keeps only the records of the bot running under that name."""
+    handler = _bot_file_handlers.get(config_name)
+    if handler is None:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        path = os.path.join(LOG_DIR, f"{config_name}.log")
+        handler = RotatingFileHandler(path, maxBytes=MAX_FILE_SIZE, backupCount=BACKUP_COUNT)
+        handler.setFormatter(logging.Formatter(FILE_FORMAT))
+        handler.addFilter(_BotFilter(only=config_name))
+        handler.setLevel(level)
+        logging.getLogger().addHandler(handler)
+        _bot_file_handlers[config_name] = handler
+    elif level < handler.level:
+        handler.setLevel(level)
+    _lower_root_level(level)
+    logging.info(f"File logging enabled. Logs are stored in: {os.path.join(LOG_DIR, f'{config_name}.log')}")
+
+
+def reset_logging() -> None:
+    """Removes and closes the handlers added by this module and restores the root level it found."""
+    global _console_handler, _root_level_before
+    root = logging.getLogger()
+    handlers: list[logging.Handler] = list(_bot_file_handlers.values())
+    if _console_handler is not None:
+        handlers.append(_console_handler)
+    for handler in handlers:
+        root.removeHandler(handler)
+        handler.close()
+    _bot_file_handlers.clear()
+    _console_handler = None
+    if _root_level_before is not None:
+        root.setLevel(_root_level_before)
+        _root_level_before = None
