@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import logging
 import os
 import signal
@@ -22,7 +23,7 @@ class ProcessLifecycle:
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._bots: list[StoppableBot] = []
+        self._bots: dict[StoppableBot, contextvars.Context] = {}
         self._suspend_request: StopRequest | None = None
         self._pending: set[asyncio.Task] = set()
 
@@ -40,13 +41,13 @@ class ProcessLifecycle:
         self._loop = None
 
     def register(self, bot: StoppableBot) -> None:
-        self._bots.append(bot)
+        """Registers `bot` with the current context, in which its stop request will run."""
+        self._bots[bot] = contextvars.copy_context()
         if self._suspend_request is not None:
             self._dispatch(bot, self._suspend_request)
 
     def unregister(self, bot: StoppableBot) -> None:
-        if bot in self._bots:
-            self._bots.remove(bot)
+        self._bots.pop(bot, None)
 
     def _on_terminate(self, signum: int) -> None:
         name = signal.Signals(signum).name
@@ -65,6 +66,6 @@ class ProcessLifecycle:
             self._dispatch(bot, request)
 
     def _dispatch(self, bot: StoppableBot, request: StopRequest) -> None:
-        task = asyncio.get_running_loop().create_task(bot.request_stop(request))
+        task = asyncio.get_running_loop().create_task(bot.request_stop(request), context=self._bots[bot])
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)

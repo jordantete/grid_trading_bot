@@ -3,7 +3,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 
-current_bot: contextvars.ContextVar[str] = contextvars.ContextVar("current_bot", default="-")
+NO_BOT = "-"
+current_bot: contextvars.ContextVar[str] = contextvars.ContextVar("current_bot", default=NO_BOT)
 
 LOG_DIR = "logs"
 MAX_FILE_SIZE = 5_000_000
@@ -14,7 +15,7 @@ FILE_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
 class _BotFilter(logging.Filter):
-    """Tags each record with the bot whose context emitted it and, with `only`, keeps that bot's records alone."""
+    """Tags each record with the bot whose context emitted it and, with `only`, keeps that bot's and process records."""
 
     def __init__(self, only: str | None = None) -> None:
         super().__init__()
@@ -25,7 +26,7 @@ class _BotFilter(logging.Filter):
         if not isinstance(bot, str):
             bot = current_bot.get()
             record.bot = bot
-        return self.only is None or bot == self.only
+        return self.only is None or bot in (self.only, NO_BOT)
 
 
 _console_handler: logging.Handler | None = None
@@ -38,8 +39,7 @@ def _lower_root_level(level: int) -> None:
     root = logging.getLogger()
     if _root_level_before is None:
         _root_level_before = root.level
-        root.setLevel(level)
-    elif level < root.level:
+    if level < root.level:
         root.setLevel(level)
 
 
@@ -59,7 +59,7 @@ def configure_console(level: int) -> None:
 
 
 def add_bot_log_file(config_name: str, level: int) -> None:
-    """Adds `logs/<config_name>.log`, which keeps only the records of the bot running under that name."""
+    """Adds `logs/<config_name>.log`, which keeps the records of the bot running under that name and process records."""
     handler = _bot_file_handlers.get(config_name)
     if handler is None:
         os.makedirs(LOG_DIR, exist_ok=True)

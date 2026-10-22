@@ -102,3 +102,44 @@ async def test_install_routes_a_real_signal_and_uninstall_removes_it():
 
     bot.request_stop.assert_awaited_once_with(StopRequest(StopKind.MANUAL, "Received SIGUSR1"))
     assert asyncio.get_running_loop().remove_signal_handler(signal.SIGUSR1) is False
+
+
+@pytest.mark.asyncio
+async def test_a_signal_stops_each_bot_in_the_logging_context_it_registered_from(tmp_path, monkeypatch):
+    import logging
+
+    from grid_trading_bot.utils.logging_config import add_bot_log_file, configure_console, current_bot
+
+    monkeypatch.chdir(tmp_path)
+    configure_console(logging.INFO)
+    add_bot_log_file("bot_a", logging.INFO)
+    add_bot_log_file("bot_b", logging.INFO)
+    lifecycle = ProcessLifecycle()
+
+    def stopping_bot():
+        bot = Mock()
+
+        async def request_stop(request):
+            logging.getLogger("GridTradingBot").info(f"shutdown of {current_bot.get()}")
+
+        bot.request_stop = request_stop
+        return bot
+
+    async def register_as(name):
+        current_bot.set(name)
+        lifecycle.register(stopping_bot())
+
+    await asyncio.gather(register_as("bot_a"), register_as("bot_b"))
+    current_bot.set("-")
+
+    lifecycle._on_terminate(signal.SIGTERM)
+    await _settle()
+
+    a_log = (tmp_path / "logs" / "bot_a.log").read_text()
+    b_log = (tmp_path / "logs" / "bot_b.log").read_text()
+    assert "GridTradingBot - INFO - shutdown of bot_a" in a_log
+    assert "shutdown of bot_b" not in a_log
+    assert "GridTradingBot - INFO - shutdown of bot_b" in b_log
+    assert "shutdown of bot_a" not in b_log
+    assert "ProcessLifecycle - INFO - SIGTERM received" in a_log
+    assert "ProcessLifecycle - INFO - SIGTERM received" in b_log

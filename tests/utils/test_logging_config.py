@@ -68,16 +68,18 @@ async def test_a_record_logged_from_to_thread_reaches_its_bot_file(in_tmp):
     assert any("Worker - INFO - from a worker thread" in line for line in _log_lines(in_tmp / "logs" / "bot_a.log"))
 
 
-async def test_a_record_without_bot_context_goes_to_the_console_only(in_tmp, capsys):
+async def test_a_record_without_bot_context_reaches_every_bot_file_and_the_console(in_tmp, capsys):
     current_bot.set("bot_a")
     configure_console(logging.INFO)
     add_bot_log_file("bot_a", logging.INFO)
+    add_bot_log_file("bot_b", logging.INFO)
 
     thread = threading.Thread(target=logging.getLogger("Library").warning, args=("no context",))
     thread.start()
     thread.join()
 
-    assert not any("no context" in line for line in _log_lines(in_tmp / "logs" / "bot_a.log"))
+    assert any("Library - WARNING - no context" in line for line in _log_lines(in_tmp / "logs" / "bot_a.log"))
+    assert any("Library - WARNING - no context" in line for line in _log_lines(in_tmp / "logs" / "bot_b.log"))
     assert any("[-] Library - WARNING - no context" in line for line in capsys.readouterr().err.splitlines())
 
 
@@ -130,6 +132,19 @@ async def test_a_file_announces_where_it_is(in_tmp):
         "File logging enabled. Logs are stored in: logs/bot_a.log" in line
         for line in _log_lines(in_tmp / "logs" / "bot_a.log")
     )
+
+
+def test_the_first_call_never_raises_a_lower_root_level(in_tmp):
+    root = logging.getLogger()
+    found = root.level
+    root.setLevel(logging.DEBUG)
+    try:
+        configure_console(logging.INFO)
+
+        assert root.level == logging.DEBUG
+    finally:
+        logging_config.reset_logging()
+        root.setLevel(found)
 
 
 def test_a_log_directory_that_cannot_be_created_raises(in_tmp, monkeypatch):
