@@ -168,6 +168,22 @@ def test_run_exits_with_the_most_severe_code_and_saves_results(tmp_path, valid_c
     mock_save.assert_called_once_with({"config": second}, str(results_path))
 
 
+def test_a_backtest_whose_candles_failed_to_load_exits_1_and_saves_no_results(tmp_path, valid_config):
+    config = json.loads(json.dumps(valid_config))
+    config["trading_settings"]["historical_data_file"] = str(tmp_path / "missing.csv")
+    config["logging"] = {"log_level": "INFO", "log_to_file": False}
+    path = tmp_path / "config_backtest.json"
+    path.write_text(json.dumps(config))
+    results_path = tmp_path / "results.json"
+
+    result = CliRunner().invoke(
+        cli.main, ["run", "--config", str(path), "--no-plot", "--save_performance_results", str(results_path)]
+    )
+
+    assert result.exit_code == 1
+    assert not results_path.exists()
+
+
 def test_resume_archives_the_state_and_clears_the_halt(tmp_path, valid_config):
     path = _write_config(tmp_path, valid_config)
     files = RunFiles.for_config(_config_manager(path))

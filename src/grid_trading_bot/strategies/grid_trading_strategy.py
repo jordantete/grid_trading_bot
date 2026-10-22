@@ -81,7 +81,7 @@ class GridTradingStrategy(TradingStrategyInterface):
     async def _initialize_historical_data(self) -> pd.DataFrame | None:
         """
         Initializes historical market data (OHLCV).
-        In LIVE or PAPER_TRADING mode returns None.
+        In LIVE or PAPER_TRADING mode returns None. In BACKTEST mode a load failure is logged and raised.
         Uses asyncio.to_thread to avoid blocking the event loop during I/O.
         """
         if self.trading_mode != TradingMode.BACKTEST:
@@ -94,7 +94,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             )
         except (DataFetchError, HistoricalMarketDataFileNotFoundError) as e:
             self.logger.error(f"Failed to initialize data for backtest trading mode: {e}")
-            return None
+            raise
 
     def _extract_config(self) -> tuple[str, str, str]:
         """

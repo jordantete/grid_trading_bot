@@ -297,10 +297,9 @@ class TestGridTradingStrategy:
         # Mock the exchange service to raise an exception
         exchange_service.fetch_ohlcv.side_effect = DataFetchError("Failed to fetch data")
 
-        with caplog.at_level(logging.ERROR):
-            result = await strategy._initialize_historical_data()
+        with caplog.at_level(logging.ERROR), pytest.raises(DataFetchError, match="Failed to fetch data"):
+            await strategy._initialize_historical_data()
 
-        assert result is None
         assert "Failed to initialize data for backtest trading mode" in caplog.text
 
     @pytest.mark.asyncio
@@ -1101,7 +1100,8 @@ async def test_a_backtest_without_candles_reports_no_metrics_and_plots_nothing(s
     strategy = strategy_fixture
     strategy.exchange_service.fetch_ohlcv.side_effect = DataFetchError("no candles")
 
-    await strategy.run()
+    with pytest.raises(DataFetchError, match="no candles"):
+        await strategy.run()
 
     assert strategy.generate_performance_report() == (None, {}, [])
     caplog.clear()
