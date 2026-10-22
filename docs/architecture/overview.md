@@ -8,64 +8,118 @@ The project uses a **src layout**:
 
 ```
 src/grid_trading_bot/
-├── cli.py                          # Click CLI entry point
-├── __main__.py                     # python -m support
+├── cli.py                              # Click CLI: run, resume; builds each bot with its controller and health check
+├── __main__.py                         # python -m support
+├── config/
+│   ├── config_manager.py               # Accessors over the JSON config
+│   ├── config_validator.py             # Schema and range checks
+│   ├── exceptions.py
+│   └── trading_mode.py                 # backtest, paper_trading, live
 ├── core/
-│   ├── bot_management/             # Bot lifecycle & orchestration
-│   │   ├── grid_trading_bot.py     # Main orchestrator
-│   │   ├── event_bus.py            # Pub/sub event system
-│   │   ├── bot_controller.py       # Runtime CLI commands
-│   │   ├── health_check.py         # System monitoring
-│   │   └── notification_handler.py # Apprise alerts
-│   ├── grid_management/            # Grid computation & state
-│   │   ├── grid_manager.py         # Level calculation
-│   │   └── grid_level.py           # Level state machine
-│   ├── order_handling/             # Order lifecycle
-│   │   ├── order_manager.py        # Order orchestration
-│   │   ├── balance_tracker.py      # Fiat/crypto balances
-│   │   ├── order_book.py           # Order-to-grid mapping
-│   │   ├── placement_journal.py    # Placements not yet resolved
-│   │   └── execution_strategy/     # Backtest vs live execution
-│   ├── persistence/                # State persistence (live and paper)
-│   │   ├── state_persistence_service.py  # State snapshots in one transaction
-│   │   ├── state_recovery_service.py     # Merge recovery on restart
-│   │   ├── sqlite_state_repository.py    # SQLite backend
-│   │   └── serializers.py                # Model serialization
-│   ├── services/                   # Exchange abstraction
+│   ├── exceptions.py                   # GridBotError hierarchy
+│   ├── bot_management/                 # Bot lifecycle and orchestration
+│   │   ├── grid_trading_bot.py         # Builds the components, runs, stops, recovers
+│   │   ├── event_bus.py                # STOP_BOT only
+│   │   ├── stop_request.py             # Stop kinds and exit codes
+│   │   ├── supervised_loop.py          # Background loops: retry, alert, CRASH after 3 failures
+│   │   ├── process_lifecycle.py        # Signal handling (SIGTERM, SIGINT, SIGUSR1)
+│   │   ├── health_check.py             # Bot health, resources, account metrics
+│   │   ├── bot_controller/
+│   │   │   ├── bot_controller.py       # Terminal commands (orders, balance, stop, quit)
+│   │   │   └── exceptions.py
+│   │   └── notification/
+│   │       ├── notification_handler.py # Apprise alerts
+│   │       └── notification_content.py # Alert types and texts
+│   ├── domain/
+│   │   ├── spacing_type.py
+│   │   └── strategy_type.py
+│   ├── grid_management/                # Grid computation and state
+│   │   ├── grid_manager.py             # Levels, static or ATR-based regrid
+│   │   ├── grid_level.py               # Level state machine
+│   │   └── grid_strategy.py            # simple_grid and hedged_grid pairing rules
+│   ├── indicators/
+│   │   └── atr_calculator.py           # ATR for dynamic spacing and the trailing stop
+│   ├── order_handling/                 # Order lifecycle
+│   │   ├── order_manager.py            # Placement, fill pipeline, market legs, liquidation
+│   │   ├── order.py                    # Order model (timestamps in ms)
+│   │   ├── order_book.py               # Order-to-level mapping
+│   │   ├── placement_journal.py        # Placements written before they are sent
+│   │   ├── balance_tracker.py          # Fiat and crypto, free and reserved
+│   │   ├── fee_calculator.py           # Fees in the currency received
+│   │   ├── pnl_ledger.py               # Realized PnL
+│   │   ├── backtest_clock.py           # Backtest: candle time stamped on the orders
+│   │   ├── order_status_tracker.py     # Live and paper: polls the open orders
+│   │   ├── order_simulator.py          # Backtest: fills orders from the candles
+│   │   ├── order_update_handler.py     # Interface of apply_order_update
+│   │   ├── state_store.py              # Interface of the state save
+│   │   ├── exceptions.py
+│   │   └── execution_strategy/         # Backtest vs live execution, through a factory
+│   ├── persistence/                    # State persistence (live and paper)
+│   │   ├── state_persistence_service.py  # One-transaction snapshots, periodic checkpoint
+│   │   ├── state_recovery_service.py     # Resume, refuse or defer a start
+│   │   ├── state_repository_interface.py
+│   │   ├── sqlite_state_repository.py    # SQLite backend (WAL)
+│   │   ├── serializers.py                # Model serialization, config hash
+│   │   └── run_files.py                  # Run lock and halt marker
+│   ├── reconciliation/
+│   │   └── reconciliation_service.py   # Live: local state vs exchange audit
+│   ├── risk_management/
+│   │   └── trailing_stop_loss.py       # ATR trailing stop ratchet
+│   ├── services/                       # Exchange abstraction
+│   │   ├── exchange_interface.py
+│   │   ├── exchange_service_factory.py
 │   │   ├── backtest_exchange_service.py
-│   │   └── live_exchange_service.py
-│   └── validation/                 # Order validation
-├── strategies/                     # Trading strategies
-│   ├── grid_trading_strategy.py    # Main strategy logic
-│   ├── trading_performance_analyzer.py
-│   └── plotter.py                  # Plotly visualization
-├── config/                         # Configuration management
-│   ├── config_manager.py
-│   ├── config_validator.py
-│   └── trading_mode.py
-└── utils/                          # Logging, I/O helpers
+│   │   ├── live_exchange_service.py    # ccxt pro, ticker feed, sandbox for paper
+│   │   ├── circuit_breaker.py
+│   │   ├── market_constraints.py       # Exchange minimums and precision
+│   │   └── exceptions.py
+│   └── validation/
+│       ├── order_validator.py
+│       └── exceptions.py
+├── strategies/
+│   ├── grid_trading_strategy.py        # Backtest loop and live ticker loop, TP/SL, trailing stop, regrid
+│   ├── trading_strategy_interface.py
+│   ├── trading_performance_analyzer.py # Metrics and the display summary
+│   ├── performance_metrics.py          # Typed metrics
+│   └── plotter.py                      # Plotly charts (backtest)
+└── utils/
+    ├── logging_config.py               # Console handler, one log file per bot
+    ├── config_name_generator.py
+    ├── performance_results_saver.py
+    └── constants.py
 ```
 
 ## Module Dependencies
 
 ```mermaid
 flowchart TD
-    CLI["cli.py"] --> Bot["GridTradingBot"]
+    CLI["cli.py"] --> EventBus["EventBus"]
+    CLI --> Notification["NotificationHandler"]
+    CLI --> Bot["GridTradingBot"]
+    CLI --> BotController["BotController"]
+    CLI --> HealthCheck["HealthCheck"]
+    BotController --> Bot
+    HealthCheck --> Bot
+    Bot --> ExchangeService["ExchangeService (factory)"]
     Bot --> Strategy["GridTradingStrategy"]
-    Bot --> EventBus["EventBus"]
-    Bot --> HealthCheck["HealthCheck"]
-    Bot --> BotController["BotController"]
-    Bot --> Notification["NotificationHandler"]
-    Strategy --> OrderManager["OrderManager"]
-    Strategy --> GridManager["GridManager"]
-    OrderManager --> BalanceTracker["BalanceTracker"]
-    OrderManager --> OrderBook["OrderBook"]
-    OrderManager --> ExecutionStrategy["ExecutionStrategy"]
-    ExecutionStrategy --> ExchangeService["ExchangeService"]
-    OrderManager --> OrderValidator["OrderValidator"]
-    GridManager --> GridLevel["GridLevel"]
+    Bot --> OrderManager["OrderManager"]
+    Bot --> Tracker["OrderStatusTracker (live, paper)"]
+    Bot --> Simulator["OrderSimulator (backtest)"]
+    Bot --> Reconciliation["ReconciliationService (live)"]
     Bot --> PersistenceService["StatePersistenceService"]
     Bot --> RecoveryService["StateRecoveryService"]
+    Strategy --> OrderManager
+    Strategy --> GridManager["GridManager"]
+    Strategy --> TrailingStop["TrailingStopLoss + ATRCalculator"]
+    Tracker --> OrderManager
+    Simulator --> OrderManager
+    OrderManager --> BalanceTracker["BalanceTracker"]
+    OrderManager --> OrderBook["OrderBook"]
+    OrderManager --> Journal["PlacementJournal"]
+    OrderManager --> ExecutionStrategy["ExecutionStrategy (factory)"]
+    OrderManager --> OrderValidator["OrderValidator"]
+    ExecutionStrategy --> ExchangeService
+    GridManager --> GridLevel["GridLevel"]
     PersistenceService --> StateRepository["SQLiteStateRepository"]
     RecoveryService --> StateRepository
 ```

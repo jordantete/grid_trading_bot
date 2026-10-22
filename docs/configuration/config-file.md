@@ -148,6 +148,18 @@ silently distort the profit spacing the whole strategy is built on.
 | `buy_ratio` | float | No | Fraction of the base quantity to use for buy orders. Must be in `(0, 1.0]`. Default: `1.0`. |
 | `sell_ratio` | float | No | Fraction of the base quantity to use for sell orders. Must be in `(0, 1.0]`. Default: `1.0`. |
 
+#### `grid_strategy.dynamic_spacing` *(optional)*
+
+ATR-based spacing: the grid is built (or rebuilt) around the price with a spacing of `atr_spacing_multiplier` times the ATR of the last `atr_period` candles. With `enabled: true`, `range` may be omitted: the grid then waits for the ATR warm-up before it is laid. Dynamic spacing supports `spacing: "arithmetic"` only.
+
+| Parameter | Type | Default | Range | Description |
+|-----------|------|---------|-------|-------------|
+| `enabled` | bool | `false` | | Required when the section is present. |
+| `atr_period` | int | `14` | 2 or more | Candles in the ATR. |
+| `atr_spacing_multiplier` | float | `1.0` | above 0 | Spacing between levels, as a multiple of the ATR. |
+| `regrid_threshold` | float | `0.3` | above 0 | Relative ATR change, against the ATR the grid was built with, that triggers a regrid (`0.3` = 30 %). |
+| `cooldown_bars` | int | `60` | 0 or more | Candles to wait after a regrid before the next one. |
+
 ### `risk_management`
 
 | Parameter | Type | Required | Description |
@@ -156,6 +168,17 @@ silently distort the profit spacing the whole strategy is built on.
 | `take_profit.threshold` | float | Yes | Price at which to take profit. |
 | `stop_loss.enabled` | bool | Yes | Whether stop-loss is active. |
 | `stop_loss.threshold` | float | Yes | Price at which to stop loss. |
+
+#### `risk_management.trailing_stop_loss` *(optional)*
+
+An ATR trailing stop: it sits `atr_multiplier` times the ATR under the highest close seen and only moves up. Live and paper save its level in the state database, so a restart keeps it.
+
+| Parameter | Type | Default | Range | Description |
+|-----------|------|---------|-------|-------------|
+| `enabled` | bool | `false` | | Required when the section is present. |
+| `atr_period` | int | `14` | 2 or more | Candles in the ATR. |
+| `atr_multiplier` | float | `2.5` | above 0 | Distance of the stop under the highest close, as a multiple of the ATR. |
+| `on_trigger` | string | `"stop"` | `stop` or `regrid` | `stop` liquidates and halts like a stop-loss; `regrid` rebuilds the grid around the price and needs `grid_strategy.dynamic_spacing.enabled: true`. |
 
 ### `execution` *(optional)*
 
@@ -186,7 +209,7 @@ All fields are optional with sensible defaults. These fine-tune order execution 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `log_level` | string | Yes | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
-| `log_to_file` | bool | Yes | Enable logging to a file in the `logs/` directory. |
+| `log_to_file` | bool | Yes | Enable logging to a file: `logs/<config name>.log`, one file per bot. Console lines carry `[<config name>]`; file lines keep their format. |
 
 ### `persistence` *(optional, live and paper trading)*
 

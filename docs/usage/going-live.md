@@ -127,7 +127,8 @@ docker compose down bot
 docker compose kill -s SIGUSR1 bot
 
 # After a halt: clear it, then start a new grid
-docker compose run --rm bot resume --config ${BOT_CONFIG:-config/config.json}
+BOT_CONFIG="${BOT_CONFIG:-$(sed -n 's/^BOT_CONFIG=//p' .env 2>/dev/null)}"
+docker compose run --rm bot resume --config "${BOT_CONFIG:-config/config.json}"
 docker compose --profile bot up -d bot
 ```
 
@@ -135,7 +136,7 @@ The compose file sets `restart: on-failure`. A halted bot exits with 0 and stays
 
 `on-failure` looks at the exit code only. A container stopped by `docker compose stop` exits with 143, so the Docker daemon relaunches it after a daemon restart or a host reboot. To keep a suspended bot down across reboots, remove it with `docker compose down bot`, or halt it with SIGUSR1. The manual Docker check run before go-live confirms this behavior.
 
-The `resume` example passes `${BOT_CONFIG:-config/config.json}`, the same config file the service runs.
+`resume` must receive the config file the service runs. Compose reads `BOT_CONFIG` from your shell first, then from the `.env` file, and falls back to `config/config.json`. The example reproduces that order: it takes `BOT_CONFIG` from your shell if it is set, otherwise from `.env` (written as `BOT_CONFIG=config/my_config.json`, without quotes), otherwise the default. Typing `${BOT_CONFIG:-...}` alone would only read your shell, which does not load `.env`, so a `.env`-only setting would resume the default config instead.
 
 | Exit code | Meaning | Relaunched by `on-failure` |
 |-----------|---------|----------------------------|
