@@ -6,7 +6,6 @@ import json
 import os
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.core.persistence.serializers import compute_config_hash
 
 
 @dataclass(frozen=True)
@@ -20,7 +19,7 @@ class RunFiles:
         """Lock and halt marker paths of a config, next to its state database and keyed like it."""
         db_path = config_manager.get_state_db_path()
         directory = os.path.dirname(db_path) or "."
-        config_hash_short = compute_config_hash(config_manager)[:8]
+        config_hash_short = config_manager.get_config_hash()[:8]
         return cls(
             db_path=db_path,
             lock_path=os.path.join(directory, f"bot_{config_hash_short}.lock"),
@@ -34,6 +33,7 @@ class HaltRecord:
     reason: str
     pair: str
     halted_at: str
+    config_hash: str | None = None
 
 
 def write_halt_marker(path: str, record: HaltRecord) -> None:
@@ -54,6 +54,26 @@ def read_halt_marker(path: str) -> HaltRecord | None:
         return None
     except (json.JSONDecodeError, TypeError):
         return HaltRecord(kind="unknown", reason=f"Unreadable halt marker {path}", pair="", halted_at="unknown")
+
+
+def legacy_halt_markers(halt_path: str) -> list[str]:
+    """
+    The other halt markers of the directory that record no config hash. They were written before the hash covered
+    the loaded config, so one of them may be this config's own halt under its old hash.
+    """
+    directory = os.path.dirname(halt_path) or "."
+    try:
+        names = sorted(os.listdir(directory))
+    except FileNotFoundError:
+        return []
+    legacy = []
+    for name in names:
+        path = os.path.join(directory, name)
+        if name.startswith("halted_") and name.endswith(".json") and path != halt_path:
+            record = read_halt_marker(path)
+            if record is not None and record.config_hash is None:
+                legacy.append(path)
+    return legacy
 
 
 def remove_halt_marker(path: str) -> None:

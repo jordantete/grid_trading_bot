@@ -8,10 +8,15 @@ import pytest
 from grid_trading_bot import cli
 from grid_trading_bot.cli import BotOutcome, run_bot
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.config_validator import ConfigValidator
 from grid_trading_bot.core.bot_management.process_lifecycle import ProcessLifecycle
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
-from grid_trading_bot.core.persistence.run_files import HaltRecord, RunFiles, RunLock, write_halt_marker
+from grid_trading_bot.core.persistence.run_files import (
+    HaltRecord,
+    RunFiles,
+    RunLock,
+    read_halt_marker,
+    write_halt_marker,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +37,7 @@ def _write_config(tmp_path, valid_config, mode="live"):
 
 
 def _config_manager(path):
-    return ConfigManager(path, ConfigValidator())
+    return ConfigManager(path)
 
 
 def _fake_bot(result=None, stop_request=None, run_side_effect=None):
@@ -67,6 +72,61 @@ async def test_a_halted_config_refuses_to_build_the_bot(tmp_path, valid_config, 
 
     assert outcome == BotOutcome(0)
     bot_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_own_halt_marker_recording_the_config_hash_refuses_to_build_the_bot(
+    tmp_path, valid_config, patched_components
+):
+    bot_cls, *_ = patched_components
+    path = _write_config(tmp_path, valid_config)
+    config_manager = _config_manager(path)
+    record = HaltRecord("risk", "TP or SL hit.", "ETH/USDT", "t", config_hash=config_manager.get_config_hash())
+    write_halt_marker(RunFiles.for_config(config_manager).halt_path, record)
+
+    outcome = await run_bot(path, config_manager, "bot_test", ProcessLifecycle())
+
+    assert outcome == BotOutcome(0)
+    bot_cls.assert_not_called()
+
+
+def _marker_beside(config_manager, name, config_hash=None):
+    path = os.path.join(os.path.dirname(RunFiles.for_config(config_manager).halt_path), name)
+    write_halt_marker(path, HaltRecord("risk", "TP or SL hit.", "ETH/USDT", "t", config_hash=config_hash))
+    return path
+
+
+@pytest.mark.asyncio
+async def test_a_marker_beside_without_a_recorded_hash_refuses_to_build_the_bot(
+    tmp_path, valid_config, patched_components, caplog
+):
+    bot_cls, *_ = patched_components
+    path = _write_config(tmp_path, valid_config)
+    config_manager = _config_manager(path)
+    legacy = _marker_beside(config_manager, "halted_0badc0de.json")
+
+    with patch.object(cli.NotificationHandler, "async_send_notification", new_callable=AsyncMock) as notify:
+        outcome = await run_bot(path, config_manager, "bot_test", ProcessLifecycle())
+
+    assert outcome == BotOutcome(0)
+    bot_cls.assert_not_called()
+    assert legacy in caplog.text
+    assert notify.await_args.args[0] is cli.NotificationType.START_REFUSED
+    assert legacy in notify.await_args.kwargs["reason"]
+
+
+@pytest.mark.asyncio
+async def test_a_marker_beside_recording_another_hash_is_ignored(tmp_path, valid_config, patched_components):
+    bot_cls, *_ = patched_components
+    path = _write_config(tmp_path, valid_config)
+    config_manager = _config_manager(path)
+    _marker_beside(config_manager, "halted_0badc0de.json", config_hash="0badc0de" + "0" * 56)
+    bot_cls.return_value = _fake_bot(stop_request=StopRequest(StopKind.MANUAL, "stop"))
+
+    outcome = await run_bot(path, config_manager, "bot_test", ProcessLifecycle())
+
+    assert outcome == BotOutcome(0)
+    bot_cls.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -280,3 +340,36 @@ def test_resume_refuses_while_a_bot_holds_the_lock(tmp_path, valid_config):
 
     assert result.exit_code == 1
     assert os.path.exists(files.halt_path)
+
+
+def test_resume_clears_the_markers_beside_without_a_recorded_hash(tmp_path, valid_config):
+    path = _write_config(tmp_path, valid_config)
+    config_manager = _config_manager(path)
+    files = RunFiles.for_config(config_manager)
+    os.makedirs(os.path.dirname(files.db_path), exist_ok=True)
+    with open(files.db_path, "w") as db:
+        db.write("x")
+    legacy = _marker_beside(config_manager, "halted_0badc0de.json")
+    other_config = _marker_beside(config_manager, "halted_feedf00d.json", config_hash="feedf00d" + "0" * 56)
+
+    result = CliRunner().invoke(cli.main, ["resume", "--config", path])
+
+    assert result.exit_code == 0
+    assert legacy in result.output
+    assert not os.path.exists(legacy)
+    assert read_halt_marker(other_config) is not None
+    assert os.path.exists(files.db_path)
+
+
+def test_resume_clears_the_own_halt_and_the_markers_beside_without_a_hash(tmp_path, valid_config):
+    path = _write_config(tmp_path, valid_config)
+    config_manager = _config_manager(path)
+    files = RunFiles.for_config(config_manager)
+    write_halt_marker(files.halt_path, HaltRecord("manual", "stop", "ETH/USDT", "t", config_manager.get_config_hash()))
+    legacy = _marker_beside(config_manager, "halted_0badc0de.json")
+
+    result = CliRunner().invoke(cli.main, ["resume", "--config", path])
+
+    assert result.exit_code == 0
+    assert not os.path.exists(files.halt_path)
+    assert not os.path.exists(legacy)

@@ -4,22 +4,22 @@ import os
 from unittest.mock import Mock
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.core.persistence import run_files
 from grid_trading_bot.core.persistence.run_files import (
     HaltRecord,
     RunFiles,
     RunLock,
     archive_state_db,
+    legacy_halt_markers,
     read_halt_marker,
     remove_halt_marker,
     write_halt_marker,
 )
 
 
-def test_run_files_sit_next_to_the_state_db_and_carry_the_config_hash(tmp_path, monkeypatch):
+def test_run_files_sit_next_to_the_state_db_and_carry_the_config_hash(tmp_path):
     config_manager = Mock(spec=ConfigManager)
     config_manager.get_state_db_path.return_value = str(tmp_path / "data" / "BTC_USDT" / "state_abcd1234.db")
-    monkeypatch.setattr(run_files, "compute_config_hash", lambda _cm: "abcd1234ffff")
+    config_manager.get_config_hash.return_value = "abcd1234ffff"
 
     files = RunFiles.for_config(config_manager)
 
@@ -36,6 +36,40 @@ def test_halt_marker_round_trip(tmp_path):
 
     assert read_halt_marker(path) == record
     assert not os.path.exists(f"{path}.tmp")
+
+
+def test_a_marker_records_the_config_hash(tmp_path):
+    path = str(tmp_path / "halted_abcd1234.json")
+    record = HaltRecord("manual", "stop", "BTC/USDT", "t", config_hash="abcd1234" + "0" * 56)
+
+    write_halt_marker(path, record)
+
+    assert read_halt_marker(path) == record
+
+
+def test_a_marker_written_without_a_hash_reads_with_none(tmp_path):
+    path = tmp_path / "halted_abcd1234.json"
+    path.write_text(json.dumps({"kind": "manual", "reason": "r", "pair": "p", "halted_at": "t"}))
+
+    assert read_halt_marker(str(path)).config_hash is None
+
+
+def test_legacy_markers_are_the_markers_beside_that_record_no_hash(tmp_path):
+    own = tmp_path / "halted_aaaaaaaa.json"
+    legacy = tmp_path / "halted_bbbbbbbb.json"
+    unreadable = tmp_path / "halted_cccccccc.json"
+    other_config = tmp_path / "halted_dddddddd.json"
+    write_halt_marker(str(own), HaltRecord("manual", "stop", "BTC/USDT", "t"))
+    write_halt_marker(str(legacy), HaltRecord("risk", "TP hit.", "BTC/USDT", "t"))
+    unreadable.write_text('{"kind": "risk", "reas')
+    write_halt_marker(str(other_config), HaltRecord("manual", "stop", "BTC/USDT", "t", config_hash="d" * 64))
+    (tmp_path / "state_bbbbbbbb.db").write_text("x")
+
+    assert legacy_halt_markers(str(own)) == [str(legacy), str(unreadable)]
+
+
+def test_no_legacy_marker_without_the_directory(tmp_path):
+    assert legacy_halt_markers(str(tmp_path / "absent" / "halted_x.json")) == []
 
 
 def test_no_marker_reads_as_none(tmp_path):

@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import time
@@ -7,6 +8,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.config.schema import BotConfig, load_config
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
@@ -15,7 +17,7 @@ from grid_trading_bot.core.bot_management.notification.notification_handler impo
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
-from grid_trading_bot.core.persistence.run_files import RunFiles
+from grid_trading_bot.core.persistence.run_files import RunFiles, read_halt_marker
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
 from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
 from grid_trading_bot.core.persistence.state_recovery_service import RecoveryOutcome, RecoveryResult
@@ -33,10 +35,20 @@ def mock_env_vars():
         yield
 
 
+def _live_config(valid_config) -> BotConfig:
+    """The schema objects the getter stubs of the fixtures stand for."""
+    raw = copy.deepcopy(valid_config)
+    raw["exchange"]["trading_mode"] = "live"
+    raw["trading_settings"] |= {"initial_balance": 1000, "timeframe": "1h"}
+    raw["grid_strategy"] |= {"spacing": "arithmetic", "num_grids": 10, "range": {"top": 2000, "bottom": 1500}}
+    return load_config(raw)
+
+
 class BotFixtures:
     @pytest.fixture
-    def config_manager(self):
+    def config_manager(self, valid_config):
         mock_config = Mock(spec=ConfigManager)
+        mock_config.config = _live_config(valid_config)
         mock_config.get_trading_mode.return_value = TradingMode.LIVE
         mock_config.get_initial_balance.return_value = 1000
         mock_config.get_exchange_name.return_value = "binance"
@@ -46,10 +58,6 @@ class BotFixtures:
         mock_config.get_num_grids.return_value = 10
         mock_config.get_strategy_type.return_value = StrategyType.SIMPLE_GRID
         mock_config.is_persistence_enabled.return_value = False
-        mock_config.get_grid_settings.return_value = {}
-        mock_config.get_pair.return_value = {}
-        mock_config.get_dynamic_spacing.return_value = {}
-        mock_config.get_risk_management.return_value = {}
         mock_config.get_timeframe.return_value = "1h"
         return mock_config
 
@@ -397,7 +405,7 @@ class TestGridTradingBot(BotFixtures):
         assert bot.get_account_snapshot() is None
 
     def test_the_order_manager_signs_its_orders_with_the_config_hash(self, bot, config_manager):
-        assert bot.order_manager.config_hash == compute_config_hash(config_manager)
+        assert bot.order_manager.config_hash == compute_config_hash(config_manager.config)
 
     @patch("grid_trading_bot.core.bot_management.grid_trading_bot.GridTradingStrategy")
     @pytest.mark.asyncio
@@ -499,8 +507,9 @@ class TestGridTradingBot(BotFixtures):
 
 class TestStrategyStatePersistenceWiring:
     @pytest.fixture
-    def config_manager(self, tmp_path):
+    def config_manager(self, tmp_path, valid_config):
         mock_config = Mock(spec=ConfigManager)
+        mock_config.config = _live_config(valid_config)
         mock_config.get_trading_mode.return_value = TradingMode.LIVE
         mock_config.get_initial_balance.return_value = 1000
         mock_config.get_exchange_name.return_value = "binance"
@@ -512,15 +521,6 @@ class TestStrategyStatePersistenceWiring:
         mock_config.is_persistence_enabled.return_value = True
         mock_config.get_state_db_path.return_value = str(tmp_path / "state.db")
         mock_config.get_checkpoint_interval_seconds.return_value = 60.0
-        mock_config.get_grid_settings.return_value = {
-            "type": "simple_grid",
-            "spacing": "arithmetic",
-            "num_grids": 10,
-            "range": [1500, 2000],
-        }
-        mock_config.get_pair.return_value = "BTC/USDT"
-        mock_config.get_dynamic_spacing.return_value = {}
-        mock_config.get_risk_management.return_value = {}
         mock_config.get_timeframe.return_value = "1h"
         return mock_config
 
@@ -1000,6 +1000,15 @@ class TestShutdownSequence(BotFixtures):
         await bot._stop(StopRequest(StopKind.MANUAL, "User issued stop command"))
 
         assert marker_present_at_cancel == [True]
+
+    @pytest.mark.asyncio
+    async def test_the_halt_marker_records_the_config_hash(self, bot, config_manager, tmp_path):
+        files = _run_files(tmp_path)
+        _record_shutdown(bot, [], files)
+
+        await bot._stop(StopRequest(StopKind.MANUAL, "User issued stop command"))
+
+        assert read_halt_marker(files.halt_path).config_hash == compute_config_hash(config_manager.config)
 
     @pytest.mark.asyncio
     async def test_a_stop_waits_for_the_ticker_update_once_the_strategy_is_stopped(self, bot, tmp_path):

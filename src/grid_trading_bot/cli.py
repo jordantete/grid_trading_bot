@@ -10,7 +10,6 @@ import click
 from dotenv import load_dotenv
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.config_validator import ConfigValidator
 from grid_trading_bot.config.exceptions import ConfigError
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.bot_controller.bot_controller import BotController
@@ -25,6 +24,7 @@ from grid_trading_bot.core.persistence.run_files import (
     RunFiles,
     RunLock,
     archive_state_db,
+    legacy_halt_markers,
     read_halt_marker,
     remove_halt_marker,
 )
@@ -57,7 +57,7 @@ def validate_save_performance_results(ctx, param, value):
 def initialize_config(config_path: str) -> ConfigManager:
     load_dotenv()
     try:
-        return ConfigManager(config_path, ConfigValidator())
+        return ConfigManager(config_path)
 
     except ConfigError as e:
         logging.error(f"An error occurred during the initialization of ConfigManager {e}")
@@ -108,6 +108,17 @@ async def run_bot(
                     kind=halt.kind,
                     reason=halt.reason,
                     config_path=config_path,
+                )
+                return BotOutcome(EXIT_OK)
+            legacy = legacy_halt_markers(run_files.halt_path)
+            if legacy:
+                reason = (
+                    f"the halt marker(s) {', '.join(legacy)} predate the config hash change and may record a halt "
+                    f"of this config; check the exchange, then run `grid_trading_bot resume --config {config_path}`"
+                )
+                logging.warning(f"Trading on {config_path} did not start: {reason}.")
+                await notification_handler.async_send_notification(
+                    NotificationType.START_REFUSED, config_path=config_path, reason=reason
                 )
                 return BotOutcome(EXIT_OK)
         return await _run_bot(
@@ -327,13 +338,18 @@ def resume(config):
         sys.exit(EXIT_FAILURE)
     try:
         halt = read_halt_marker(run_files.halt_path)
-        if halt is None:
+        legacy = legacy_halt_markers(run_files.halt_path)
+        if halt is None and not legacy:
             click.echo(f"No halt recorded for {config}: the next start resumes the saved state.")
             return
-        moved = archive_state_db(run_files.db_path, datetime.now(UTC))
-        remove_halt_marker(run_files.halt_path)
-        click.echo(f"Halt cleared for {config} (was {halt.kind}: {halt.reason}).")
-        for path in moved:
-            click.echo(f"State moved to {path}")
+        if halt is not None:
+            moved = archive_state_db(run_files.db_path, datetime.now(UTC))
+            remove_halt_marker(run_files.halt_path)
+            click.echo(f"Halt cleared for {config} (was {halt.kind}: {halt.reason}).")
+            for path in moved:
+                click.echo(f"State moved to {path}")
+        for path in legacy:
+            remove_halt_marker(path)
+            click.echo(f"Halt marker {path}, written before the config hash change, cleared.")
     finally:
         run_lock.release()

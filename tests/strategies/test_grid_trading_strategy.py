@@ -1081,7 +1081,7 @@ class TestLiveAtrRefresh:
         assert s._live_atr[3] == 2.5  # unchanged, bot keeps running
 
     def test_timeframe_to_seconds_month(self, strategy_fixture):
-        # "1M" (month) must map, not KeyError — ConfigValidator accepts it as a timeframe.
+        # "1M" (month) must map, not KeyError — the config schema accepts it as a timeframe.
         assert strategy_fixture._timeframe_to_seconds("1M") == 2_592_000
         assert strategy_fixture._timeframe_to_seconds("1m") == 60  # minute still distinct
 

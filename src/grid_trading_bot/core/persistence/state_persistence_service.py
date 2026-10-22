@@ -57,7 +57,7 @@ class StatePersistenceService:
         self.strategy_type = strategy_type
         self.strategy_state_provider = strategy_state_provider
         self.journal = journal
-        self._config_hash = compute_config_hash(config_manager)
+        self._config_hash = compute_config_hash(config_manager.config)
         self._consecutive_failures = 0
         self._halt_task: asyncio.Task | None = None
         self._periodic_task: asyncio.Task | None = None

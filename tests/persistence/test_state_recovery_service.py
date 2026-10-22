@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from grid_trading_bot.config.schema import load_config
 from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
@@ -107,23 +108,15 @@ def _make_saved_balance(
 
 
 @pytest.fixture
-def mock_config_manager():
+def mock_config_manager(valid_config):
     from grid_trading_bot.config.trading_mode import TradingMode
 
     cm = MagicMock()
-    cm.get_grid_settings.return_value = {
-        "type": "simple_grid",
-        "spacing": "geometric",
-        "num_grids": 20,
-        "range": {"top": 3100, "bottom": 2850},
-    }
-    cm.get_pair.return_value = {"base_currency": "ETH", "quote_currency": "USDT"}
+    cm.config = load_config(valid_config)
     cm.get_base_currency.return_value = "ETH"
     cm.get_quote_currency.return_value = "USDT"
-    cm.get_dynamic_spacing.return_value = {}
     cm.get_exchange_name.return_value = "binance"
     cm.get_trading_mode.return_value = TradingMode.BACKTEST
-    cm.get_risk_management.return_value = {}
     cm.get_timeframe.return_value = "1h"
     return cm
 
@@ -218,7 +211,7 @@ def service(
 
 def _set_valid_bot_state(mock_repository, mock_config_manager, **overrides):
     """Configure the repository to return a bot_state whose config hash matches the current config."""
-    current_hash = compute_config_hash(mock_config_manager)
+    current_hash = compute_config_hash(mock_config_manager.config)
     bot_state = {
         "config_hash": current_hash,
         "initial_purchase_done": True,
@@ -503,7 +496,7 @@ class TestStateRecoveryService:
         service.order_execution_strategy.get_order = AsyncMock(
             return_value=_make_exchange_order(identifier="known-1", status=OrderStatus.OPEN)
         )
-        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager))
+        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager.config))
         mock_exchange_service.fetch_open_orders = AsyncMock(
             return_value=[
                 {"id": "known-1", "side": "buy", "price": 2900.0, "amount": 1.0},
@@ -528,7 +521,7 @@ class TestStateRecoveryService:
         self, service, mock_repository, mock_config_manager, mock_exchange_service, mock_notification_handler
     ):
         _set_valid_bot_state(mock_repository, mock_config_manager)
-        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager))
+        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager.config))
         mock_exchange_service.fetch_open_orders = AsyncMock(
             return_value=[{"id": "own-2", "clientOrderId": own_client_id, "side": "sell", "price": 3000.0}]
         )
@@ -547,7 +540,7 @@ class TestStateRecoveryService:
         self, service, mock_repository, mock_config_manager, mock_exchange_service, mock_notification_handler, caplog
     ):
         _set_valid_bot_state(mock_repository, mock_config_manager)
-        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager))
+        own_client_id = new_client_order_id(compute_config_hash(mock_config_manager.config))
         mock_exchange_service.fetch_open_orders = AsyncMock(
             return_value=[{"id": "own-3", "clientOrderId": own_client_id, "side": "sell", "price": 3000.0}]
         )

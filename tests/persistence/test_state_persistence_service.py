@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from grid_trading_bot.config.schema import load_config
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.stop_request import StopKind
@@ -16,9 +17,7 @@ from grid_trading_bot.core.persistence.state_repository_interface import StateSn
 
 
 @pytest.fixture
-def setup_persistence_service():
-    from grid_trading_bot.config.trading_mode import TradingMode
-
+def setup_persistence_service(valid_config):
     repository = MagicMock()
     event_bus = EventBus()
     notification_handler = MagicMock()
@@ -30,17 +29,7 @@ def setup_persistence_service():
     grid_manager.grid_levels = {}
     balance_tracker = MagicMock()
     config_manager = MagicMock()
-    config_manager.get_grid_settings.return_value = {
-        "type": "simple_grid",
-        "spacing": "arithmetic",
-        "num_grids": 10,
-        "range": [50000, 60000],
-    }
-    config_manager.get_pair.return_value = "BTC/USDT"
-    config_manager.get_dynamic_spacing.return_value = {}
-    config_manager.get_exchange_name.return_value = "binance"
-    config_manager.get_trading_mode.return_value = TradingMode.BACKTEST
-    config_manager.get_timeframe.return_value = "1h"
+    config_manager.config = load_config(valid_config)
 
     service = StatePersistenceService(
         repository=repository,

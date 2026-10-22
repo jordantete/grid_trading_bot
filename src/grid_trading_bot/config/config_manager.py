@@ -6,288 +6,210 @@ from typing import Any
 from grid_trading_bot.core.domain.spacing_type import SpacingType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 
-from .config_validator import ConfigValidator
-from .exceptions import ConfigFileNotFoundError, ConfigParseError, ConfigValidationError
+from .exceptions import ConfigFileNotFoundError, ConfigParseError
+from .schema import BotConfig, load_config
 from .trading_mode import TradingMode
 
 
 class ConfigManager:
-    def __init__(self, config_file: str, config_validator: ConfigValidator) -> None:
+    def __init__(self, config_file: str) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.config_file = config_file
-        self.config_validator = config_validator
-        self.config: dict[str, Any] = {}
-        self.load_config()
+        self.config: BotConfig = load_config(self._read_file())
 
     @classmethod
-    def from_dict(cls, config_dict: dict[str, Any], config_validator: ConfigValidator | None = None) -> "ConfigManager":
+    def from_dict(cls, raw: dict[str, Any]) -> "ConfigManager":
         instance = cls.__new__(cls)
         instance.logger = logging.getLogger(cls.__name__)
         instance.config_file = "<dict>"
-        instance.config_validator = config_validator or ConfigValidator()
-        instance.config = config_dict
-        instance.config_validator.validate(instance.config)
+        instance.config = load_config(raw)
         return instance
 
-    def load_config(self) -> None:
+    def _read_file(self) -> Any:
         if not os.path.exists(self.config_file):
             self.logger.error(f"Config file {self.config_file} does not exist.")
             raise ConfigFileNotFoundError(self.config_file)
 
         with open(self.config_file) as file:
             try:
-                self.config = json.load(file)
-                self.config_validator.validate(self.config)
+                return json.load(file)
             except json.JSONDecodeError as e:
                 self.logger.error(f"Failed to parse config file {self.config_file}: {e}")
                 raise ConfigParseError(self.config_file, e) from e
 
-    def get(self, key: str, default: Any = None) -> Any:
-        return self.config.get(key, default)
+    def get_config_hash(self) -> str:
+        from grid_trading_bot.core.persistence.serializers import compute_config_hash
 
-    def _required(self, value: Any, key: str) -> Any:
-        if value is None:
-            raise ConfigValidationError(missing_fields=[key])
-        return value
+        return compute_config_hash(self.config)
 
     # --- General Accessor Methods ---
-    def get_exchange(self) -> dict:
-        return self.config.get("exchange", {})
-
     def get_exchange_name(self) -> str:
-        return self._required(self.get_exchange().get("name"), "exchange.name")
+        return self.config.exchange.name
 
     def get_trading_fee(self) -> float:
-        exchange = self.get_exchange()
-        return exchange.get("trading_fee", 0)
+        return self.config.exchange.trading_fee
 
     def get_maker_fee(self) -> float:
         """Fee charged on liquidity-adding fills, defaulting to the flat `trading_fee`."""
-        exchange = self.get_exchange()
-        return exchange.get("maker_fee", self.get_trading_fee())
+        return self.config.exchange.maker_fee
 
     def get_taker_fee(self) -> float:
         """Fee charged on liquidity-taking fills, defaulting to the flat `trading_fee`."""
-        exchange = self.get_exchange()
-        return exchange.get("taker_fee", self.get_trading_fee())
+        return self.config.exchange.taker_fee
 
     def get_post_only(self) -> bool:
         """Whether limit orders must be posted as maker-only (rejected instead of crossing)."""
-        exchange = self.get_exchange()
-        return exchange.get("post_only", False)
+        return self.config.exchange.post_only
 
     def get_trading_mode(self) -> TradingMode:
-        trading_mode = self.get_exchange().get("trading_mode") or None
-        return TradingMode.from_string(self._required(trading_mode, "exchange.trading_mode"))
-
-    def get_pair(self) -> dict:
-        return self.config.get("pair", {})
+        return self.config.exchange.trading_mode
 
     def get_base_currency(self) -> str:
-        return self._required(self.get_pair().get("base_currency"), "pair.base_currency")
+        return self.config.pair.base_currency
 
     def get_quote_currency(self) -> str:
-        return self._required(self.get_pair().get("quote_currency"), "pair.quote_currency")
-
-    def get_trading_settings(self) -> dict:
-        return self.config.get("trading_settings", {})
+        return self.config.pair.quote_currency
 
     def get_timeframe(self) -> str:
-        trading_settings = self.get_trading_settings()
-        return trading_settings.get("timeframe", "1h")
-
-    def get_period(self) -> dict:
-        trading_settings = self.get_trading_settings()
-        return trading_settings.get("period", {})
+        return self.config.trading_settings.timeframe
 
     def get_start_date(self) -> str:
-        return self._required(self.get_period().get("start_date"), "trading_settings.period.start_date")
+        return self.config.trading_settings.period.start_date
 
     def get_end_date(self) -> str:
-        return self._required(self.get_period().get("end_date"), "trading_settings.period.end_date")
+        return self.config.trading_settings.period.end_date
 
     def get_initial_balance(self) -> float:
-        trading_settings = self.get_trading_settings()
-        return trading_settings.get("initial_balance", 10000)
+        return self.config.trading_settings.initial_balance
 
     def get_historical_data_file(self) -> str | None:
-        trading_settings = self.get_trading_settings()
-        return trading_settings.get("historical_data_file", None)
+        return self.config.trading_settings.historical_data_file
 
     # --- Grid Accessor Methods ---
-    def get_grid_settings(self) -> dict:
-        return self.config.get("grid_strategy", {})
-
     def get_strategy_type(self) -> StrategyType:
-        strategy_type = self.get_grid_settings().get("type") or None
-        return StrategyType.from_string(self._required(strategy_type, "grid_strategy.type"))
+        return self.config.grid_strategy.type
 
     def get_spacing_type(self) -> SpacingType:
-        spacing_type = self.get_grid_settings().get("spacing") or None
-        return SpacingType.from_string(self._required(spacing_type, "grid_strategy.spacing"))
+        return self.config.grid_strategy.spacing
 
     def get_num_grids(self) -> int:
-        return self._required(self.get_grid_settings().get("num_grids"), "grid_strategy.num_grids")
-
-    def get_grid_range(self) -> dict:
-        grid_settings = self.get_grid_settings()
-        return grid_settings.get("range", {})
+        return self.config.grid_strategy.num_grids
 
     def get_top_range(self) -> float | None:
-        grid_range = self.get_grid_range()
-        return grid_range.get("top", None)
+        grid_range = self.config.grid_strategy.range
+        return None if grid_range is None else grid_range.top
 
     def get_bottom_range(self) -> float | None:
-        grid_range = self.get_grid_range()
-        return grid_range.get("bottom", None)
+        grid_range = self.config.grid_strategy.range
+        return None if grid_range is None else grid_range.bottom
 
     def get_buy_ratio(self) -> float:
-        grid_settings = self.get_grid_settings()
-        return grid_settings.get("buy_ratio", 1.0)
+        return self.config.grid_strategy.buy_ratio
 
     def get_sell_ratio(self) -> float:
-        grid_settings = self.get_grid_settings()
-        return grid_settings.get("sell_ratio", 1.0)
-
-    def get_dynamic_spacing(self) -> dict:
-        grid_settings = self.get_grid_settings()
-        return grid_settings.get("dynamic_spacing", {})
+        return self.config.grid_strategy.sell_ratio
 
     def is_dynamic_spacing_enabled(self) -> bool:
-        return self.get_dynamic_spacing().get("enabled", False)
+        return self.config.grid_strategy.dynamic_spacing.enabled
 
     def get_dynamic_atr_period(self) -> int:
-        return self.get_dynamic_spacing().get("atr_period", 14)
+        return self.config.grid_strategy.dynamic_spacing.atr_period
 
     def get_atr_spacing_multiplier(self) -> float:
-        return self.get_dynamic_spacing().get("atr_spacing_multiplier", 1.0)
+        return self.config.grid_strategy.dynamic_spacing.atr_spacing_multiplier
 
     def get_regrid_threshold(self) -> float:
-        return self.get_dynamic_spacing().get("regrid_threshold", 0.3)
+        return self.config.grid_strategy.dynamic_spacing.regrid_threshold
 
     def get_cooldown_bars(self) -> int:
-        return self.get_dynamic_spacing().get("cooldown_bars", 60)
+        return self.config.grid_strategy.dynamic_spacing.cooldown_bars
 
     # --- Risk management (Take Profit / Stop Loss) Accessor Methods ---
-    def get_risk_management(self) -> dict:
-        return self.config.get("risk_management", {})
-
-    def get_take_profit(self) -> dict:
-        risk_management = self.get_risk_management()
-        return risk_management.get("take_profit", {})
-
     def is_take_profit_enabled(self) -> bool:
-        take_profit = self.get_take_profit()
-        return take_profit.get("enabled", False)
+        return self.config.risk_management.take_profit.enabled
 
     def get_take_profit_threshold(self) -> float:
-        return self._required(self.get_take_profit().get("threshold"), "risk_management.take_profit.threshold")
-
-    def get_stop_loss(self) -> dict:
-        risk_management = self.get_risk_management()
-        return risk_management.get("stop_loss", {})
+        return self.config.risk_management.take_profit.threshold
 
     def is_stop_loss_enabled(self) -> bool:
-        stop_loss = self.get_stop_loss()
-        return stop_loss.get("enabled", False)
+        return self.config.risk_management.stop_loss.enabled
 
     def get_stop_loss_threshold(self) -> float:
-        return self._required(self.get_stop_loss().get("threshold"), "risk_management.stop_loss.threshold")
-
-    def get_trailing_stop_loss(self) -> dict:
-        risk_management = self.get_risk_management()
-        return risk_management.get("trailing_stop_loss", {})
+        return self.config.risk_management.stop_loss.threshold
 
     def is_trailing_stop_loss_enabled(self) -> bool:
-        return self.get_trailing_stop_loss().get("enabled", False)
+        return self.config.risk_management.trailing_stop_loss.enabled
 
     def get_trailing_atr_period(self) -> int:
-        return self.get_trailing_stop_loss().get("atr_period", 14)
+        return self.config.risk_management.trailing_stop_loss.atr_period
 
     def get_trailing_atr_multiplier(self) -> float:
-        return self.get_trailing_stop_loss().get("atr_multiplier", 2.5)
+        return self.config.risk_management.trailing_stop_loss.atr_multiplier
 
     def get_trailing_on_trigger(self) -> str:
-        return self.get_trailing_stop_loss().get("on_trigger", "stop")
+        return self.config.risk_management.trailing_stop_loss.on_trigger.value
 
     # --- Execution Settings Accessor Methods ---
-    def get_execution_settings(self) -> dict:
-        return self.config.get("execution", {})
-
     def get_max_retries(self) -> int:
-        return self.get_execution_settings().get("max_retries", 3)
+        return self.config.execution.max_retries
 
     def get_retry_delay(self) -> float:
-        return self.get_execution_settings().get("retry_delay", 1.0)
-
-    def get_max_slippage(self) -> float:
-        return self.get_execution_settings().get("max_slippage", 0.01)
+        return self.config.execution.retry_delay
 
     def get_order_polling_interval(self) -> float:
-        return self.get_execution_settings().get("order_polling_interval", 15.0)
+        return self.config.execution.order_polling_interval
 
     def get_websocket_max_retries(self) -> int:
-        return self.get_execution_settings().get("websocket_max_retries", 5)
+        return self.config.execution.websocket_max_retries
 
     def get_websocket_retry_base_delay(self) -> int:
-        return self.get_execution_settings().get("websocket_retry_base_delay", 5)
+        return self.config.execution.websocket_retry_base_delay
 
     def get_health_check_interval(self) -> int:
-        return self.get_execution_settings().get("health_check_interval", 60)
+        return self.config.execution.health_check_interval
 
     def get_circuit_breaker_failure_threshold(self) -> int:
-        return self.get_execution_settings().get("circuit_breaker_failure_threshold", 5)
+        return self.config.execution.circuit_breaker_failure_threshold
 
     def get_circuit_breaker_recovery_timeout(self) -> float:
-        return self.get_execution_settings().get("circuit_breaker_recovery_timeout", 60.0)
+        return self.config.execution.circuit_breaker_recovery_timeout
 
     def get_circuit_breaker_half_open_max_calls(self) -> int:
-        return self.get_execution_settings().get("circuit_breaker_half_open_max_calls", 1)
+        return self.config.execution.circuit_breaker_half_open_max_calls
 
     def get_backtest_slippage(self) -> float:
-        return self.get_execution_settings().get("backtest_slippage", 0.0)
+        return self.config.execution.backtest_slippage
 
     def get_backtest_min_amount(self) -> float | None:
-        return self.get_execution_settings().get("backtest_min_amount")
+        return self.config.execution.backtest_min_amount
 
     def get_backtest_min_cost(self) -> float | None:
-        return self.get_execution_settings().get("backtest_min_cost")
+        return self.config.execution.backtest_min_cost
 
     def get_reconciliation_interval(self) -> float:
-        return self.get_execution_settings().get("reconciliation_interval", 300.0)
+        return self.config.execution.reconciliation_interval
 
     def get_reconciliation_balance_tolerance(self) -> float:
-        return self.get_execution_settings().get("reconciliation_balance_tolerance", 0.01)
+        return self.config.execution.reconciliation_balance_tolerance
 
     # --- Logging Accessor Methods ---
-    def get_logging(self):
-        return self.config.get("logging", {})
-
-    def get_logging_level(self):
-        logging = self.get_logging()
-        return logging.get("log_level", {})
+    def get_logging_level(self) -> str:
+        return self.config.logging.log_level
 
     def should_log_to_file(self) -> bool:
-        logging = self.get_logging()
-        return logging.get("log_to_file", False)
+        return self.config.logging.log_to_file
 
     # --- Persistence Accessor Methods ---
-    def get_persistence_settings(self) -> dict:
-        return self.config.get("persistence", {})
-
     def is_persistence_enabled(self) -> bool:
-        return self.get_persistence_settings().get("enabled", True)
+        return self.config.persistence.enabled
 
     def get_state_db_path(self) -> str:
-        persistence = self.get_persistence_settings()
-        if "db_path" in persistence:
-            return persistence["db_path"]
-        from grid_trading_bot.core.persistence.serializers import compute_config_hash
-
+        if self.config.persistence.db_path is not None:
+            return self.config.persistence.db_path
         base = self.get_base_currency() or "BASE"
         quote = self.get_quote_currency() or "QUOTE"
-        config_hash_short = compute_config_hash(self)[:8]
+        config_hash_short = self.get_config_hash()[:8]
         return f"data/{base}_{quote}/state_{config_hash_short}.db"
 
     def get_checkpoint_interval_seconds(self) -> float:
-        return self.get_persistence_settings().get("checkpoint_interval_seconds", 60.0)
+        return self.config.persistence.checkpoint_interval_seconds

@@ -139,7 +139,7 @@ class StateRecoveryService:
             return RecoveryResult(RecoveryOutcome.NO_STATE)
 
         # Step 1: Config compatibility
-        current_hash = compute_config_hash(self.config_manager)
+        current_hash = compute_config_hash(self.config_manager.config)
         if bot_state["config_hash"] != current_hash:
             self.logger.warning("Config hash mismatch: the grid configuration changed since the last run.")
             return RecoveryResult(

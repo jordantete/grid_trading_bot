@@ -12,7 +12,6 @@ from types import SimpleNamespace
 import pytest
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.config_validator import ConfigValidator
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
@@ -25,7 +24,7 @@ from grid_trading_bot.core.order_handling.placement_journal import (
 )
 from grid_trading_bot.core.order_handling.pnl_ledger import PnlLedger
 from grid_trading_bot.core.persistence.run_files import RunFiles
-from grid_trading_bot.core.persistence.serializers import compute_config_hash, pending_placement_to_dict
+from grid_trading_bot.core.persistence.serializers import pending_placement_to_dict
 from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
 from grid_trading_bot.core.services import live_exchange_service
 from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
@@ -138,7 +137,7 @@ def _config(tmp_path, trading_mode="live", num_grids=5):
 
 
 def _bot(config_path) -> GridTradingBot:
-    config_manager = ConfigManager(str(config_path), ConfigValidator())
+    config_manager = ConfigManager(str(config_path))
     event_bus = EventBus()
     notification_handler = NotificationHandler(None, config_manager.get_trading_mode())
     bot = GridTradingBot(
@@ -294,6 +293,40 @@ async def test_a_fresh_start_over_open_orders_is_refused(tmp_path, exchange):
         assert database.execute("SELECT COUNT(*) FROM bot_state").fetchone()[0] == 0
 
 
+# What the pre-schema hash function gave for this test's config written without db_path.
+_PRE_SCHEMA_HASH = "f399cc1653773ef9e2a614bff0cb4b6a106f4e847ef531d977d8a19730496f4e"
+
+
+async def test_a_state_saved_under_the_pre_schema_hash_is_not_found_and_the_fresh_start_is_refused(
+    tmp_path, exchange, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    config_path = _config(tmp_path)
+    raw = json.loads(config_path.read_text())
+    del raw["persistence"]["db_path"]
+    config_path.write_text(json.dumps(raw))
+    await _armed_then_stopped(exchange, config_path)
+    current_db = tmp_path / ConfigManager(str(config_path)).get_state_db_path()
+    old_db = current_db.with_name(f"state_{_PRE_SCHEMA_HASH[:8]}.db")
+    current_db.rename(old_db)
+    with closing(sqlite3.connect(old_db)) as database:
+        database.execute("UPDATE bot_state SET config_hash = ?", (_PRE_SCHEMA_HASH,))
+        database.commit()
+        saved_before = "\n".join(database.iterdump())
+    orders_before = exchange.read()["orders"]
+
+    bot = _bot(config_path)
+    await asyncio.wait_for(bot.run(), timeout=20)
+
+    assert bot.stop_request.kind is StopKind.START_REFUSED
+    assert bot.stop_request.exit_code == 0
+    assert exchange.read()["orders"] == orders_before
+    with closing(sqlite3.connect(old_db)) as database:
+        assert "\n".join(database.iterdump()) == saved_before
+    with closing(sqlite3.connect(current_db)) as database:
+        assert database.execute("SELECT COUNT(*) FROM bot_state").fetchone()[0] == 0
+
+
 async def test_a_corrupt_saved_state_is_refused_and_left_untouched(tmp_path, exchange):
     config_path = _config(tmp_path)
     await _armed_then_stopped(exchange, config_path)
@@ -347,7 +380,7 @@ async def test_a_sent_placement_found_on_the_exchange_is_adopted_after_a_restart
     config_path = _config(tmp_path)
     await _armed_then_stopped(exchange, config_path)
     # A buy for the free 110 level reached the exchange, but the bot stopped before its next full save.
-    config_hash = compute_config_hash(ConfigManager(str(config_path), ConfigValidator()))
+    config_hash = ConfigManager(str(config_path)).get_config_hash()
     entry = PendingPlacement(
         client_order_id=new_client_order_id(config_hash),
         order_type=OrderType.LIMIT,

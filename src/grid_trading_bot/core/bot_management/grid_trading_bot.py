@@ -181,7 +181,7 @@ class GridTradingBot:
                 trading_pair,
                 state_store=self.state_persistence_service,
                 journal=journal,
-                config_hash=compute_config_hash(self.config_manager),
+                config_hash=compute_config_hash(self.config_manager.config),
             )
             if self._is_live_or_paper():
                 self.order_manager.exchange_balance = self._exchange_free_base
@@ -537,6 +537,7 @@ class GridTradingBot:
             reason=request.reason,
             pair=self.trading_pair,
             halted_at=datetime.now(UTC).isoformat(),
+            config_hash=compute_config_hash(self.config_manager.config),
         )
         write_halt_marker(halt_path, record)
 

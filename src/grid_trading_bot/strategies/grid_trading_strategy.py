@@ -606,7 +606,7 @@ class GridTradingStrategy(TradingStrategyInterface):
 
     @staticmethod
     def _timeframe_to_seconds(timeframe: str) -> int:
-        # "M" = calendar month, approximated as 30 days (ccxt/ConfigValidator accept "1M").
+        # "M" = calendar month, approximated as 30 days (ccxt and the config schema accept "1M").
         units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "M": 2_592_000}
         return int(timeframe[:-1]) * units[timeframe[-1]]
 
