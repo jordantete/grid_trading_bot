@@ -9,7 +9,7 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
-from tests.integration import lifecycle_helpers
+from tests.integration import lifecycle_helpers, snapshot_utils
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +43,16 @@ def update_snapshots(request):
 @pytest.fixture
 def snapshot_dir():
     return Path(__file__).resolve().parent / "snapshots"
+
+
+def pytest_terminal_summary(terminalreporter):
+    if not snapshot_utils.UPDATED_SNAPSHOTS:
+        return
+    terminalreporter.section("updated snapshots")
+    for name, changes in snapshot_utils.UPDATED_SNAPSHOTS:
+        terminalreporter.write_line(f"{name}: {len(changes)} change(s)" if changes else f"{name}: unchanged")
+        for line in changes:
+            terminalreporter.write_line(line)
 
 
 def _build_config_dict(

@@ -12,12 +12,7 @@ import pytest
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 from grid_trading_bot.core.order_handling.order import OrderSide
 
-from .snapshot_utils import (
-    compare_snapshots,
-    extract_snapshot_data,
-    load_snapshot,
-    save_snapshot,
-)
+from .snapshot_utils import check_snapshot, extract_snapshot_data
 
 SCENARIOS = [
     ("simple_grid", "arithmetic"),
@@ -232,21 +227,11 @@ async def test_backtest_grid_cycle_integrity(strategy_type, spacing, run_backtes
 @pytest.mark.parametrize(("strategy_type", "spacing"), SCENARIOS)
 async def test_backtest_deterministic_results(strategy_type, spacing, run_backtest_bot, snapshot_dir, update_snapshots):
     """With identical config and CSV data, the backtest produces identical results."""
-    _bot, result = await run_backtest_bot(strategy_type, spacing)
-    name = _snapshot_name(strategy_type, spacing)
-    actual = extract_snapshot_data(result["performance_summary"], result["orders"])
+    bot, result = await run_backtest_bot(strategy_type, spacing)
 
-    if update_snapshots:
-        save_snapshot(name, actual, snapshot_dir)
-        pytest.skip(f"Snapshot updated for {name}")
-
-    expected = load_snapshot(name, snapshot_dir)
-    if expected is None:
-        save_snapshot(name, actual, snapshot_dir)
-        pytest.skip(f"Snapshot created for {name} (first run). Re-run to validate.")
-
-    diffs = compare_snapshots(actual, expected)
-    assert not diffs, f"Snapshot mismatch for {name}:\n" + "\n".join(diffs)
+    check_snapshot(
+        _snapshot_name(strategy_type, spacing), extract_snapshot_data(bot, result), snapshot_dir, update_snapshots
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -427,20 +412,9 @@ async def test_atr_scenario_value_change_splits_into_realized_and_unrealized(run
 @pytest.mark.integration
 async def test_atr_scenario_deterministic_results(run_backtest_bot, snapshot_dir, update_snapshots):
     """With identical config and CSV data, the ATR scenario backtest produces identical results."""
-    _bot, result = await _run_atr_scenario(run_backtest_bot)
-    actual = extract_snapshot_data(result["performance_summary"], result["orders"])
+    bot, result = await _run_atr_scenario(run_backtest_bot)
 
-    if update_snapshots:
-        save_snapshot(ATR_SNAPSHOT_NAME, actual, snapshot_dir)
-        pytest.skip(f"Snapshot updated for {ATR_SNAPSHOT_NAME}")
-
-    expected = load_snapshot(ATR_SNAPSHOT_NAME, snapshot_dir)
-    if expected is None:
-        save_snapshot(ATR_SNAPSHOT_NAME, actual, snapshot_dir)
-        pytest.skip(f"Snapshot created for {ATR_SNAPSHOT_NAME} (first run). Re-run to validate.")
-
-    diffs = compare_snapshots(actual, expected)
-    assert not diffs, f"Snapshot mismatch for {ATR_SNAPSHOT_NAME}:\n" + "\n".join(diffs)
+    check_snapshot(ATR_SNAPSHOT_NAME, extract_snapshot_data(bot, result), snapshot_dir, update_snapshots)
 
 
 # ---------------------------------------------------------------------------
@@ -478,17 +452,6 @@ async def test_stop_loss_scenario_leaves_the_whole_result_realized(run_backtest_
 @pytest.mark.integration
 async def test_stop_loss_scenario_deterministic_results(run_backtest_bot, snapshot_dir, update_snapshots):
     """With identical config and CSV data, the stop-loss scenario produces identical results."""
-    _bot, result = await run_backtest_bot("simple_grid", "arithmetic", risk_management_overrides=STOP_LOSS)
-    actual = extract_snapshot_data(result["performance_summary"], result["orders"])
+    bot, result = await run_backtest_bot("simple_grid", "arithmetic", risk_management_overrides=STOP_LOSS)
 
-    if update_snapshots:
-        save_snapshot(STOP_LOSS_SNAPSHOT_NAME, actual, snapshot_dir)
-        pytest.skip(f"Snapshot updated for {STOP_LOSS_SNAPSHOT_NAME}")
-
-    expected = load_snapshot(STOP_LOSS_SNAPSHOT_NAME, snapshot_dir)
-    if expected is None:
-        save_snapshot(STOP_LOSS_SNAPSHOT_NAME, actual, snapshot_dir)
-        pytest.skip(f"Snapshot created for {STOP_LOSS_SNAPSHOT_NAME} (first run). Re-run to validate.")
-
-    diffs = compare_snapshots(actual, expected)
-    assert not diffs, f"Snapshot mismatch for {STOP_LOSS_SNAPSHOT_NAME}:\n" + "\n".join(diffs)
+    check_snapshot(STOP_LOSS_SNAPSHOT_NAME, extract_snapshot_data(bot, result), snapshot_dir, update_snapshots)

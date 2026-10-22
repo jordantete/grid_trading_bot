@@ -1,10 +1,48 @@
 {
-  "num_buy_trades": 10,
-  "num_sell_trades": 6,
-  "roi": "-0.14%",
-  "total_fees": "0.29",
-  "final_balance_fiat": "149.79",
-  "grid_trading_gains": "1.93",
-  "max_drawdown": "2.36%",
-  "num_orders": 16
+  "metrics": {
+    "roi_pct": -0.14,
+    "max_drawdown_pct": 2.364149548889886,
+    "max_drawdown_duration_hours": 13.183333333333334,
+    "sharpe_ratio": -0.74,
+    "sortino_ratio": -0.99,
+    "buy_and_hold_return_pct": -10.709504685408303,
+    "grid_trading_gains": 1.93067691,
+    "unrealized_pnl": -2.1421238933368763,
+    "total_fees": 0.28625294,
+    "final_balance": 149.78854907379997,
+    "num_buy_trades": 10,
+    "num_sell_trades": 6,
+    "avg_crypto_exposure": 0.12671616554889747,
+    "equity_coverage": 1.0,
+    "armed": true,
+    "stop_reason": null
+  },
+  "balances": {
+    "fiat": "82.18855837",
+    "crypto": "0.00000100",
+    "reserved_fiat": "-0E-8",
+    "reserved_crypto": "0.44064818"
+  },
+  "order_counts": {
+    "closed": 16,
+    "open": 4
+  },
+  "fills": [
+    {"identifier": "backtest-0", "side": "buy", "order_type": "market", "price": 169.8, "average": 169.8, "filled": 0.11042402826855123, "fee_cost": 0.00011042402826855124, "fee_currency": "SOL", "timestamp": null},
+    {"identifier": "backtest-1", "side": "buy", "order_type": "limit", "price": 155, "average": 155, "filled": 0.11041022473498231, "fee_cost": 0.00011041022473498231, "fee_currency": "SOL", "timestamp": 1722611640},
+    {"identifier": "backtest-2", "side": "buy", "order_type": "limit", "price": 157.05896459520477, "average": 157.05896459520477, "filled": 0.11041022473498231, "fee_cost": 0.00011041022473498231, "fee_currency": "SOL", "timestamp": 1722610800},
+    {"identifier": "backtest-3", "side": "buy", "order_type": "limit", "price": 159.14527974011474, "average": 159.14527974011474, "filled": 0.11041022473498231, "fee_cost": 0.00011041022473498231, "fee_currency": "SOL", "timestamp": 1722535800},
+    {"identifier": "backtest-4", "side": "buy", "order_type": "limit", "price": 161.25930874965576, "average": 161.25930874965576, "filled": 0.11041022473498231, "fee_cost": 0.00011041022473498231, "fee_currency": "SOL", "timestamp": 1722526260},
+    {"identifier": "backtest-5", "side": "sell", "order_type": "limit", "price": 169.99999999999994, "average": 169.99999999999994, "filled": 0.1103126, "fee_cost": 0.018753141999999993, "fee_currency": "USDT", "timestamp": 1722478980},
+    {"identifier": "backtest-6", "side": "sell", "order_type": "limit", "price": 163.40141976489923, "average": 163.40141976489923, "filled": 0.11029981, "fee_cost": 0.01802314555379863, "fee_currency": "USDT", "timestamp": 1722527700},
+    {"identifier": "backtest-7", "side": "buy", "order_type": "limit", "price": 161.25930874965576, "average": 161.25930874965576, "filled": 0.11029981, "fee_cost": 0.00011029981, "fee_currency": "SOL", "timestamp": 1722528180},
+    {"identifier": "backtest-8", "side": "sell", "order_type": "limit", "price": 163.40141976489923, "average": 163.40141976489923, "filled": 0.11018951, "fee_cost": 0.018005122377198562, "fee_currency": "USDT", "timestamp": 1722544560},
+    {"identifier": "backtest-9", "side": "sell", "order_type": "limit", "price": 165.571985817171, "average": 165.571985817171, "filled": 0.11029981, "fee_cost": 0.018262558576956658, "fee_currency": "USDT", "timestamp": 1722546360},
+    {"identifier": "backtest-10", "side": "buy", "order_type": "limit", "price": 161.25930874965576, "average": 161.25930874965576, "filled": 0.11018951, "fee_cost": 0.00011018951000000001, "fee_currency": "SOL", "timestamp": 1722579420},
+    {"identifier": "backtest-11", "side": "buy", "order_type": "limit", "price": 159.14527974011474, "average": 159.14527974011474, "filled": 0.11029981, "fee_cost": 0.00011029981, "fee_currency": "SOL", "timestamp": 1722580200},
+    {"identifier": "backtest-12", "side": "sell", "order_type": "limit", "price": 163.40141976489923, "average": 163.40141976489923, "filled": 0.11007932, "fee_cost": 0.017987117174754666, "fee_currency": "USDT", "timestamp": 1722589200},
+    {"identifier": "backtest-13", "side": "sell", "order_type": "limit", "price": 165.571985817171, "average": 165.571985817171, "filled": 0.11018951, "fee_cost": 0.018244295986921025, "fee_currency": "USDT", "timestamp": 1722601920},
+    {"identifier": "backtest-14", "side": "buy", "order_type": "limit", "price": 161.25930874965576, "average": 161.25930874965576, "filled": 0.11007932, "fee_cost": 0.00011007932, "fee_currency": "SOL", "timestamp": 1722609360},
+    {"identifier": "backtest-15", "side": "buy", "order_type": "limit", "price": 159.14527974011474, "average": 159.14527974011474, "filled": 0.11018951, "fee_cost": 0.00011018951000000001, "fee_currency": "SOL", "timestamp": 1722610200}
+  ]
 }
