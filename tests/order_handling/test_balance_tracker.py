@@ -833,6 +833,19 @@ class TestFillAccountingFixes:
         assert bt.balance == pytest.approx(1000.0 - 100.0)
         assert bt.crypto_balance == pytest.approx(1.0 * 0.999)
 
+    async def test_an_initial_purchase_without_an_average_price_is_refused(self, balance_tracker):
+        bt = balance_tracker
+        purchase = _make_order(
+            OrderSide.BUY, order_type=OrderType.MARKET, status=OrderStatus.CLOSED, average=None, filled=1.0
+        )
+
+        with pytest.raises(ValueError, match="no filled quantity or average price"):
+            await bt.update_after_initial_purchase(purchase)
+
+        assert bt.balance == 1000.0
+        assert bt.crypto_balance == 0.0
+        assert bt.total_fees == 0.0
+
 
 class TestFeesInTheCurrencyReceived:
     async def test_a_buy_takes_its_cost_from_the_reservation_and_its_fee_from_the_crypto(self, balance_tracker):

@@ -343,7 +343,7 @@ class OrderManager:
         entry.attempts += 1
         try:
             order = await self.order_execution_strategy.execute_limit_order(
-                entry.side, self.trading_pair, entry.quantity, entry.price, entry.client_order_id
+                entry.side, self.trading_pair, entry.quantity, entry.limit_price, entry.client_order_id
             )
         except PostOnlyRejectedError as e:
             entry.sent = False
@@ -389,8 +389,8 @@ class OrderManager:
     async def _drop_entry(self, entry: PendingPlacement) -> None:
         """Removes a limit entry that will not become an order: releases its funds and frees its level."""
         self.journal.remove(entry.client_order_id)
-        await self._release_funds(entry.side, entry.quantity, entry.price)
-        grid_level = self.grid_manager.grid_levels.get(entry.level_price)
+        await self._release_funds(entry.side, entry.quantity, entry.limit_price)
+        grid_level = self.grid_manager.grid_levels.get(entry.level_price) if entry.level_price is not None else None
         if grid_level is not None:
             self.grid_manager.rollback_order_placement(grid_level, entry.side, self._level_busy(grid_level))
 
@@ -438,6 +438,7 @@ class OrderManager:
                 return
             await self._send_entry(entry)
         except OrderRefusedError as e:
+            assert entry.level_price is not None
             if entry.purpose is PlacementPurpose.GRID:
                 self._report_unfunded([(entry.side, entry.level_price)])
             else:
@@ -787,6 +788,8 @@ class OrderManager:
         Raises DataFetchError when the order is not placed or its outcome stays unknown, OrderRefusedError on a refusal.
         Every raise leaves the entry in the journal, unsent under a client id no order took, unless it may be live.
         """
+        if entry.price is None:
+            raise ValueError(f"Market placement {entry.client_order_id} has no reference price.")
         if entry.sent:
             entry.attempts += 1
             found = await self.order_execution_strategy.find_order(entry.client_order_id, self.trading_pair)

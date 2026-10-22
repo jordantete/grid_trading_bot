@@ -53,7 +53,7 @@ class ReconciliationService:
         self.journal = journal
 
         self._min_amount: float | None = None
-        self._monitoring_task = None
+        self._monitoring_task: asyncio.Task[None] | None = None
         self._last_alert_times: dict[str, datetime] = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 

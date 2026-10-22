@@ -24,7 +24,7 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         self,
         exchange_service: ExchangeInterface,
         max_retries: int = 3,
-        retry_delay: int = 1,
+        retry_delay: float = 1.0,
     ) -> None:
         self.exchange_service = exchange_service
         self.max_retries = max_retries

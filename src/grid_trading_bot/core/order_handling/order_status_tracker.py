@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Any
 
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
@@ -43,8 +44,8 @@ class OrderStatusTracker:
         self.order_execution_strategy = order_execution_strategy
         self.order_update_handler = order_update_handler
         self.polling_interval = polling_interval
-        self._monitoring_task = None
-        self._active_tasks = set()
+        self._monitoring_task: asyncio.Task[None] | None = None
+        self._active_tasks: set[asyncio.Task[Any]] = set()
         self.logger = logging.getLogger(self.__class__.__name__)
 
     async def _track_open_order_statuses(self) -> None:

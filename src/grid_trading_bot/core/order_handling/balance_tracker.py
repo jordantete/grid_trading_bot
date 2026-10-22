@@ -233,10 +233,14 @@ class BalanceTracker:
         async with self._lock:
             if initial_order.status != OrderStatus.CLOSED:
                 raise ValueError(f"Order {initial_order.identifier} is not CLOSED. Cannot update balances.")
+            if initial_order.filled is None or initial_order.average is None:
+                raise ValueError(f"Order {initial_order.identifier} has no filled quantity or average price.")
+            filled = initial_order.filled
+            average = initial_order.average
 
-            d_filled = self._to_decimal(initial_order.filled)
-            d_average = self._to_decimal(initial_order.average)
-            fee = self.fee_calculator.execution_fee(initial_order, initial_order.filled, initial_order.average)
+            d_filled = self._to_decimal(filled)
+            d_average = self._to_decimal(average)
+            fee = self.fee_calculator.execution_fee(initial_order, filled, average)
             received, fee_value = self._ledger_entry(OrderSide.BUY, d_filled, d_average, fee)
             self._ledger.record_buy(self._position(), received, d_average, fee_value)
 
@@ -244,7 +248,7 @@ class BalanceTracker:
             self._crypto_balance = (self._crypto_balance + received).quantize(_QUANTIZE_EXP)
             self._balance = (self._balance - d_filled * d_average - quote_fee).quantize(_QUANTIZE_EXP)
             self._total_fees = (self._total_fees + fee_value).quantize(_QUANTIZE_EXP)
-            self._log_balance_update(initial_order.average)
+            self._log_balance_update(average)
 
     async def reserve_funds_for_buy(
         self,

@@ -58,7 +58,8 @@ class FeeCalculator:
         for fee in reported:
             if not isinstance(fee, dict) or fee.get("cost") is None or not fee.get("currency"):
                 continue
-            costs[fee["currency"]] = costs.get(fee["currency"], 0.0) + abs(float(fee["cost"]))
+            currency = str(fee["currency"])
+            costs[currency] = costs.get(currency, 0.0) + abs(float(fee["cost"]))
         return costs
 
     def _charged(self, order: Order, costs: dict[str, float]) -> Fee:
