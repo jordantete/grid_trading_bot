@@ -56,11 +56,9 @@ class TestOrder:
         assert sample_order.is_open() is False
 
     def test_format_last_trade_timestamp(self, sample_order):
-        # Case 1: No last trade timestamp
         assert sample_order.format_last_trade_timestamp() is None
 
-        # Case 2: Valid last trade timestamp
-        sample_order.last_trade_timestamp = 1695890800
+        sample_order.last_trade_timestamp = 1695890800000
         assert sample_order.format_last_trade_timestamp() == "2023-09-28T08:46:40"
 
     def test_order_str_representation(self, sample_order):

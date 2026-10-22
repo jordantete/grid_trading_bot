@@ -67,7 +67,7 @@ class Order:
         self.remaining = remaining  # remaining amount to fill
         self.timestamp = timestamp  # order placing/opening Unix timestamp in milliseconds
         self.datetime = datetime  # ISO8601 datetime of 'timestamp' with milliseconds
-        self.last_trade_timestamp = last_trade_timestamp  # Unix timestamp of the most recent trade on this order
+        self.last_trade_timestamp = last_trade_timestamp  # Unix timestamp in ms of the most recent trade on this order
         self.symbol = symbol  # symbol
         self.time_in_force = time_in_force  # 'GTC', 'IOC', 'FOK', 'PO'
         self.trades = trades  # a list of order trades/executions
@@ -120,7 +120,7 @@ class Order:
     def format_last_trade_timestamp(self) -> str | None:
         if self.last_trade_timestamp is None:
             return None
-        return pd.Timestamp(self.last_trade_timestamp, unit="s").isoformat()
+        return pd.Timestamp(self.last_trade_timestamp, unit="ms").isoformat()
 
     def __str__(self) -> str:
         return (

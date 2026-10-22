@@ -13,6 +13,7 @@ from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
+from grid_trading_bot.core.order_handling.backtest_clock import BacktestClock
 from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_factory import (
     OrderExecutionStrategyFactory,
@@ -101,7 +102,10 @@ class GridTradingBot:
                 self.config_manager,
                 self.trading_mode,
             )
-            order_execution_strategy = OrderExecutionStrategyFactory.create(self.config_manager, self.exchange_service)
+            backtest_clock = BacktestClock()
+            order_execution_strategy = OrderExecutionStrategyFactory.create(
+                self.config_manager, self.exchange_service, backtest_clock=backtest_clock
+            )
             grid_manager = GridManager(self.config_manager, strategy_type)
             self.grid_manager = grid_manager
             order_validator = OrderValidator()
@@ -212,6 +216,7 @@ class GridTradingBot:
                 trading_pair,
                 plotter,
                 order_simulator,
+                backtest_clock=backtest_clock,
             )
 
             if self.state_persistence_service:

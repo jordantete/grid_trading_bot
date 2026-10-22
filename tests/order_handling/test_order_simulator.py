@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock, Mock
 
+import pandas as pd
 import pytest
 
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
@@ -36,6 +37,18 @@ class TestOrderSimulator:
         assert (fill.identifier, fill.status, fill.filled, fill.remaining) == ("b48", OrderStatus.CLOSED, 1.0, 0.0)
         assert (fill.timestamp, fill.last_trade_timestamp) == (1234567890, 1234567890)
         assert order.status == OrderStatus.OPEN
+
+    @pytest.mark.asyncio
+    async def test_a_candle_time_is_stored_in_milliseconds(self, setup_order_simulator):
+        simulator, order_book, grid_manager, handler = setup_order_simulator
+        order_book.get_open_orders.return_value = [_limit_order("b48", OrderSide.BUY, 48000.0)]
+        grid_manager.sorted_buy_grids = [48000.0]
+        grid_manager.sorted_sell_grids = []
+
+        await simulator.simulate_order_fills(49000, 47000, pd.Timestamp("2024-08-01 00:01:00"))
+
+        fill = handler.apply_order_update.await_args.args[0]
+        assert (fill.timestamp, fill.last_trade_timestamp) == (1722470460000, 1722470460000)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("side", "factor"), [(OrderSide.BUY, 1.001), (OrderSide.SELL, 0.999)])

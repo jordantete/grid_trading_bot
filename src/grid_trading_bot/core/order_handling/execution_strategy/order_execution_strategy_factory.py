@@ -1,5 +1,6 @@
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.order_handling.backtest_clock import BacktestClock
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
 from .backtest_order_execution_strategy import BacktestOrderExecutionStrategy
@@ -12,6 +13,7 @@ class OrderExecutionStrategyFactory:
     def create(
         config_manager: ConfigManager,
         exchange_service: ExchangeInterface,
+        backtest_clock: BacktestClock | None = None,
     ) -> OrderExecutionStrategyInterface:
         trading_mode = config_manager.get_trading_mode()
 
@@ -24,6 +26,7 @@ class OrderExecutionStrategyFactory:
         elif trading_mode == TradingMode.BACKTEST:
             return BacktestOrderExecutionStrategy(
                 slippage=config_manager.get_backtest_slippage(),
+                clock=backtest_clock,
             )
         else:
             raise ValueError(f"Unknown trading mode: {trading_mode}")

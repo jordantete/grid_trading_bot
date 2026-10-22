@@ -10,7 +10,8 @@ import logging
 import pytest
 
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
-from grid_trading_bot.core.order_handling.order import OrderSide
+from grid_trading_bot.core.order_handling.backtest_clock import to_epoch_ms
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderType
 
 from .snapshot_utils import check_snapshot, extract_snapshot_data
 
@@ -455,3 +456,16 @@ async def test_stop_loss_scenario_deterministic_results(run_backtest_bot, snapsh
     bot, result = await run_backtest_bot("simple_grid", "arithmetic", risk_management_overrides=STOP_LOSS)
 
     check_snapshot(STOP_LOSS_SNAPSHOT_NAME, extract_snapshot_data(bot, result), snapshot_dir, update_snapshots)
+
+
+@pytest.mark.integration
+async def test_the_initial_purchase_carries_the_time_of_its_arming_candle(run_backtest_bot):
+    bot, _ = await run_backtest_bot("simple_grid", "arithmetic")
+    market = [o for o in bot.order_book.get_all_buy_orders() if o.order_type == OrderType.MARKET]
+    assert len(market) == 1
+    purchase = market[0]
+    data = bot.strategy.data
+    arming_time = data.index[data["close"] == purchase.price][0]
+
+    assert purchase.timestamp == to_epoch_ms(arming_time)
+    assert purchase.last_trade_timestamp == purchase.timestamp

@@ -46,6 +46,14 @@ class TestOrderSerialization:
         defaults.update(overrides)
         return Order(**defaults)
 
+    def test_a_saved_live_order_keeps_its_milliseconds_and_shows_its_date(self):
+        order = self._make_order(timestamp=1722611640123, last_trade_timestamp=1722611640123)
+
+        restored = dict_to_order(order_to_dict(order, grid_level_price=None, is_non_grid=False))
+
+        assert (restored.timestamp, restored.last_trade_timestamp) == (1722611640123, 1722611640123)
+        assert restored.format_last_trade_timestamp() == "2024-08-02T15:14:00.123000"
+
     def test_order_round_trip_all_fields_populated(self):
         """Serializing an Order with all fields and deserializing it back yields an equivalent Order."""
         original = self._make_order()

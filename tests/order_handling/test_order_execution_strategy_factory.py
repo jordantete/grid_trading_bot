@@ -4,6 +4,7 @@ import pytest
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.order_handling.backtest_clock import BacktestClock
 from grid_trading_bot.core.order_handling.execution_strategy.backtest_order_execution_strategy import (
     BacktestOrderExecutionStrategy,
 )
@@ -57,6 +58,15 @@ class TestOrderExecutionStrategyFactory:
             strategy,
             BacktestOrderExecutionStrategy,
         ), "Expected BacktestOrderExecutionStrategy instance for backtesting mode"
+
+    def test_the_backtest_strategy_reads_the_clock_it_is_given(self, config_manager, exchange_service):
+        config_manager.get_trading_mode.return_value = TradingMode.BACKTEST
+        config_manager.get_backtest_slippage.return_value = 0.0
+        clock = BacktestClock()
+
+        strategy = OrderExecutionStrategyFactory.create(config_manager, exchange_service, backtest_clock=clock)
+
+        assert strategy.clock is clock
 
     def test_invalid_trading_mode_raises_error(self, config_manager, exchange_service):
         config_manager.get_trading_mode.return_value = "UNKNOWN_MODE"  # Simulate an invalid mode

@@ -14,6 +14,7 @@ from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequ
 from grid_trading_bot.core.exceptions import BookingError
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.indicators.atr_calculator import ATRCalculator
+from grid_trading_bot.core.order_handling.backtest_clock import BacktestClock
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
@@ -48,6 +49,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         trading_pair: str,
         plotter: Plotter | None = None,
         order_simulator: OrderSimulator | None = None,
+        backtest_clock: BacktestClock | None = None,
     ):
         super().__init__(config_manager, balance_tracker)
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -56,6 +58,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.grid_manager = grid_manager
         self.order_manager = order_manager
         self.order_simulator = order_simulator
+        self.backtest_clock = backtest_clock
         self.trading_performance_analyzer = trading_performance_analyzer
         self.trading_mode = trading_mode
         self.trading_pair = trading_pair
@@ -298,6 +301,8 @@ class GridTradingStrategy(TradingStrategyInterface):
         for i, (current_price, high_price, low_price, timestamp) in enumerate(
             zip(close_prices, high_prices, low_prices, timestamps, strict=False),
         ):
+            if self.backtest_clock is not None:
+                self.backtest_clock.set(timestamp)
             if i >= start_index and self.stop_reason is None:
                 if not grid_orders_initialized:
                     # The grid is placed at this candle's close, so its high and low are already in the past.

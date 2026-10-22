@@ -1,13 +1,20 @@
 import itertools
-import time
 
+import pandas as pd
+
+from ..backtest_clock import BacktestClock
 from ..order import Order, OrderSide, OrderStatus, OrderType
 from .order_execution_strategy_interface import OrderExecutionStrategyInterface
 
 
+def _iso(timestamp_ms: int) -> str:
+    return pd.Timestamp(timestamp_ms, unit="ms").isoformat()
+
+
 class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
-    def __init__(self, slippage: float = 0.0) -> None:
+    def __init__(self, slippage: float = 0.0, clock: BacktestClock | None = None) -> None:
         self.slippage = slippage
+        self.clock = clock if clock is not None else BacktestClock()
         self._id_counter = itertools.count()
 
     async def execute_market_order(
@@ -19,7 +26,7 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
         client_order_id: str,
     ) -> Order:
         order_id = f"backtest-{next(self._id_counter)}"
-        timestamp = int(time.time() * 1000)
+        now_ms = self.clock.now_ms
         if self.slippage:
             average = price * (1 + self.slippage) if order_side == OrderSide.BUY else price * (1 - self.slippage)
         else:
@@ -34,9 +41,9 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
             amount=quantity,
             filled=quantity,
             remaining=0,
-            timestamp=timestamp,
-            datetime="111",
-            last_trade_timestamp=1,
+            timestamp=now_ms,
+            datetime=_iso(now_ms),
+            last_trade_timestamp=now_ms,
             symbol=pair,
             time_in_force="GTC",
         )
@@ -50,6 +57,7 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
         client_order_id: str,
     ) -> Order:
         order_id = f"backtest-{next(self._id_counter)}"
+        now_ms = self.clock.now_ms
         return Order(
             identifier=order_id,
             status=OrderStatus.OPEN,
@@ -60,9 +68,9 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
             amount=quantity,
             filled=0,
             remaining=quantity,
-            timestamp=0,
-            datetime="",
-            last_trade_timestamp=1,
+            timestamp=now_ms,
+            datetime=_iso(now_ms),
+            last_trade_timestamp=None,
             symbol=pair,
             time_in_force="GTC",
         )

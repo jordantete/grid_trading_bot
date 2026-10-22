@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from grid_trading_bot.core.order_handling.order import OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.order import OrderStatus
 
 # Filled by check_snapshot under --update-snapshots, printed by the integration conftest's terminal summary.
 UPDATED_SNAPSHOTS: list[tuple[str, list[str]]] = []
@@ -34,8 +34,7 @@ def _fill_entry(order, balances) -> dict[str, Any]:
         "filled": order.filled,
         "fee_cost": fee.amount,
         "fee_currency": balances.base_currency if fee.in_base else balances.quote_currency,
-        # Market orders carry the wall-clock time of the run, not the candle's.
-        "timestamp": None if order.order_type == OrderType.MARKET else order.timestamp,
+        "timestamp": order.timestamp,
     }
 
 

@@ -6,6 +6,7 @@ import pandas as pd
 
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 
+from .backtest_clock import to_epoch_ms
 from .order import Order, OrderSide, OrderStatus
 from .order_book import OrderBook
 from .order_update_handler import OrderUpdateHandler
@@ -39,9 +40,9 @@ class OrderSimulator:
         Args:
             high_price: The highest price reached in this time interval.
             low_price: The lowest price reached in this time interval.
-            timestamp: The current timestamp in the backtest simulation.
+            timestamp: The candle time (a Timestamp, or milliseconds since the epoch).
         """
-        timestamp_val = int(timestamp.timestamp()) if isinstance(timestamp, pd.Timestamp) else int(timestamp)
+        timestamp_ms = to_epoch_ms(timestamp)
         pending_orders = self.order_book.get_open_orders()
         crossed_buy_levels = {level for level in self.grid_manager.sorted_buy_grids if low_price <= level <= high_price}
         crossed_sell_levels = {
@@ -61,9 +62,9 @@ class OrderSimulator:
         crossed_sells.sort(key=lambda o: o.price)
 
         for order in [*crossed_buys, *crossed_sells]:
-            await self.simulate_fill(order, timestamp_val)
+            await self.simulate_fill(order, timestamp_ms)
 
-    async def simulate_fill(self, order: Order, timestamp: int) -> None:
+    async def simulate_fill(self, order: Order, timestamp_ms: int) -> None:
         """Hands the fill of a crossed order to the order manager, which applies it to the order."""
         fill = copy.copy(order)
         fill.filled = order.amount
@@ -73,10 +74,9 @@ class OrderSimulator:
             fill.average = (
                 order.price * (1 + self.slippage) if order.side == OrderSide.BUY else order.price * (1 - self.slippage)
             )
-        fill.timestamp = timestamp
-        fill.last_trade_timestamp = timestamp
-        timestamp_in_seconds = timestamp / 1000 if timestamp > 10**10 else timestamp
-        formatted_timestamp = datetime.fromtimestamp(timestamp_in_seconds, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
+        fill.timestamp = timestamp_ms
+        fill.last_trade_timestamp = timestamp_ms
+        formatted_timestamp = datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
         self.logger.info(
             f"Simulated fill for {order.side.value.upper()} order at price {order.price} "
             f"with amount {order.amount}. Filled at timestamp {formatted_timestamp}",
