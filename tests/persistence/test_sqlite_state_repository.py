@@ -606,3 +606,14 @@ class TestPendingPlacements:
             _save(repo, grid_levels=[sample_grid_level])
 
         assert repo.load_pending_placements() == [_pending_row()]
+
+
+def test_a_closed_repository_refuses_reads_and_writes(tmp_path):
+    repo = SQLiteStateRepository(str(tmp_path / "state.db"))
+    repo.initialize()
+    repo.close()
+
+    with pytest.raises(RuntimeError, match="is not open"):
+        repo.load_bot_state()
+    with pytest.raises(RuntimeError, match="is not open"):
+        repo.load_pending_placements()

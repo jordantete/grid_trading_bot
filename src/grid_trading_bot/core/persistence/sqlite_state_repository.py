@@ -101,22 +101,29 @@ class SQLiteStateRepository(StateRepositoryInterface):
         self._conn: sqlite3.Connection | None = None
         self._write_lock = threading.Lock()
 
+    @property
+    def _db(self) -> sqlite3.Connection:
+        if self._conn is None:
+            raise RuntimeError(f"SQLiteStateRepository at {self.db_path} is not open.")
+        return self._conn
+
     def initialize(self) -> None:
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        self._conn = conn
         with self._write_lock:
-            self._conn.executescript(_CREATE_TABLES_SQL)
+            self._db.executescript(_CREATE_TABLES_SQL)
             self._ensure_schema_version()
         self.logger.info(f"SQLiteStateRepository initialized at {self.db_path}")
 
     def _ensure_schema_version(self) -> None:
-        cursor = self._conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
+        cursor = self._db.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
         row = cursor.fetchone()
         if row is None:
-            self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-            self._conn.commit()
+            self._db.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+            self._db.commit()
             return
 
         stored_version = row["version"]
@@ -136,35 +143,35 @@ class SQLiteStateRepository(StateRepositoryInterface):
             )
 
     def _migrate_v1_to_v2(self) -> None:
-        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(bot_state)")}
+        columns = {row["name"] for row in self._db.execute("PRAGMA table_info(bot_state)")}
         if "strategy_state" not in columns:
-            self._conn.execute("ALTER TABLE bot_state ADD COLUMN strategy_state TEXT")
-        self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (2,))
-        self._conn.commit()
+            self._db.execute("ALTER TABLE bot_state ADD COLUMN strategy_state TEXT")
+        self._db.execute("INSERT INTO schema_version (version) VALUES (?)", (2,))
+        self._db.commit()
         self.logger.info("Migrated schema v1 -> v2 (added bot_state.strategy_state).")
 
     def _migrate_v2_to_v3(self) -> None:
-        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(balance_state)")}
+        columns = {row["name"] for row in self._db.execute("PRAGMA table_info(balance_state)")}
         for column in ("avg_cost", "realized_pnl", "peak_value"):
             if column not in columns:
-                self._conn.execute(f"ALTER TABLE balance_state ADD COLUMN {column} TEXT")
-        self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (3,))
-        self._conn.commit()
+                self._db.execute(f"ALTER TABLE balance_state ADD COLUMN {column} TEXT")
+        self._db.execute("INSERT INTO schema_version (version) VALUES (?)", (3,))
+        self._db.commit()
         self.logger.info("Migrated schema v2 -> v3 (added balance_state.avg_cost, realized_pnl, peak_value).")
 
     def _migrate_v3_to_v4(self) -> None:
-        self._conn.executescript(_CREATE_PENDING_PLACEMENTS_SQL)
-        self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (4,))
-        self._conn.commit()
+        self._db.executescript(_CREATE_PENDING_PLACEMENTS_SQL)
+        self._db.execute("INSERT INTO schema_version (version) VALUES (?)", (4,))
+        self._db.commit()
         self.logger.info("Migrated schema v3 -> v4 (added pending_placements).")
 
     # ── Bot State ────────────────────────────────────────────────────────
 
     def save_state(self, snapshot: StateSnapshot) -> None:
-        with self._write_lock, self._conn:
-            self._conn.execute("DELETE FROM orders")
-            self._conn.execute("DELETE FROM grid_levels")
-            self._conn.execute("DELETE FROM pending_placements")
+        with self._write_lock, self._db:
+            self._db.execute("DELETE FROM orders")
+            self._db.execute("DELETE FROM grid_levels")
+            self._db.execute("DELETE FROM pending_placements")
             self._upsert_bot_state(snapshot.bot_state)
             self._upsert_balance_state(snapshot.balance_state)
             for order_dict in snapshot.orders:
@@ -175,7 +182,7 @@ class SQLiteStateRepository(StateRepositoryInterface):
                 self._upsert_pending(row)
 
     def _upsert_bot_state(self, state: dict[str, Any]) -> None:
-        self._conn.execute(
+        self._db.execute(
             """INSERT OR REPLACE INTO bot_state
                (id, config_hash, trading_pair, strategy_type,
                 initial_purchase_done, grid_orders_initialized, strategy_state, updated_at)
@@ -191,7 +198,7 @@ class SQLiteStateRepository(StateRepositoryInterface):
         )
 
     def load_bot_state(self) -> dict[str, Any] | None:
-        cursor = self._conn.execute("SELECT * FROM bot_state WHERE id = 1")
+        cursor = self._db.execute("SELECT * FROM bot_state WHERE id = 1")
         row = cursor.fetchone()
         if row is None:
             return None
@@ -208,7 +215,7 @@ class SQLiteStateRepository(StateRepositoryInterface):
     # ── Balance State ────────────────────────────────────────────────────
 
     def _upsert_balance_state(self, state: dict[str, str | None]) -> None:
-        self._conn.execute(
+        self._db.execute(
             """INSERT OR REPLACE INTO balance_state
                (id, fiat_balance, crypto_balance, total_fees,
                 reserved_fiat, reserved_crypto, avg_cost, realized_pnl, peak_value, updated_at)
@@ -226,7 +233,7 @@ class SQLiteStateRepository(StateRepositoryInterface):
         )
 
     def load_balance_state(self) -> dict[str, str | None] | None:
-        cursor = self._conn.execute("SELECT * FROM balance_state WHERE id = 1")
+        cursor = self._db.execute("SELECT * FROM balance_state WHERE id = 1")
         row = cursor.fetchone()
         if row is None:
             return None
@@ -245,7 +252,7 @@ class SQLiteStateRepository(StateRepositoryInterface):
     # ── Orders ───────────────────────────────────────────────────────────
 
     def _upsert_order(self, d: dict[str, Any]) -> None:
-        self._conn.execute(
+        self._db.execute(
             """INSERT OR REPLACE INTO orders
                (identifier, status, order_type, side, price, average,
                 amount, filled, remaining, timestamp, datetime_str,
@@ -278,13 +285,13 @@ class SQLiteStateRepository(StateRepositoryInterface):
         )
 
     def load_all_orders(self) -> list[dict[str, Any]]:
-        cursor = self._conn.execute("SELECT * FROM orders")
+        cursor = self._db.execute("SELECT * FROM orders")
         return [dict(row) for row in cursor.fetchall()]
 
     # ── Grid Levels ──────────────────────────────────────────────────────
 
     def _upsert_grid_level(self, d: dict[str, Any]) -> None:
-        self._conn.execute(
+        self._db.execute(
             """INSERT OR REPLACE INTO grid_levels
                (price, state, paired_buy_level_price, paired_sell_level_price, updated_at)
                VALUES (?, ?, ?, ?, datetime('now'))""",
@@ -297,13 +304,13 @@ class SQLiteStateRepository(StateRepositoryInterface):
         )
 
     def load_grid_levels(self) -> list[dict[str, Any]]:
-        cursor = self._conn.execute("SELECT * FROM grid_levels")
+        cursor = self._db.execute("SELECT * FROM grid_levels")
         return [dict(row) for row in cursor.fetchall()]
 
     # ── Pending Placements ───────────────────────────────────────────────
 
     def _upsert_pending(self, row: dict[str, Any]) -> None:
-        self._conn.execute(
+        self._db.execute(
             """INSERT OR REPLACE INTO pending_placements
                (client_order_id, order_type, side, quantity, price, purpose,
                 level_price, source_level_price, source_order_id, sent, created_at)
@@ -324,11 +331,11 @@ class SQLiteStateRepository(StateRepositoryInterface):
         )
 
     def save_pending(self, row: dict[str, Any]) -> None:
-        with self._write_lock, self._conn:
+        with self._write_lock, self._db:
             self._upsert_pending(row)
 
     def load_pending_placements(self) -> list[dict[str, Any]]:
-        cursor = self._conn.execute("SELECT * FROM pending_placements ORDER BY created_at, rowid")
+        cursor = self._db.execute("SELECT * FROM pending_placements ORDER BY created_at, rowid")
         return [{**dict(row), "sent": bool(row["sent"])} for row in cursor.fetchall()]
 
     # ── Utilities ────────────────────────────────────────────────────────

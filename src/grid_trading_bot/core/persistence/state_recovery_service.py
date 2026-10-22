@@ -548,6 +548,8 @@ class StateRecoveryService:
         then books every execution seen at restart like a live fill.
         """
         saved_balance = self.repository.load_balance_state()
+        if saved_balance is None:
+            raise ValueError("The database holds a bot state without its balance state.")
         tracker = self.balance_tracker
         tracker._balance = Decimal(saved_balance["fiat_balance"])
         tracker._crypto_balance = Decimal(saved_balance["crypto_balance"])

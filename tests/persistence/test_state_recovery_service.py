@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
@@ -1141,6 +1142,19 @@ class TestStateRecoveryService:
 
         assert local_order.last_trade_timestamp == 1700000500
         mock_balance_tracker.replay_fills_on_cost_basis.assert_called_once_with(Decimal("2.5"), [(local_order, 1.0)])
+
+    async def test_a_paper_bot_state_without_its_balance_state_refuses_and_says_so(
+        self, service, mock_repository, mock_config_manager
+    ):
+        mock_config_manager.get_trading_mode.return_value = TradingMode.PAPER_TRADING
+        _set_valid_bot_state(mock_repository, mock_config_manager)
+        mock_repository.load_balance_state.return_value = None
+
+        result = await service.attempt_recovery()
+
+        assert result.outcome is RecoveryOutcome.REFUSED
+        assert "without its balance state" in result.reason
+        mock_repository.save_state.assert_not_called()
 
 
 def _make_real_grid_manager() -> GridManager:
