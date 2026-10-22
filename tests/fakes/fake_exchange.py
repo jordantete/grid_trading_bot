@@ -280,6 +280,7 @@ class FakeExchange:
     state_path: ClassVar[Path] = Path("exchange.json")
     calls_path: ClassVar[Path | None] = None
     tick_interval: ClassVar[float] = 0.05
+    has: ClassVar[dict[str, Any]] = {"sandbox": True}
 
     def __init__(self, _params: dict):
         self.urls = {"api": "https://fake.invalid"}

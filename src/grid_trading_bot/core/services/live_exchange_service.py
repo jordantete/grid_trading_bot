@@ -122,14 +122,9 @@ class LiveExchangeService(ExchangeInterface):
             raise UnsupportedExchangeError(f"The exchange '{self.exchange_name}' is not supported.") from None
 
     def _enable_sandbox_mode(self, exchange: Any) -> None:
-        if self.exchange_name in ("binance", "bybit"):
-            exchange.set_sandbox_mode(True)
-        elif self.exchange_name == "kraken":
-            exchange.urls["api"] = "https://api.demo-futures.kraken.com"
-        elif self.exchange_name == "bitmex":
-            exchange.urls["api"] = "https://testnet.bitmex.com"
-        else:
-            self.logger.warning(f"No sandbox mode available for {self.exchange_name}. Running in live mode.")
+        if exchange.has.get("sandbox") is not True:
+            raise UnsupportedExchangeError(f"{self.exchange_name} has no test environment; paper trading refused.")
+        exchange.set_sandbox_mode(True)
 
     @property
     def last_price(self) -> float | None:

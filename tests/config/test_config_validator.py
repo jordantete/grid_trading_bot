@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -375,3 +376,35 @@ class TestIntervalsAndPersistenceValidation:
     @pytest.mark.parametrize("path", sorted(CONFIG_DIR.glob("*.json")), ids=lambda path: path.name)
     def test_every_shipped_config_validates(self, path):
         ConfigManager(str(path), ConfigValidator())
+
+
+class TestPaperTradingNeedsASandbox:
+    @pytest.mark.parametrize("name", ["binance", "bybit", "okx"])
+    def test_paper_on_an_exchange_with_a_sandbox_is_accepted(self, config_validator, valid_config, name):
+        valid_config["exchange"].update(name=name, trading_mode="paper_trading")
+
+        config_validator.validate(valid_config)
+
+    def test_paper_on_an_exchange_without_a_sandbox_is_rejected_and_named(self, config_validator, valid_config, caplog):
+        valid_config["exchange"].update(name="kraken", trading_mode="paper_trading")
+
+        with caplog.at_level(logging.ERROR), pytest.raises(ConfigValidationError) as excinfo:
+            config_validator.validate(valid_config)
+
+        assert excinfo.value.invalid_fields == ["exchange.name"]
+        [message] = [r.getMessage() for r in caplog.records if "no test environment" in r.getMessage()]
+        assert message.startswith("exchange.name: kraken has no test environment in ccxt; paper_trading needs one (")
+        listed = message.split("(", 1)[1].rstrip(").").split(", ")
+        assert {"binance", "bybit", "okx"} <= set(listed)
+        assert "kraken" not in listed
+
+    @pytest.mark.parametrize("mode", ["live", "backtest"])
+    def test_an_exchange_without_a_sandbox_is_accepted_outside_paper(self, config_validator, valid_config, mode):
+        valid_config["exchange"].update(name="kraken", trading_mode=mode)
+
+        config_validator.validate(valid_config)
+
+    def test_a_name_ccxt_does_not_know_is_left_to_the_exchange_service(self, config_validator, valid_config):
+        valid_config["exchange"].update(name="notanexchange", trading_mode="paper_trading")
+
+        config_validator.validate(valid_config)

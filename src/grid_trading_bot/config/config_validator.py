@@ -2,6 +2,8 @@ import logging
 import math
 from typing import Any
 
+import ccxt
+
 from grid_trading_bot.core.domain.spacing_type import SpacingType
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 
@@ -13,6 +15,10 @@ def _is_number_in_range(value: Any, low: float, high: float) -> bool:
     return (
         isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value) and low <= value <= high
     )
+
+
+def _has_sandbox(name: str) -> bool:
+    return getattr(ccxt, name)().has.get("sandbox") is True
 
 
 class ConfigValidator:
@@ -81,11 +87,24 @@ class ConfigValidator:
             invalid_fields.append("exchange.trading_mode")
         else:
             try:
-                TradingMode.from_string(trading_mode_str)
+                trading_mode = TradingMode.from_string(trading_mode_str)
             except ValueError:
                 invalid_fields.append("exchange.trading_mode")
+            else:
+                if trading_mode is TradingMode.PAPER_TRADING and exchange.get("name"):
+                    invalid_fields += self._validate_paper_exchange(exchange["name"])
 
         return invalid_fields
+
+    def _validate_paper_exchange(self, name: Any) -> list[str]:
+        # A name ccxt does not know keeps the error the exchange service raises when it connects.
+        if not isinstance(name, str) or name not in ccxt.exchanges or _has_sandbox(name):
+            return []
+        with_sandbox = ", ".join(n for n in ccxt.exchanges if _has_sandbox(n))
+        self.logger.error(
+            f"exchange.name: {name} has no test environment in ccxt; paper_trading needs one ({with_sandbox})."
+        )
+        return ["exchange.name"]
 
     def _validate_pair(self, config: dict[str, Any]) -> list[str]:
         missing_fields: list[str] = []

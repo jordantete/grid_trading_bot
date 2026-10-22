@@ -95,6 +95,7 @@ class TestLiveExchangeService:
 
         mock_exchange_instance = MagicMock()
         mock_exchange_instance.urls = {"api": "https://api.binance.com"}  # Initial URL setup
+        mock_exchange_instance.has = {"sandbox": True}
         mock_ccxtpropro.binance.return_value = mock_exchange_instance
         mock_getattr.return_value = mock_ccxtpropro.binance
 
@@ -734,42 +735,56 @@ class TestLiveExchangeService:
 
         mock_exchange_instance.close.assert_not_awaited()
 
-    @pytest.mark.parametrize(
-        ("exchange_name", "expected_url"),
-        [
-            ("binance", None),  # binance and bybit use set_sandbox_mode
-            ("kraken", "https://api.demo-futures.kraken.com"),
-            ("bitmex", "https://testnet.bitmex.com"),
-            ("bybit", None),
-            ("unknown", None),
-        ],
-    )
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_enable_sandbox_mode_all_exchanges(
-        self,
-        mock_getattr,
-        mock_ccxtpro,
-        exchange_name,
-        expected_url,
-        config_manager,
-        setup_env_vars,
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exchange_name", ["binance", "bybit", "okx"])
+    async def test_paper_mode_switches_a_sandbox_exchange_to_its_test_environment(
+        self, config_manager, setup_env_vars, exchange_name
     ):
         config_manager.get_exchange_name.return_value = exchange_name
-        mock_exchange_instance = Mock()
-        mock_exchange_instance.urls = {"api": "default_url"}
-        mock_exchange_instance.set_sandbox_mode = Mock()
-        mock_ccxtpro.binance.return_value = mock_exchange_instance
-        mock_getattr.return_value = mock_ccxtpro.binance
 
-        LiveExchangeService(config_manager, is_paper_trading_activated=True)
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
+        try:
+            assert service.exchange.isSandboxModeEnabled is True
+        finally:
+            await service.exchange.close()
 
-        if exchange_name in ("binance", "bybit"):
-            mock_exchange_instance.set_sandbox_mode.assert_called_once_with(True)
-        elif expected_url:
-            assert mock_exchange_instance.urls["api"] == expected_url
-        else:
-            assert mock_exchange_instance.urls["api"] == "default_url"
+    @pytest.mark.asyncio
+    async def test_paper_mode_on_okx_trades_in_its_demo_environment(self, config_manager, setup_env_vars):
+        config_manager.get_exchange_name.return_value = "okx"
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
+        try:
+            assert service.exchange.headers["x-simulated-trading"] == "1"
+        finally:
+            await service.exchange.close()
+
+    @pytest.mark.asyncio
+    async def test_paper_mode_on_an_exchange_without_a_sandbox_is_refused(self, config_manager, setup_env_vars):
+        config_manager.get_exchange_name.return_value = "kraken"
+
+        with pytest.raises(
+            UnsupportedExchangeError, match=r"^kraken has no test environment; paper trading refused\.$"
+        ):
+            LiveExchangeService(config_manager, is_paper_trading_activated=True)
+
+    @pytest.mark.asyncio
+    async def test_live_mode_keeps_an_exchange_without_a_sandbox_on_its_api(self, config_manager, setup_env_vars):
+        config_manager.get_exchange_name.return_value = "kraken"
+
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+        try:
+            assert service.exchange.isSandboxModeEnabled is False
+        finally:
+            await service.exchange.close()
+
+    @pytest.mark.asyncio
+    async def test_paper_mode_on_a_name_ccxt_does_not_know_is_an_unsupported_exchange(
+        self, config_manager, setup_env_vars
+    ):
+        config_manager.get_exchange_name.return_value = "notanexchange"
+
+        with pytest.raises(UnsupportedExchangeError, match=r"The exchange 'notanexchange' is not supported\."):
+            LiveExchangeService(config_manager, is_paper_trading_activated=True)
 
     @pytest.mark.asyncio
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")

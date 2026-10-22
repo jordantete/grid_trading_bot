@@ -54,6 +54,7 @@ class TestExchangeServiceFactory:
 
         mock_exchange_instance = Mock()
         mock_exchange_instance.urls = {"api": "https://api.binance.com/api"}
+        mock_exchange_instance.has = {"sandbox": True}
         mock_ccxtpro.binance.return_value = mock_exchange_instance
         mock_getattr.return_value = mock_ccxtpro.binance
 
