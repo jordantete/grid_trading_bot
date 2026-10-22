@@ -4,10 +4,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    ignore:
-      # Bumped by hand, together with the e2e snapshots they can shift
-      - dependency-name: "numpy"
-      - dependency-name: "pandas"
+    versioning-strategy: "lockfile-only"
     labels:
       - "pip-dependencies"
 
