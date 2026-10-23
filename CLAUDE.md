@@ -76,8 +76,8 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 ### Strategy Layer
 
 - **`strategies/grid_trading_strategy.py`** — Implements `TradingStrategyInterface`; the base both modes share. Manages the initial purchase (sized to fund the sell orders above the price), grid order initialization, take-profit/stop-loss, trailing stop and regrid
-- **`strategies/backtest_grid_strategy.py`**: `BacktestGridStrategy`: loads the history, iterates the OHLCV rows, fills through the `OrderSimulator`, reports from the candles and plots
-- **`strategies/live_grid_strategy.py`**: `LiveGridStrategy(mode_label)`: consumes the WebSocket price stream, refreshes the ATR at each candle close, reports from the live metrics (no plot)
+- **`strategies/backtest_grid_strategy.py`** — `BacktestGridStrategy`: loads the history, iterates the OHLCV rows, fills through the `OrderSimulator`, reports from the candles and plots
+- **`strategies/live_grid_strategy.py`** — `LiveGridStrategy(mode_label)`: consumes the WebSocket price stream, refreshes the ATR at each candle close, reports from the live metrics (no plot)
 - **`strategies/trading_performance_analyzer.py`** — Computes ROI, max drawdown, Sharpe ratio, etc.
 - **`strategies/plotter.py`** — Plotly visualization for backtest results
 
@@ -90,7 +90,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 
 - **Factory Pattern**: `ExchangeServiceFactory` and `OrderExecutionStrategyFactory` select implementations based on `TradingMode`
 - **Behaviour at construction**: `assemble_bot` reads the mode to build the components. `OrderManager` gets `fail_fast`, `BalanceTracker` and `StateRecoveryService` get a `BalanceSource`, and the assembly picks the strategy class; `cli.py` builds the `NotificationHandler` with `enabled` and passes it in. `tests/test_mode_boundaries.py` keeps `TradingMode` within `config/`, `cli.py`, `grid_trading_bot.py`, `bot_assembly.py` and the two factories
-- **Event Bus**: carries `STOP_BOT` only. Order updates go through `OrderManager.apply_order_update` (balance, level, paired order, save, in that order), and every placement through `Placement.submit_limit` and the `PlacementJournal`
+- **Event Bus**: carries `STOP_BOT` only. Order updates go through `OrderManager.apply_order_update` (balance, level, paired order, save, in that order), every limit order through `Placement.submit_limit` and the `PlacementJournal`, and every market leg (initial purchase, liquidation) through `MarketEntrySender.send`
 - **State Machine**: `GridLevel` transitions through `GridCycleState` enum states as orders are placed and filled
 - **Strategy Pattern**: `TradingStrategyInterface` ABC; `GridTradingStrategy` is the shared base, with `BacktestGridStrategy` and `LiveGridStrategy` as the two run paths; the grid has two modes (`simple_grid`, `hedged_grid`)
 
