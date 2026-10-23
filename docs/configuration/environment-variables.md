@@ -11,6 +11,8 @@ Sensitive credentials and service configuration are stored in a `.env` file at t
 # Exchange API credentials
 EXCHANGE_API_KEY=YourExchangeAPIKeyHere
 EXCHANGE_SECRET_KEY=YourExchangeSecretKeyHere
+# Only for exchanges whose API keys carry a passphrase (OKX)
+EXCHANGE_PASSWORD=
 
 # Notification URLs for Apprise
 APPRISE_NOTIFICATION_URLS=
@@ -26,6 +28,7 @@ GRAFANA_ADMIN_PASSWORD=YourGrafanaPasswordHere
 |----------|----------|-------------|
 | `EXCHANGE_API_KEY` | Live/Paper only | Your API key for the exchange. Not needed for backtesting. |
 | `EXCHANGE_SECRET_KEY` | Live/Paper only | Your secret key for the exchange. Not needed for backtesting. |
+| `EXCHANGE_PASSWORD` | Live/Paper on OKX | The passphrase chosen when the API key was created. Required, and checked at start, on exchanges whose ccxt class asks for one (`okx`, `myokx`); ignored elsewhere. `docker-compose.yml` passes it to the bot container. |
 | `APPRISE_NOTIFICATION_URLS` | No | Comma-separated notification URLs (Telegram, Discord, Slack, etc.). See [Apprise documentation](https://github.com/caronc/apprise) for supported services. `docker-compose.yml` passes it to the bot container. |
 | `GRAFANA_ADMIN_USER` | No | Admin username for the Grafana monitoring stack. Default: `admin`. |
 | `GRAFANA_ADMIN_PASSWORD` | No | Admin password for the Grafana monitoring stack. |

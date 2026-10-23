@@ -78,7 +78,7 @@ Every key in the file must be one this page documents. An unknown key, a misspel
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `name` | string | Yes | Exchange name (e.g., `binance`, `kraken`). Must be supported by CCXT. |
+| `name` | string | Yes | Exchange name (e.g., `binance`, `kraken`). Must be supported by CCXT. For OKX, `myokx` is an account opened with OKX Europe (my.okx.com) and `okx` a global one (www.okx.com); see [Going Live](../usage/going-live.md#okx). |
 | `trading_fee` | float | Yes | Flat trading fee in decimal format (e.g., `0.001` for 0.1%). Used for both sides unless `maker_fee` / `taker_fee` are set. |
 | `maker_fee` | float | No | Fee charged on liquidity-adding fills — resting grid limit orders. Defaults to `trading_fee`. |
 | `taker_fee` | float | No | Fee charged on liquidity-taking fills — the initial purchase, take-profit, stop-loss and liquidation market orders. Defaults to `trading_fee`. |
@@ -111,6 +111,10 @@ A rejection is treated as an expected market condition, not a failure. The bot:
 - retries it at every order poll (`execution.order_polling_interval`) until the exchange accepts it;
 - logs at `INFO` and sends no failure notification;
 - does not count the rejection toward the circuit breaker's failure threshold.
+
+OKX does not reject such an order: it accepts it, then cancels it (cancel source 31). The bot
+reads that cancellation as the same condition: it logs at `INFO`, sends no "Order Cancelled"
+notification and places the order again on its level, at most once per order poll.
 
 The order is never re-priced away from its grid level: that would place it off-grid and
 silently distort the profit spacing the whole strategy is built on.

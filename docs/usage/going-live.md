@@ -18,6 +18,8 @@ EXCHANGE_API_KEY=YourExchangeAPIKeyHere
 EXCHANGE_SECRET_KEY=YourExchangeSecretKeyHere
 ```
 
+On OKX, add `EXCHANGE_PASSWORD` (the API key's passphrase), see [OKX](#okx) below.
+
 See the [Environment Variables](../configuration/environment-variables.md) page for the full list, including the optional `APPRISE_NOTIFICATION_URLS` for alerting.
 
 To create Binance API keys:
@@ -30,6 +32,16 @@ To create Binance API keys:
     Binance provides a free testnet with fake funds at [testnet.binance.vision](https://testnet.binance.vision). Create a separate API key/secret pair there and use them for `paper_trading` mode. In `paper_trading` the bot calls ccxt's `set_sandbox_mode(True)`, which points the exchange at its test environment, and refuses to start (exit 78) on an exchange that has none, so a paper config can never trade real funds. With ccxt 4.5.87, Binance, Bybit and OKX have one; Kraken, Coinbase and KuCoin do not. To check another exchange: `uv run python -c "import ccxt; print(ccxt.<name>().has.get('sandbox'))"` prints `True` when paper trading is possible.
 
     In paper trading on Binance, prices come from the testnet's own ticker, which ccxt's sandbox mode also switches to. Testnet prices can drift from the real market.
+
+### OKX
+
+- **Which name.** An account opened with OKX Europe (my.okx.com, the entity EU residents get) only works through `eea.okx.com`: set `"name": "myokx"`. A global account (www.okx.com) uses `"name": "okx"`. Both share the same API, candle limit (300 per call) and demo mode.
+- **Passphrase.** OKX API keys carry a passphrase. Put it in `EXCHANGE_PASSWORD`; without it the bot refuses to start (`Missing required environment variable: EXCHANGE_PASSWORD`).
+- **API key.** Give it the trade permission only, no withdrawal, and an IP allow-list with the VPS address.
+- **Paper trading.** `paper_trading` runs on OKX demo trading: ccxt sends every request with the `x-simulated-trading: 1` header and switches the websocket to the demo host. Demo trading needs its own API key, created from the demo trading section of the account, with its own passphrase. The demo lists fewer pairs than live (BTC, ETH, SOL against USDC were there on 2026-10-23, XRP, ADA and AVAX were not).
+- **Check before going further.** With the demo keys in `OKX_DEMO_API_KEY`, `OKX_DEMO_SECRET_KEY` and `OKX_DEMO_PASSWORD` (and `OKX_DEMO_EXCHANGE=okx` for a global account), `uv run python -m pytest -m sandbox tests/integration/test_sandbox_smoke.py -v` places a post-only buy far under the price on the demo, finds it by its `clientOrderId`, then cancels it.
+
+OKX answers a placement with the order ids only, so the bot reads the order right after placing it. It cancels a post-only order that would cross instead of refusing it; see [Post-only orders](../configuration/config-file.md#post-only-orders) for how the bot handles that.
 
 ### Fees
 
