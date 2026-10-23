@@ -140,7 +140,7 @@ class TestBacktestExchangeService:
 
     @pytest.mark.parametrize(
         ("exchange_name", "max_per_call", "candle_count"),
-        [("binance", 1000, 600), ("htx", 1000, 600), ("okx", 300, 400)],
+        [("binance", 1000, 600), ("htx", 1000, 600), ("okx", 300, 400), ("myokx", 300, 400)],
     )
     def test_every_candle_of_the_range_arrives_whatever_the_exchange_cap(
         self, valid_config, monkeypatch, exchange_name, max_per_call, candle_count

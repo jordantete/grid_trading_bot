@@ -6,6 +6,7 @@ CANDLE_LIMITS = {
     "bitstamp": 1000,
     "htx": 1000,  # ccxt htx spot caps `size` at 1000 (2000 is for contracts)
     "okx": 300,  # ccxt okx caps `limit` at 300 for regular candles
+    "myokx": 300,
     "bybit": 200,
     "bittrex": 500,
     "poloniex": 500,
