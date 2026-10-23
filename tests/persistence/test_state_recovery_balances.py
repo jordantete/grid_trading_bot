@@ -89,6 +89,7 @@ async def _restarted(repository, before, exchange_balances, trading_mode="live")
         before.execution,
         after.notifications,
         "BTC/USDT",
+        after.balances.balance_source,
         journal=after.journal,
     )
     result = await recovery.attempt_recovery()

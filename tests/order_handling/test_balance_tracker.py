@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from tests.fakes.config import config_manager_from
 
-from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.order_handling.balance_source import BalanceSource
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.fee_calculator import Fee, FeeCalculator
 from grid_trading_bot.core.order_handling.order import Liquidity, Order, OrderSide, OrderStatus, OrderType
@@ -60,7 +60,7 @@ class TestBalanceTracker:
         fee_calculator = _fees(valid_config)
         balance_tracker = BalanceTracker(
             fee_calculator=fee_calculator,
-            trading_mode=TradingMode.LIVE,
+            balance_source=BalanceSource.EXCHANGE,
             base_currency="BTC",
             quote_currency="USDT",
         )
@@ -77,7 +77,7 @@ class TestBalanceTracker:
     @pytest.mark.asyncio
     async def test_setup_balances_clears_stale_reservations(self, setup_balance_tracker):
         balance_tracker, _ = setup_balance_tracker
-        balance_tracker.trading_mode = TradingMode.PAPER_TRADING
+        balance_tracker.balance_source = BalanceSource.VIRTUAL
         balance_tracker._reserved_fiat = Decimal("50")
         balance_tracker._reserved_crypto = Decimal("1")
 
@@ -211,46 +211,32 @@ class TestBalanceTracker:
         assert balance_tracker.get_total_balance_value(price=200) == 2000
 
     @pytest.mark.asyncio
-    async def test_setup_balances_backtest(self, setup_balance_tracker):
+    async def test_a_virtual_balance_starts_from_the_config(self, setup_balance_tracker):
         balance_tracker, _ = setup_balance_tracker
-        balance_tracker.trading_mode = TradingMode.BACKTEST
+        balance_tracker.balance_source = BalanceSource.VIRTUAL
+        exchange_service = AsyncMock()
 
-        await balance_tracker.setup_balances(initial_balance=2000, initial_crypto_balance=10)
+        await balance_tracker.setup_balances(
+            initial_balance=2000, initial_crypto_balance=10, exchange_service=exchange_service
+        )
 
         assert balance_tracker.balance == 2000
         assert balance_tracker.crypto_balance == 10
+        assert exchange_service.mock_calls == []
 
     @pytest.mark.asyncio
-    async def test_setup_balances_live_mode(self, setup_balance_tracker):
+    async def test_an_exchange_balance_is_fetched(self, setup_balance_tracker):
         balance_tracker, _ = setup_balance_tracker
-        mock_exchange_service = AsyncMock()
-        balance_tracker._fetch_live_balances = AsyncMock(
-            return_value=(Decimal("1500"), Decimal("5")),
-        )
+        exchange_service = AsyncMock()
+        exchange_service.get_balance.return_value = {"free": {"USDT": 1500, "BTC": 5}}
+        balance_tracker.balance_source = BalanceSource.EXCHANGE
 
-        balance_tracker.trading_mode = TradingMode.LIVE
         await balance_tracker.setup_balances(
-            initial_balance=0,
-            initial_crypto_balance=0,
-            exchange_service=mock_exchange_service,
+            initial_balance=0, initial_crypto_balance=0, exchange_service=exchange_service
         )
 
-        balance_tracker._fetch_live_balances.assert_awaited_once_with(mock_exchange_service)
         assert balance_tracker.balance == 1500
         assert balance_tracker.crypto_balance == 5
-
-    @pytest.mark.asyncio
-    async def test_setup_balances_paper_trading_mode(self, setup_balance_tracker):
-        balance_tracker, _ = setup_balance_tracker
-
-        balance_tracker.trading_mode = TradingMode.PAPER_TRADING
-        await balance_tracker.setup_balances(
-            initial_balance=2000,
-            initial_crypto_balance=10,
-        )
-
-        assert balance_tracker.balance == 2000
-        assert balance_tracker.crypto_balance == 10
 
     @pytest.mark.asyncio
     async def test_fetch_live_balances_success(self, setup_balance_tracker):
@@ -367,7 +353,7 @@ def balance_tracker(valid_config):
     fee_calculator = _fees(valid_config)
     bt = BalanceTracker(
         fee_calculator=fee_calculator,
-        trading_mode=TradingMode.LIVE,
+        balance_source=BalanceSource.EXCHANGE,
         base_currency="BTC",
         quote_currency="USDT",
     )
@@ -548,7 +534,7 @@ class TestBalanceTrackerLiquidityAwareFees:
         )
         bt = BalanceTracker(
             fee_calculator=FeeCalculator(config),
-            trading_mode=TradingMode.LIVE,
+            balance_source=BalanceSource.EXCHANGE,
             base_currency="BTC",
             quote_currency="USDT",
         )
@@ -664,7 +650,7 @@ class TestAccountSnapshot:
         bt = balance_tracker_with_crypto
         bt.snapshot(100.0)
         bt._ledger.realized_pnl = Decimal("5")
-        bt.trading_mode = TradingMode.PAPER_TRADING
+        bt.balance_source = BalanceSource.VIRTUAL
 
         await bt.setup_balances(initial_balance=1000.0, initial_crypto_balance=0.0)
 

@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from grid_trading_bot.config.schema import ExecutionConfig
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.order_handling.execution_strategy.live_order_execution_strategy import (
     LiveOrderExecutionStrategy,
 )
@@ -39,7 +38,7 @@ def setup_order_manager():
         order_book=order_book,
         order_execution_strategy=order_execution_strategy,
         notification_handler=notification_handler,
-        trading_mode=TradingMode.LIVE,
+        fail_fast=False,
         trading_pair="BTC/USDT",
     )
     return (

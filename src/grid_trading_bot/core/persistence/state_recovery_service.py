@@ -6,11 +6,11 @@ import json
 import logging
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
+from grid_trading_bot.core.order_handling.balance_source import BalanceSource
 from grid_trading_bot.core.order_handling.balance_tracker import _QUANTIZE_EXP, BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
@@ -100,6 +100,7 @@ class StateRecoveryService:
         order_execution_strategy: OrderExecutionStrategyInterface,
         notification_handler: NotificationHandler,
         trading_pair: str,
+        balance_source: BalanceSource,
         journal: PlacementJournal | None = None,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -112,6 +113,7 @@ class StateRecoveryService:
         self.order_execution_strategy = order_execution_strategy
         self.notification_handler = notification_handler
         self.trading_pair = trading_pair
+        self.balance_source = balance_source
         self.journal = journal if journal is not None else PlacementJournal()
 
     async def attempt_recovery(self) -> RecoveryResult:
@@ -538,7 +540,7 @@ class StateRecoveryService:
         tracker._crypto_balance = crypto_total - tracker._reserved_crypto
 
     async def _restore_balance(self, executions: list[tuple[Order, float]]) -> str:
-        if self.config_manager.config.exchange.trading_mode == TradingMode.PAPER_TRADING:
+        if self.balance_source is BalanceSource.VIRTUAL:
             await self._restore_balance_from_db(executions)
             return "db"
         await self._restore_balance_from_exchange()
@@ -546,7 +548,7 @@ class StateRecoveryService:
 
     async def _restore_balance_from_db(self, executions: list[tuple[Order, float]]) -> None:
         """
-        Paper trading keeps a virtual balance the testnet account does not reflect: it resumes from the database,
+        A virtual balance is not the exchange account's: it resumes from the database,
         then books every execution seen at restart like a live fill.
         """
         saved_balance = self.repository.load_balance_state()

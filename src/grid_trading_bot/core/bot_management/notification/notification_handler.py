@@ -6,8 +6,6 @@ import string
 
 import apprise
 
-from grid_trading_bot.config.trading_mode import TradingMode
-
 from .notification_content import NotificationType
 
 
@@ -22,12 +20,10 @@ class NotificationHandler:
     def __init__(
         self,
         urls: list[str] | None,
-        trading_mode: TradingMode,
+        enabled: bool,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.enabled = bool(urls) and trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
-        if trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING} and not urls:
-            self.logger.warning("Notifications are disabled: APPRISE_NOTIFICATION_URLS is empty.")
+        self.enabled = enabled and bool(urls)
         self.lock = asyncio.Lock()
         self.apprise_instance = apprise.Apprise() if self.enabled else None
         if self.apprise_instance is not None:

@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
@@ -160,7 +159,7 @@ async def run_backtest_bot(make_config_file):
         config_path = make_config_file(strategy_type, spacing, risk_management_overrides, execution, **grid_overrides)
         config_manager = ConfigManager(config_path)
         event_bus = EventBus()
-        notification_handler = NotificationHandler([], TradingMode.BACKTEST)
+        notification_handler = NotificationHandler([], enabled=False)
 
         bot = GridTradingBot(
             config_path=config_path,

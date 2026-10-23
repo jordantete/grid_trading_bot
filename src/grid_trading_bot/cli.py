@@ -67,8 +67,10 @@ def initialize_config(config_path: str) -> ConfigManager:
 def initialize_notification_handler(config_manager: ConfigManager) -> NotificationHandler:
     notification_urls_str = os.getenv("APPRISE_NOTIFICATION_URLS", "")
     notification_urls = [url.strip() for url in notification_urls_str.split(",") if url.strip()]
-    trading_mode = config_manager.config.exchange.trading_mode
-    return NotificationHandler(notification_urls, trading_mode)
+    sends_alerts = config_manager.config.exchange.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}
+    if sends_alerts and not notification_urls:
+        logging.warning("Notifications are disabled: APPRISE_NOTIFICATION_URLS is empty.")
+    return NotificationHandler(notification_urls, enabled=sends_alerts)
 
 
 async def run_bot(

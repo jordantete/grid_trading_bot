@@ -14,6 +14,7 @@ from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.backtest_clock import BacktestClock
+from grid_trading_bot.core.order_handling.balance_source import BalanceSource
 from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_factory import (
     OrderExecutionStrategyFactory,
@@ -108,9 +109,11 @@ class GridTradingBot:
             order_validator = OrderValidator()
             fee_calculator = FeeCalculator(self.config_manager)
 
+            fail_fast = self.trading_mode == TradingMode.BACKTEST
+            balance_source = BalanceSource.EXCHANGE if self.trading_mode == TradingMode.LIVE else BalanceSource.VIRTUAL
             self.balance_tracker = BalanceTracker(
                 fee_calculator=fee_calculator,
-                trading_mode=self.trading_mode,
+                balance_source=balance_source,
                 base_currency=base_currency,
                 quote_currency=quote_currency,
             )
@@ -164,6 +167,7 @@ class GridTradingBot:
                     order_execution_strategy=order_execution_strategy,
                     notification_handler=self.notification_handler,
                     trading_pair=trading_pair,
+                    balance_source=balance_source,
                     journal=journal,
                 )
 
@@ -174,7 +178,7 @@ class GridTradingBot:
                 order_book,
                 order_execution_strategy,
                 self.notification_handler,
-                self.trading_mode,
+                fail_fast,
                 trading_pair,
                 state_store=self.state_persistence_service,
                 journal=journal,

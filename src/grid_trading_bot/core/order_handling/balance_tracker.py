@@ -3,13 +3,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 import logging
 
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
 from ..validation.exceptions import (
     InsufficientBalanceError,
     InsufficientCryptoBalanceError,
 )
+from .balance_source import BalanceSource
 from .fee_calculator import Fee, FeeCalculator
 from .order import Order, OrderSide, OrderStatus
 from .pnl_ledger import PnlLedger
@@ -31,7 +31,7 @@ class BalanceTracker:
     def __init__(
         self,
         fee_calculator: FeeCalculator,
-        trading_mode: TradingMode,
+        balance_source: BalanceSource,
         base_currency: str,
         quote_currency: str,
     ):
@@ -40,13 +40,13 @@ class BalanceTracker:
 
         Args:
             fee_calculator: The fee calculator instance for calculating trading fees.
-            trading_mode: "BACKTEST", "LIVE" or "PAPER_TRADING".
+            balance_source: Whether the starting balances come from the config or from the exchange.
             base_currency: The base currency symbol.
             quote_currency: The quote currency symbol.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.fee_calculator: FeeCalculator = fee_calculator
-        self.trading_mode: TradingMode = trading_mode
+        self.balance_source: BalanceSource = balance_source
         self.base_currency: str = base_currency
         self.quote_currency: str = quote_currency
 
@@ -90,25 +90,24 @@ class BalanceTracker:
         exchange_service=ExchangeInterface,
     ):
         """
-        Sets up the balances based on trading mode.
+        Sets up the balances from the configured source.
 
-        For BACKTEST and PAPER_TRADING modes, sets initial balances from config.
-        For LIVE mode, fetches balances dynamically from the exchange.
+        A virtual source takes the initial balances from the config; an exchange source fetches them from the exchange.
 
         Args:
-            initial_balance: The initial fiat balance for backtest and paper trading modes.
-            initial_crypto_balance: The initial crypto balance for backtest and paper trading modes.
-            exchange_service: The exchange instance (required for live trading).
+            initial_balance: The initial fiat balance of a virtual source.
+            initial_crypto_balance: The initial crypto balance of a virtual source.
+            exchange_service: The exchange instance (required for an exchange source).
         """
         self._reserved_fiat = Decimal("0")
         self._reserved_crypto = Decimal("0")
         self._ledger = PnlLedger()
         self._peak_value = None
 
-        if self.trading_mode == TradingMode.BACKTEST or self.trading_mode == TradingMode.PAPER_TRADING:
+        if self.balance_source is BalanceSource.VIRTUAL:
             self._balance = self._to_decimal(initial_balance)
             self._crypto_balance = self._to_decimal(initial_crypto_balance)
-        elif self.trading_mode == TradingMode.LIVE:
+        else:
             self._balance, self._crypto_balance = await self._fetch_live_balances(exchange_service)
 
     async def _fetch_live_balances(

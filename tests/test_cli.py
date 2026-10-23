@@ -376,3 +376,34 @@ def test_resume_clears_the_own_halt_and_the_markers_beside_without_a_hash(tmp_pa
     assert result.exit_code == 0
     assert not os.path.exists(files.halt_path)
     assert not os.path.exists(legacy)
+
+
+@pytest.mark.parametrize("mode", ["live", "paper_trading"])
+@pytest.mark.parametrize("urls", ["", " , "])
+def test_live_without_urls_warns_once(tmp_path, valid_config, caplog, monkeypatch, mode, urls):
+    monkeypatch.setenv("APPRISE_NOTIFICATION_URLS", urls)
+    config_manager = _config_manager(_write_config(tmp_path, valid_config, mode))
+
+    handler = cli.initialize_notification_handler(config_manager)
+
+    warnings = [r for r in caplog.records if "Notifications are disabled" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "APPRISE_NOTIFICATION_URLS is empty." in warnings[0].getMessage()
+    assert handler.enabled is False
+
+
+def test_a_backtest_without_urls_does_not_warn(tmp_path, valid_config, caplog):
+    config_manager = _config_manager(_write_config(tmp_path, valid_config, "backtest"))
+
+    handler = cli.initialize_notification_handler(config_manager)
+
+    assert "Notifications are disabled" not in caplog.text
+    assert handler.enabled is False
+
+
+@pytest.mark.parametrize(("mode", "enabled"), [("live", True), ("paper_trading", True), ("backtest", False)])
+def test_only_live_and_paper_send_alerts(tmp_path, valid_config, monkeypatch, mode, enabled):
+    monkeypatch.setenv("APPRISE_NOTIFICATION_URLS", "json://localhost")
+    config_manager = _config_manager(_write_config(tmp_path, valid_config, mode))
+
+    assert cli.initialize_notification_handler(config_manager).enabled is enabled

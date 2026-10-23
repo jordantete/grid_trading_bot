@@ -9,6 +9,7 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
+from grid_trading_bot.core.order_handling.balance_source import BalanceSource
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.placement_journal import new_client_order_id
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
@@ -196,6 +197,7 @@ def service(
         order_execution_strategy=mock_order_execution_strategy,
         notification_handler=mock_notification_handler,
         trading_pair="ETH/USDT",
+        balance_source=BalanceSource.EXCHANGE,
     )
 
 
@@ -1129,9 +1131,8 @@ class TestStateRecoveryService:
     async def test_a_paper_bot_state_without_its_balance_state_refuses_and_says_so(
         self, service, mock_repository, config_manager, valid_config
     ):
-        config_manager.config = bot_config_from(
-            valid_config, {"exchange": {"trading_mode": "paper_trading"}, "trading_settings": {"timeframe": "1h"}}
-        )
+        service.balance_source = BalanceSource.VIRTUAL
+        config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1h"}})
         _set_valid_bot_state(mock_repository, config_manager)
         mock_repository.load_balance_state.return_value = None
 

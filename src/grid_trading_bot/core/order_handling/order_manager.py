@@ -7,7 +7,6 @@ import logging
 import time
 from typing import Any
 
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.exceptions import BookingError, OrderRefusedError
@@ -48,7 +47,7 @@ class OrderManager:
         order_book: OrderBook,
         order_execution_strategy: OrderExecutionStrategyInterface,
         notification_handler: NotificationHandler,
-        trading_mode: TradingMode,
+        fail_fast: bool,
         trading_pair: str,
         state_store: StateStore | None = None,
         journal: PlacementJournal | None = None,
@@ -61,7 +60,7 @@ class OrderManager:
         self.order_book = order_book
         self.order_execution_strategy = order_execution_strategy
         self.notification_handler = notification_handler
-        self.trading_mode: TradingMode = trading_mode
+        self.fail_fast = fail_fast
         self.trading_pair = trading_pair
         self.state_store = state_store
         self.journal = journal if journal is not None else PlacementJournal()
@@ -594,8 +593,8 @@ class OrderManager:
             await self._handle_order_completion(local, grid_level)
         except Exception as e:
             self.logger.error(f"Error while handling filled order {local.identifier}: {e}", exc_info=True)
-            # Send errors never reach this clause, so what does is a bug that must fail a backtest run.
-            if self.trading_mode == TradingMode.BACKTEST:
+            # Send errors never reach this clause, so what does is a bug that must fail a fail-fast run.
+            if self.fail_fast:
                 raise
             self._notify(
                 NotificationType.ERROR_OCCURRED,
@@ -932,7 +931,7 @@ class OrderManager:
                 try:
                     sold = await self._liquidation_attempt(current_price, exchange_cap)
                 except BookingError as e:
-                    if self.trading_mode == TradingMode.BACKTEST:
+                    if self.fail_fast:
                         raise
                     booking_error = e
                 except (DataFetchError, OrderRefusedError) as e:
@@ -940,7 +939,7 @@ class OrderManager:
                 except Exception as e:
                     error = e
                     self.logger.error(f"Liquidation attempt {failures + 1} raised: {e}", exc_info=True)
-                    if self.trading_mode == TradingMode.BACKTEST:
+                    if self.fail_fast:
                         raise
                 finally:
                     await self._save_state()
@@ -1049,7 +1048,7 @@ class OrderManager:
             self.logger.warning(f"Could not read the exchange balance for the next liquidation attempt: {e}")
         except Exception as e:
             self.logger.error(f"Reading the exchange balance for the next attempt failed: {e}", exc_info=True)
-            if self.trading_mode == TradingMode.BACKTEST:
+            if self.fail_fast:
                 raise
         return fallback
 

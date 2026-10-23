@@ -5,9 +5,9 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
+from grid_trading_bot.core.order_handling.balance_source import BalanceSource
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
 from grid_trading_bot.core.order_handling.order import OrderSide
@@ -71,7 +71,7 @@ def build_stack(
     grid.initialize_grids_and_levels()
     balances = BalanceTracker(
         fee_calculator=FeeCalculator(config),
-        trading_mode=TradingMode(trading_mode),
+        balance_source=BalanceSource.EXCHANGE if trading_mode == "live" else BalanceSource.VIRTUAL,
         base_currency="BTC",
         quote_currency="USDT",
     )
@@ -89,7 +89,7 @@ def build_stack(
         book,
         execution,
         notifications,
-        TradingMode(trading_mode),
+        trading_mode == "backtest",
         "BTC/USDT",
         state_store=store,
         journal=journal,

@@ -4,7 +4,6 @@ import pandas as pd
 import pytest
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
@@ -81,7 +80,7 @@ async def _run(config: dict, event_bus: EventBus | None = None):
     bot = GridTradingBot(
         config_path="<fidelity>",
         config_manager=ConfigManager.from_dict(config),
-        notification_handler=NotificationHandler([], TradingMode.BACKTEST),
+        notification_handler=NotificationHandler([], enabled=False),
         event_bus=event_bus,
         no_plot=True,
     )

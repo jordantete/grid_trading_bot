@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
 from grid_trading_bot.core.order_handling.order import OrderSide
@@ -87,13 +86,13 @@ class TestMarketConstraintsEnforcement:
 
 
 class TestTakeProfitStopLoss:
-    # ── execute_take_profit_or_stop_loss_order (every mode) ─────────────
+    # ── execute_take_profit_or_stop_loss_order (both failure policies) ─────────────
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("trading_mode", [TradingMode.BACKTEST, TradingMode.PAPER_TRADING, TradingMode.LIVE])
-    async def test_tp_delegates_to_close_positions(self, setup_order_manager, trading_mode):
+    @pytest.mark.parametrize("fail_fast", [True, False])
+    async def test_tp_delegates_to_close_positions(self, setup_order_manager, fail_fast):
         manager, *_ = setup_order_manager
-        manager.trading_mode = trading_mode
+        manager.fail_fast = fail_fast
         manager.close_positions = AsyncMock()
 
         await manager.execute_take_profit_or_stop_loss_order(current_price=100.0, take_profit_order=True)
@@ -101,10 +100,10 @@ class TestTakeProfitStopLoss:
         manager.close_positions.assert_awaited_once_with(liquidate=True, current_price=100.0)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("trading_mode", [TradingMode.BACKTEST, TradingMode.PAPER_TRADING, TradingMode.LIVE])
-    async def test_sl_delegates_to_close_positions_and_notifies(self, setup_order_manager, trading_mode):
+    @pytest.mark.parametrize("fail_fast", [True, False])
+    async def test_sl_delegates_to_close_positions_and_notifies(self, setup_order_manager, fail_fast):
         manager, _, _, _, _, _, notification_handler = setup_order_manager
-        manager.trading_mode = trading_mode
+        manager.fail_fast = fail_fast
 
         async def liquidated(**_kwargs):
             manager._liquidated = True
