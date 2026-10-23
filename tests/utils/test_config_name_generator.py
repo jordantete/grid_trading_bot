@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 import re
 from unittest.mock import patch
@@ -5,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from tests.fakes.config import config_manager_from
 
+from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.utils.config_name_generator import generate_config_name
 
 
@@ -84,3 +86,33 @@ def test_the_name_feeds_the_alloy_filename_labels(valid_config, top, bottom, exp
         "grid_size": "8",
         "grid_range": expected_range,
     }
+
+
+def _without_range(raw):
+    dynamic = copy.deepcopy(raw)
+    del dynamic["grid_strategy"]["range"]
+    dynamic["grid_strategy"]["spacing"] = "arithmetic"
+    dynamic["grid_strategy"]["dynamic_spacing"] = {
+        "enabled": True,
+        "atr_period": 14,
+        "atr_spacing_multiplier": 1.0,
+        "regrid_threshold": 0.3,
+        "cooldown_bars": 60,
+    }
+    return dynamic
+
+
+def test_a_dynamic_grid_without_range_is_named_range_dynamic(valid_config):
+    config_manager = ConfigManager.from_dict(_without_range(valid_config))
+
+    assert "_rangeDynamic_" in generate_config_name(config_manager)
+
+
+def test_the_alloy_regex_reads_a_dynamic_grid_name(valid_config):
+    config_manager = ConfigManager.from_dict(_without_range(valid_config))
+
+    name = generate_config_name(config_manager)
+    match = _alloy_filename_regex().search(f"/app/logs/{name}.log")
+
+    assert match is not None, name
+    assert match.group("grid_range") == "Dynamic"

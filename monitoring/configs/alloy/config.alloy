@@ -29,7 +29,7 @@ loki.process "bot_logs" {
   // Extract labels from the log filename
   stage.regex {
     source     = "filename"
-    expression = "/bot_(?P<base_currency>[A-Z]+)_(?P<quote_currency>[A-Z]+)_(?P<trading_mode>[A-Z_]+)_strategy(?P<strategy_type>[A-Z_]+)_spacing(?P<spacing_type>[A-Z]+)_size(?P<grid_size>\\d+)_range(?P<grid_range>\\d+(?:\\.\\d+)?-\\d+(?:\\.\\d+)?)_.*\\.log$"
+    expression = "/bot_(?P<base_currency>[A-Z]+)_(?P<quote_currency>[A-Z]+)_(?P<trading_mode>[A-Z_]+)_strategy(?P<strategy_type>[A-Z_]+)_spacing(?P<spacing_type>[A-Z]+)_size(?P<grid_size>\\d+)_range(?P<grid_range>\\d+(?:\\.\\d+)?-\\d+(?:\\.\\d+)?|Dynamic)_.*\\.log$"
   }
 
   // Derive trading_pair from base/quote

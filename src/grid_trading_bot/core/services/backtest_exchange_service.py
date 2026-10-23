@@ -75,13 +75,17 @@ class BacktestExchangeService(ExchangeInterface):
             total_candles_needed = (until - since) // self._get_timeframe_in_ms(timeframe)
 
             if total_candles_needed > candles_per_request:
-                return self._fetch_ohlcv_in_chunks(pair, timeframe, since, until, candles_per_request)
+                df = self._fetch_ohlcv_in_chunks(pair, timeframe, since, until, candles_per_request)
             else:
-                return self._fetch_ohlcv_single_batch(pair, timeframe, since, until)
+                df = self._fetch_ohlcv_single_batch(pair, timeframe, since, until, candles_per_request)
         except ccxt.NetworkError as e:
             raise DataFetchError(f"Network issue occurred while fetching OHLCV data: {e!s}") from e
         except ccxt.BaseError as e:
             raise DataFetchError(f"Exchange-specific error occurred: {e!s}") from e
+
+        if df.empty:
+            raise DataFetchError(f"No candles for {pair} between {start_date} and {end_date}")
+        return df
 
     def _load_ohlcv_from_file(
         self,
@@ -94,8 +98,8 @@ class BacktestExchangeService(ExchangeInterface):
             df = pd.read_csv(file_path, parse_dates=["timestamp"])
             df["timestamp"] = pd.to_datetime(df["timestamp"])
             df.set_index("timestamp", inplace=True)
-            start_timestamp = pd.to_datetime(start_date).tz_localize(None)
-            end_timestamp = pd.to_datetime(end_date).tz_localize(None)
+            start_timestamp = self._to_naive_utc(start_date)
+            end_timestamp = self._to_naive_utc(end_date)
             filtered_df = df.loc[start_timestamp:end_timestamp]
         except (FileNotFoundError, pd.errors.ParserError, pd.errors.EmptyDataError, KeyError, ValueError) as e:
             raise DataFetchError(f"Failed to load OHLCV data from file: {e!s}") from e
@@ -105,14 +109,20 @@ class BacktestExchangeService(ExchangeInterface):
         self.logger.debug(f"Loaded {len(filtered_df)} rows of OHLCV data from file.")
         return filtered_df
 
+    @staticmethod
+    def _to_naive_utc(date: str) -> pd.Timestamp:
+        timestamp = pd.Timestamp(date)
+        return timestamp.tz_convert("UTC").tz_localize(None) if timestamp.tzinfo else timestamp
+
     def _fetch_ohlcv_single_batch(
         self,
         pair: str,
         timeframe: str,
         since: int,
         until: int,
+        candles_per_request: int,
     ) -> pd.DataFrame:
-        ohlcv = self._fetch_with_retry(self.exchange.fetch_ohlcv, pair, timeframe, since)
+        ohlcv = self._fetch_with_retry(self.exchange.fetch_ohlcv, pair, timeframe, since, limit=candles_per_request)
         return self._format_ohlcv(ohlcv, until)
 
     def _fetch_ohlcv_in_chunks(

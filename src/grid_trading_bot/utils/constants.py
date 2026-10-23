@@ -4,8 +4,8 @@ CANDLE_LIMITS = {
     "kraken": 720,
     "bitfinex": 5000,
     "bitstamp": 1000,
-    "huobi": 2000,
-    "okex": 1440,
+    "htx": 1000,  # ccxt htx spot caps `size` at 1000 (2000 is for contracts)
+    "okx": 300,  # ccxt okx caps `limit` at 300 for regular candles
     "bybit": 200,
     "bittrex": 500,
     "poloniex": 500,

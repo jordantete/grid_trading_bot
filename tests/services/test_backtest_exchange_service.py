@@ -15,6 +15,38 @@ from grid_trading_bot.core.services.exceptions import (
 )
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
+HOUR_MS = 3_600_000
+START_MS = 1_704_067_200_000  # 2024-01-01T00:00:00Z
+
+
+class CappingExchange:
+    """A ccxt exchange stand-in that, like the real ones, returns at most `max_per_call` candles."""
+
+    def __init__(self, max_per_call: int, candles: list[list[float]]):
+        self.timeframes = {"1h": "1h"}
+        self.max_per_call = max_per_call
+        self.candles = candles
+
+    @staticmethod
+    def parse8601(date: str) -> int:
+        return int(pd.Timestamp(date).timestamp() * 1000)
+
+    def load_markets(self):
+        return {"BTC/USDT": {}}
+
+    def fetch_ohlcv(self, pair, timeframe, since=None, limit=None):
+        available = [candle for candle in self.candles if candle[0] >= since]
+        return available[: min(limit or 500, self.max_per_call)]
+
+
+def _hourly_candles(count: int) -> list[list[float]]:
+    return [[START_MS + i * HOUR_MS, 1, 2, 0.5, 1.5, 10] for i in range(count)]
+
+
+def _capping_exchange(monkeypatch, name: str, max_per_call: int, candle_count: int) -> None:
+    candles = _hourly_candles(candle_count)
+    monkeypatch.setattr(ccxt, name, lambda: CappingExchange(max_per_call, candles), raising=False)
+
 
 class TestBacktestExchangeService:
     @pytest.fixture
@@ -95,6 +127,64 @@ class TestBacktestExchangeService:
             f"No candles for SOL/USDT between 2025-01-01T00:00:00Z and 2025-01-02T00:00:00Z in {csv}"
         )
 
+    def test_an_empty_ccxt_range_raises_data_fetch_error(self, valid_config, monkeypatch):
+        _capping_exchange(monkeypatch, "binance", 1000, 0)
+        service = BacktestExchangeService(
+            config_manager_from(valid_config, {"trading_settings": {"historical_data_file": None}})
+        )
+
+        with pytest.raises(
+            DataFetchError, match=r"^No candles for BTC/USDT between 2024-01-01T00:00:00Z and 2024-01-02T00:00:00Z$"
+        ):
+            service.fetch_ohlcv("BTC/USDT", "1h", "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z")
+
+    @pytest.mark.parametrize(
+        ("exchange_name", "max_per_call", "candle_count"),
+        [("binance", 1000, 600), ("htx", 1000, 600), ("okx", 300, 400)],
+    )
+    def test_every_candle_of_the_range_arrives_whatever_the_exchange_cap(
+        self, valid_config, monkeypatch, exchange_name, max_per_call, candle_count
+    ):
+        _capping_exchange(monkeypatch, exchange_name, max_per_call, candle_count)
+        service = BacktestExchangeService(
+            config_manager_from(
+                valid_config, {"exchange": {"name": exchange_name}, "trading_settings": {"historical_data_file": None}}
+            )
+        )
+        end_ms = START_MS + candle_count * HOUR_MS
+
+        df = service.fetch_ohlcv(
+            "BTC/USDT", "1h", "2024-01-01T00:00:00Z", pd.Timestamp(end_ms, unit="ms").strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
+
+        assert list(df.index) == [pd.Timestamp(candle[0], unit="ms") for candle in _hourly_candles(candle_count)]
+
+    def _hourly_csv(self, tmp_path):
+        csv = tmp_path / "hourly.csv"
+        rows = [f"{ts},1,2,0.5,1.5,10" for ts in pd.date_range("2023-12-31 20:00", "2024-01-01 03:00", freq="1h")]
+        csv.write_text("timestamp,open,high,low,close,volume\n" + "\n".join(rows) + "\n")
+        return csv
+
+    def test_an_offset_date_is_read_as_utc(self, tmp_path, valid_config):
+        csv = self._hourly_csv(tmp_path)
+        service = BacktestExchangeService(
+            config_manager_from(valid_config, {"trading_settings": {"historical_data_file": str(csv)}})
+        )
+
+        df = service.fetch_ohlcv("BTC/USDT", "1h", "2024-01-01T00:00:00+02:00", "2024-01-01T01:00:00+02:00")
+
+        assert list(df.index) == [pd.Timestamp("2023-12-31 22:00"), pd.Timestamp("2023-12-31 23:00")]
+
+    def test_a_naive_date_keeps_its_meaning(self, tmp_path, valid_config):
+        csv = self._hourly_csv(tmp_path)
+        service = BacktestExchangeService(
+            config_manager_from(valid_config, {"trading_settings": {"historical_data_file": str(csv)}})
+        )
+
+        df = service.fetch_ohlcv("BTC/USDT", "1h", "2024-01-01T00:00:00", "2024-01-01T01:00:00")
+
+        assert list(df.index) == [pd.Timestamp("2024-01-01 00:00"), pd.Timestamp("2024-01-01 01:00")]
+
     @patch("pandas.read_csv")
     def test_load_ohlcv_file_not_found(self, mock_read_csv, config_manager):
         mock_read_csv.side_effect = FileNotFoundError("File not found")
@@ -161,7 +251,7 @@ class TestBacktestExchangeService:
 
         service = BacktestExchangeService(config_manager)
 
-        df = service._fetch_ohlcv_single_batch("BTC/USD", "1d", 1622505600000, 1622592000000)
+        df = service._fetch_ohlcv_single_batch("BTC/USD", "1d", 1622505600000, 1622592000000, 1000)
 
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 1, "Expected 1 row of data in DataFrame"

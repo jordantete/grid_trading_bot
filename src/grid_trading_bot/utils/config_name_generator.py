@@ -30,11 +30,10 @@ def generate_config_name(config_manager: ConfigManager) -> str:
     grid_spacing_type = grid_strategy.spacing.name
     grid_size = grid_strategy.num_grids
     grid_range = grid_strategy.range
-    grid_top = _bound(None if grid_range is None else grid_range.top)
-    grid_bottom = _bound(None if grid_range is None else grid_range.bottom)
+    range_part = "Dynamic" if grid_range is None else f"{_bound(grid_range.bottom)}-{_bound(grid_range.top)}"
     start_time = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M")
 
     return (
         f"bot_{trading_pair}_{trading_mode}_strategy{grid_strategy_type}_"
-        f"spacing{grid_spacing_type}_size{grid_size}_range{grid_bottom}-{grid_top}_{start_time}"
+        f"spacing{grid_spacing_type}_size{grid_size}_range{range_part}_{start_time}"
     )

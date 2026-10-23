@@ -2,7 +2,9 @@ import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import ccxt
 from click.testing import CliRunner
+import pandas as pd
 import pytest
 
 from grid_trading_bot import cli
@@ -265,6 +267,40 @@ def test_a_backtest_whose_dates_hold_no_candle_exits_1_and_saves_no_results(tmp_
 
     assert result.exit_code == 1
     assert not results_path.exists()
+
+
+def test_an_empty_ccxt_range_exits_1_through_the_cli(tmp_path, valid_config, monkeypatch, caplog):
+    class EmptyExchange:
+        def __init__(self):
+            self.timeframes = {"1h": "1h"}
+
+        @staticmethod
+        def parse8601(date):
+            return int(pd.Timestamp(date).timestamp() * 1000)
+
+        def load_markets(self):
+            return {"ETH/USDT": {}}
+
+        def fetch_ohlcv(self, pair, timeframe, since=None, limit=None):
+            return []
+
+    monkeypatch.setattr(ccxt, "binance", EmptyExchange)
+    config = json.loads(json.dumps(valid_config))
+    config["trading_settings"]["historical_data_file"] = None
+    config["trading_settings"]["timeframe"] = "1h"
+    config["trading_settings"]["period"] = {"start_date": "2024-01-01T00:00:00Z", "end_date": "2024-01-02T00:00:00Z"}
+    config["logging"] = {"log_level": "INFO", "log_to_file": False}
+    path = tmp_path / "config_backtest.json"
+    path.write_text(json.dumps(config))
+    results_path = tmp_path / "results.json"
+
+    result = CliRunner().invoke(
+        cli.main, ["run", "--config", str(path), "--no-plot", "--save_performance_results", str(results_path)]
+    )
+
+    assert result.exit_code == 1
+    assert not results_path.exists()
+    assert "No candles for ETH/USDT between 2024-01-01T00:00:00Z and 2024-01-02T00:00:00Z" in caplog.text
 
 
 def test_the_traceback_of_a_failed_bot_reaches_that_bot_log_file_only(tmp_path, valid_config, monkeypatch):
