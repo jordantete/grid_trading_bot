@@ -594,145 +594,26 @@ class TestLiveExchangeService:
         mock_ccxtpro.binance.return_value = mock_exchange_instance
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
 
-        service.connection_active = True
+        service.ticker_feed.connection_active = True
 
         await service.close_connection()
-        assert service.connection_active is False
+        assert service.ticker_feed.connection_active is False
 
-    @pytest.fixture
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def setup_websocket_test(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance):
-        mock_getattr.return_value = mock_ccxtpro.binance
-        mock_ccxtpro.binance.return_value = mock_exchange_instance
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-        service.connection_active = True
-        on_ticker_update = AsyncMock()
-        return service, mock_exchange_instance, on_ticker_update
-
-    @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    async def test_subscribe_to_ticker_updates_success(self, setup_websocket_test):
-        service, mock_exchange_instance, on_ticker_update = setup_websocket_test
-        mock_exchange_instance.watch_ticker = AsyncMock(
-            side_effect=[
-                {"last": 50000.0},
-                asyncio.CancelledError(),
-            ],
-        )
-
-        await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
-
-        on_ticker_update.assert_awaited_once_with(50000.0)
-        assert not service.connection_active
-
-    @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    async def test_subscribe_to_ticker_updates_skips_invalid_price(self, setup_websocket_test):
-        service, mock_exchange_instance, on_ticker_update = setup_websocket_test
-        mock_exchange_instance.watch_ticker = AsyncMock(
-            side_effect=[
-                {"last": None},
-                {"last": 50000.0},
-                asyncio.CancelledError(),
-            ],
-        )
-
-        await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
-
-        on_ticker_update.assert_awaited_once_with(50000.0)
-        assert not service.connection_active
-
-    @pytest.mark.asyncio
-    @pytest.mark.timeout(2)
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    @patch("grid_trading_bot.core.services.live_exchange_service.asyncio.sleep", new_callable=AsyncMock)
-    async def test_subscribe_to_ticker_updates_network_error(
-        self,
-        mock_sleep,
-        mock_getattr,
-        mock_ccxtpro,
-        config_manager,
-        setup_env_vars,
-        mock_exchange_instance,
+    def test_an_accepted_price_updates_the_feed_time_read_through_the_service(
+        self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars, mock_exchange_instance
     ):
         mock_getattr.return_value = mock_ccxtpro.binance
         mock_ccxtpro.binance.return_value = mock_exchange_instance
-        mock_exchange_instance.watch_ticker = AsyncMock(
-            side_effect=[
-                ccxt.NetworkError("Network issue"),
-                asyncio.CancelledError(),
-            ],
-        )
-
-        on_ticker_update = AsyncMock()
         service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-        service.connection_active = True
-        service.websocket_max_retries = 1
 
-        with patch.object(service.logger, "error") as mock_logger_error:
-            with pytest.raises(DataFetchError, match="failed after 1 retries"):
-                await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
+        assert service.last_price is None
+        assert service.last_price_update_ts is None
+        service.ticker_feed.validate_price(100.0, "BTC/USDT")
 
-            mock_logger_error.assert_any_call(
-                "Error connecting to WebSocket for BTC/USD: Network issue. Retrying in 5 seconds (1/1).",
-            )
-
-            on_ticker_update.assert_not_awaited()
-
-        assert not service.connection_active
-        assert mock_exchange_instance.watch_ticker.await_count == 1
-
-    @pytest.mark.asyncio
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    async def test_subscribe_to_ticker_updates_max_retries_exceeded(
-        self,
-        mock_getattr,
-        mock_ccxtpro,
-        config_manager,
-        setup_env_vars,
-        mock_exchange_instance,
-    ):
-        mock_getattr.return_value = mock_ccxtpro.binance
-        mock_ccxtpro.binance.return_value = mock_exchange_instance
-        mock_exchange_instance.watch_ticker = AsyncMock(side_effect=ccxt.NetworkError("Network issue"))
-
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-        service.connection_active = True
-        service.websocket_max_retries = 2
-        on_ticker_update = AsyncMock()
-
-        with pytest.raises(DataFetchError, match="failed after 2 retries"):
-            await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
-
-        assert not service.connection_active
-        assert mock_exchange_instance.watch_ticker.await_count == 2
-
-    @pytest.mark.asyncio
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    async def test_the_ticker_loop_never_closes_the_exchange(
-        self,
-        mock_getattr,
-        mock_ccxtpro,
-        config_manager,
-        setup_env_vars,
-        mock_exchange_instance,
-    ):
-        mock_getattr.return_value = mock_ccxtpro.binance
-        mock_ccxtpro.binance.return_value = mock_exchange_instance
-        mock_exchange_instance.watch_ticker = AsyncMock(side_effect=asyncio.CancelledError())
-        mock_exchange_instance.close = AsyncMock()
-
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-        service.connection_active = True
-        on_ticker_update = AsyncMock()
-
-        await service._subscribe_to_ticker_updates("BTC/USD", on_ticker_update, 0.1)
-
-        mock_exchange_instance.close.assert_not_awaited()
+        assert service.last_price == 100.0
+        assert service.last_price_update_ts == service.ticker_feed.last_price_update_ts is not None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("exchange_name", ["binance", "bybit", "okx"])
@@ -867,94 +748,6 @@ class TestLiveExchangeService:
                 await service.fetch_order("123", "BTC/USD")
 
         assert service.circuit_breaker.state == CircuitState.CLOSED
-
-    # ── _validate_price ────────────────────────────────────────────────
-
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_validate_price_valid(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
-        mock_ccxtpro.binance.return_value = Mock()
-        mock_getattr.return_value = mock_ccxtpro.binance
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-
-        result = service._validate_price(50000.0, "BTC/USD")
-        assert result == 50000.0
-        assert service._last_known_price == 50000.0
-
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_validate_price_none(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
-        mock_ccxtpro.binance.return_value = Mock()
-        mock_getattr.return_value = mock_ccxtpro.binance
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-
-        assert service._validate_price(None, "BTC/USD") is None
-
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_validate_price_nan(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
-        mock_ccxtpro.binance.return_value = Mock()
-        mock_getattr.return_value = mock_ccxtpro.binance
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-
-        assert service._validate_price(float("nan"), "BTC/USD") is None
-
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_validate_price_negative(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
-        mock_ccxtpro.binance.return_value = Mock()
-        mock_getattr.return_value = mock_ccxtpro.binance
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-
-        assert service._validate_price(-100.0, "BTC/USD") is None
-
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_validate_price_zero(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
-        mock_ccxtpro.binance.return_value = Mock()
-        mock_getattr.return_value = mock_ccxtpro.binance
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-
-        assert service._validate_price(0.0, "BTC/USD") is None
-
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_validate_price_infinity(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
-        mock_ccxtpro.binance.return_value = Mock()
-        mock_getattr.return_value = mock_ccxtpro.binance
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-
-        assert service._validate_price(float("inf"), "BTC/USD") is None
-
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_validate_price_excessive_deviation(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
-        mock_ccxtpro.binance.return_value = Mock()
-        mock_getattr.return_value = mock_ccxtpro.binance
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-
-        # Set a known price first
-        service._last_known_price = 50000.0
-
-        # 51% deviation should be rejected
-        assert service._validate_price(100000.0, "BTC/USD") is None
-
-        # 40% deviation should be accepted
-        result = service._validate_price(70000.0, "BTC/USD")
-        assert result == 70000.0
-
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def test_last_price_follows_accepted_prices_only(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
-        mock_ccxtpro.binance.return_value = Mock()
-        mock_getattr.return_value = mock_ccxtpro.binance
-        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
-
-        assert service.last_price is None
-        service._validate_price(50000.0, "BTC/USD")
-        service._validate_price(100000.0, "BTC/USD")  # rejected: 100 % deviation
-
-        assert service.last_price == 50000.0
 
     @pytest.mark.asyncio
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
@@ -1356,59 +1149,6 @@ class TestFetchRecentOhlcv:
             await service.fetch_recent_ohlcv("BTC/USDT", "1m", limit=2)
 
 
-class TestDeviationAnchorRelease:
-    @pytest.fixture
-    def config_manager(self, valid_config):
-        return config_manager_from(
-            valid_config, {"exchange": {"name": "binance", "trading_mode": "live", "post_only": False}}
-        )
-
-    @pytest.fixture
-    def setup_env_vars(self, monkeypatch):
-        monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
-        monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
-
-    @pytest.fixture
-    @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
-    @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
-    def exchange_service(self, mock_getattr, mock_ccxtpro, config_manager, setup_env_vars):
-        mock_ccxtpro.binance.return_value = AsyncMock()
-        mock_getattr.return_value = mock_ccxtpro.binance
-        return LiveExchangeService(config_manager, is_paper_trading_activated=False)
-
-    def test_reanchors_after_five_consecutive_rejections(self, exchange_service):
-        exchange_service._last_known_price = 100.0
-        for _ in range(4):
-            assert exchange_service._validate_price(200.0, "SOL/USDT") is None
-        assert exchange_service._validate_price(200.0, "SOL/USDT") == 200.0
-        assert exchange_service._last_known_price == 200.0
-
-    def test_accepted_price_resets_rejection_counter(self, exchange_service):
-        exchange_service._last_known_price = 100.0
-        for _ in range(3):
-            exchange_service._validate_price(200.0, "SOL/USDT")
-        exchange_service._validate_price(101.0, "SOL/USDT")  # accepted
-        for _ in range(4):
-            assert exchange_service._validate_price(200.0, "SOL/USDT") is None  # counter restarted
-
-    def test_invalid_rejections_do_not_touch_counter(self, exchange_service):
-        exchange_service._last_known_price = 100.0
-        for _ in range(3):
-            exchange_service._validate_price(200.0, "SOL/USDT")
-        # None/non-numeric/non-finite/non-positive rejections must not advance the counter
-        for bad_value in (None, "not-a-number", float("nan"), float("inf"), -5.0, 0.0):
-            assert exchange_service._validate_price(bad_value, "SOL/USDT") is None
-        # counter should still be at 3, so one more deviation rejection stays rejected...
-        assert exchange_service._validate_price(200.0, "SOL/USDT") is None
-        # ...and the 5th deviation rejection re-anchors
-        assert exchange_service._validate_price(200.0, "SOL/USDT") == 200.0
-
-    def test_accepted_price_records_timestamp(self, exchange_service):
-        assert exchange_service.last_price_update_ts is None
-        exchange_service._validate_price(100.0, "SOL/USDT")
-        assert exchange_service.last_price_update_ts is not None
-
-
 class TestWebSocketFailureHandling:
     @pytest.fixture
     def config_manager(self, valid_config):
@@ -1432,40 +1172,42 @@ class TestWebSocketFailureHandling:
     @pytest.mark.asyncio
     @pytest.mark.timeout(5)
     async def test_generic_exceptions_respect_max_retries_and_raise(self, exchange_service):
-        exchange_service.websocket_max_retries = 2
-        exchange_service.websocket_retry_base_delay = 0
+        exchange_service.ticker_feed.websocket_max_retries = 2
+        exchange_service.ticker_feed.websocket_retry_base_delay = 0
         exchange_service.exchange.watch_ticker = AsyncMock(side_effect=RuntimeError("session closed"))
         exchange_service.exchange.close = AsyncMock()
 
         with pytest.raises(DataFetchError, match="failed after"):
             await exchange_service.listen_to_ticker_updates("SOL/USDT", AsyncMock(), 0.0)
 
-        assert exchange_service.connection_active is False
+        assert exchange_service.ticker_feed.connection_active is False
         exchange_service.exchange.close.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(5)
     async def test_network_error_exhaustion_raises(self, exchange_service):
-        exchange_service.websocket_max_retries = 2
-        exchange_service.websocket_retry_base_delay = 0
+        exchange_service.ticker_feed.websocket_max_retries = 2
+        exchange_service.ticker_feed.websocket_retry_base_delay = 0
         exchange_service.exchange.watch_ticker = AsyncMock(side_effect=ccxt.NetworkError("down"))
         exchange_service.exchange.close = AsyncMock()
 
         with pytest.raises(DataFetchError):
             await exchange_service.listen_to_ticker_updates("SOL/USDT", AsyncMock(), 0.0)
 
-        assert exchange_service.connection_active is False
+        assert exchange_service.ticker_feed.connection_active is False
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(5)
     async def test_close_connection_exits_without_raising(self, exchange_service):
         exchange_service.exchange.watch_ticker = AsyncMock(return_value={"last": 100.0})
         exchange_service.exchange.close = AsyncMock()
-        on_ticker_update = AsyncMock(side_effect=lambda _price: setattr(exchange_service, "connection_active", False))
+        on_ticker_update = AsyncMock(
+            side_effect=lambda _price: setattr(exchange_service.ticker_feed, "connection_active", False)
+        )
 
         await exchange_service.listen_to_ticker_updates("SOL/USDT", on_ticker_update, 0.0)
 
-        assert exchange_service.connection_active is False
+        assert exchange_service.ticker_feed.connection_active is False
         exchange_service.exchange.close.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -1476,7 +1218,7 @@ class TestWebSocketFailureHandling:
         await exchange_service.close()
 
         exchange_service.exchange.close.assert_awaited_once()
-        assert exchange_service.connection_active is False
+        assert exchange_service.ticker_feed.connection_active is False
 
     @pytest.mark.asyncio
     async def test_close_logs_a_close_error_without_raising(self, exchange_service):
@@ -1490,8 +1232,8 @@ class TestWebSocketFailureHandling:
     @pytest.mark.asyncio
     @pytest.mark.timeout(5)
     async def test_an_error_after_a_requested_stop_ends_the_loop_without_retrying(self, exchange_service):
-        exchange_service.websocket_max_retries = 5
-        exchange_service.websocket_retry_base_delay = 30
+        exchange_service.ticker_feed.websocket_max_retries = 5
+        exchange_service.ticker_feed.websocket_retry_base_delay = 30
 
         async def watch_ticker(_pair):
             await exchange_service.close_connection()

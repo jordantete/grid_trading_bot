@@ -1,16 +1,12 @@
-import asyncio
 from collections.abc import Awaitable, Callable
 import logging
-import math
 import os
-import time
 from typing import Any
 
 from ccxt.base.errors import (
     BadRequest,
     BaseError,
     DuplicateOrderId,
-    ExchangeError,
     InsufficientFunds,
     InvalidOrder,
     NetworkError,
@@ -36,6 +32,7 @@ from .exceptions import (
     UnsupportedExchangeError,
 )
 from .exchange_interface import ExchangeInterface
+from .live_ticker_feed import LiveTickerFeed
 from .market_constraints import MarketConstraints
 
 # Venues that do not map post-only rejections onto ccxt's OrderImmediatelyFillable report
@@ -77,11 +74,7 @@ class LiveExchangeService(ExchangeInterface):
         self.api_key = self._get_env_variable("EXCHANGE_API_KEY")
         self.secret_key = self._get_env_variable("EXCHANGE_SECRET_KEY")
         self.exchange = self._initialize_exchange()
-        self.connection_active = False
-        self._closing = False
         self._exchange_closed = False
-        self.websocket_max_retries: int = self.config_manager.config.execution.websocket_max_retries
-        self.websocket_retry_base_delay: int = self.config_manager.config.execution.websocket_retry_base_delay
         self.post_only: bool = self.config_manager.config.exchange.post_only
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=self.config_manager.config.execution.circuit_breaker_failure_threshold,
@@ -91,11 +84,13 @@ class LiveExchangeService(ExchangeInterface):
             # answers, not exchange faults, so a run of them must never open the breaker.
             benign_exceptions=(OrderRejectedError, OrderNotFound, DuplicateOrderId),
         )
-        self._last_known_price: float | None = None
-        self._max_price_deviation: float = 0.50
-        self._consecutive_price_rejections = 0
-        self._max_consecutive_price_rejections = 5
-        self._last_price_update_ts: float | None = None
+        self.ticker_feed = LiveTickerFeed(
+            self.exchange,
+            max_price_deviation=0.50,
+            max_consecutive_price_rejections=5,
+            websocket_max_retries=self.config_manager.config.execution.websocket_max_retries,
+            websocket_retry_base_delay=self.config_manager.config.execution.websocket_retry_base_delay,
+        )
 
     def _get_env_variable(self, key: str) -> str:
         value = os.getenv(key)
@@ -129,120 +124,7 @@ class LiveExchangeService(ExchangeInterface):
     @property
     def last_price(self) -> float | None:
         """Last price accepted by the ticker feed's deviation filter, None before the first one."""
-        return self._last_known_price
-
-    def _validate_price(self, price_value: Any, pair: str) -> float | None:
-        """
-        Validates a price value from exchange data.
-
-        Returns the validated price as a float, or None if invalid.
-        """
-        if price_value is None:
-            self.logger.warning(f"Received None price for {pair}.")
-            return None
-
-        try:
-            price = float(price_value)
-        except (TypeError, ValueError):
-            self.logger.warning(f"Received non-numeric price for {pair}: {price_value}")
-            return None
-
-        if not math.isfinite(price):
-            self.logger.warning(f"Received non-finite price for {pair}: {price}")
-            return None
-
-        if price <= 0:
-            self.logger.warning(f"Received non-positive price for {pair}: {price}")
-            return None
-
-        if self._last_known_price is not None:
-            deviation = abs(price - self._last_known_price) / self._last_known_price
-            if deviation > self._max_price_deviation:
-                self._consecutive_price_rejections += 1
-                if self._consecutive_price_rejections < self._max_consecutive_price_rejections:
-                    self.logger.warning(
-                        f"Price {price} for {pair} deviates {deviation:.1%} from last known price "
-                        f"{self._last_known_price} (max {self._max_price_deviation:.0%}). Rejecting "
-                        f"({self._consecutive_price_rejections}/{self._max_consecutive_price_rejections}).",
-                    )
-                    return None
-                self.logger.warning(
-                    f"Accepting price {price} for {pair} after "
-                    f"{self._consecutive_price_rejections} consecutive deviation rejections — re-anchoring.",
-                )
-
-        self._consecutive_price_rejections = 0
-        self._last_known_price = price
-        self._last_price_update_ts = time.monotonic()
-        return price
-
-    async def _subscribe_to_ticker_updates(
-        self,
-        pair: str,
-        on_ticker_update: Callable[[float], Awaitable[None]],
-        update_interval: float,
-    ) -> None:
-        if self._closing:
-            return
-        self.connection_active = True
-        retry_count = 0
-
-        while self.connection_active and not self._closing:
-            try:
-                ticker = await self.exchange.watch_ticker(pair)
-                current_price = self._validate_price(ticker.get("last"), pair)
-
-                if current_price is None:
-                    continue
-
-                self.logger.info(f"Connected to WebSocket for {pair} ticker current price: {current_price}")
-
-                if not self.connection_active:
-                    break
-
-                await on_ticker_update(current_price)
-                await asyncio.sleep(update_interval)
-                retry_count = 0  # Reset retry count after a successful operation
-
-            except (NetworkError, ExchangeError) as e:
-                if self._closing:
-                    break
-                retry_count += 1
-                retry_interval = min(retry_count * self.websocket_retry_base_delay, 60)
-                self.logger.error(
-                    f"Error connecting to WebSocket for {pair}: {e}. "
-                    f"Retrying in {retry_interval} seconds ({retry_count}/{self.websocket_max_retries}).",
-                )
-
-                if retry_count >= self.websocket_max_retries:
-                    self.logger.error("Max retries reached. Stopping WebSocket connection.")
-                    self.connection_active = False
-                    raise DataFetchError(
-                        f"WebSocket feed for {pair} failed after {retry_count} retries: {e!s}",
-                    ) from e
-
-                await asyncio.sleep(retry_interval)
-
-            except asyncio.CancelledError:
-                self.logger.error(f"WebSocket subscription for {pair} was cancelled.")
-                self.connection_active = False
-                break
-
-            except Exception as e:
-                if self._closing:
-                    break
-                retry_count += 1
-                retry_interval = min(retry_count * self.websocket_retry_base_delay, 60)
-                self.logger.error(
-                    f"WebSocket connection error: {e}. Retrying in {retry_interval} seconds "
-                    f"({retry_count}/{self.websocket_max_retries}).",
-                )
-                if retry_count >= self.websocket_max_retries:
-                    self.connection_active = False
-                    raise DataFetchError(
-                        f"WebSocket feed for {pair} failed after {retry_count} retries: {e!s}",
-                    ) from e
-                await asyncio.sleep(retry_interval)
+        return self.ticker_feed.last_price
 
     async def listen_to_ticker_updates(
         self,
@@ -250,13 +132,11 @@ class LiveExchangeService(ExchangeInterface):
         on_price_update: Callable[[float], Awaitable[None]],
         update_interval: float,
     ) -> None:
-        await self._subscribe_to_ticker_updates(pair, on_price_update, update_interval)
+        await self.ticker_feed.subscribe(pair, on_price_update, update_interval)
 
     async def close_connection(self) -> None:
         """Ends the ticker loop; the exchange stays open for the shutdown's REST calls."""
-        self._closing = True
-        self.connection_active = False
-        self.logger.info("Stopping the ticker feed...")
+        self.ticker_feed.stop()
 
     async def close(self) -> None:
         """Closes the ccxt instance once; the bot calls it last during its shutdown."""
@@ -283,7 +163,7 @@ class LiveExchangeService(ExchangeInterface):
     async def get_current_price(self, pair: str) -> float:
         try:
             ticker = await self.circuit_breaker.call(self.exchange.fetch_ticker, pair)
-            validated_price = self._validate_price(ticker.get("last"), pair)
+            validated_price = self.ticker_feed.validate_price(ticker.get("last"), pair)
 
             if validated_price is None:
                 raise DataFetchError(f"Invalid price received for {pair}: {ticker.get('last')}")
@@ -298,7 +178,7 @@ class LiveExchangeService(ExchangeInterface):
 
     @property
     def last_price_update_ts(self) -> float | None:
-        return self._last_price_update_ts
+        return self.ticker_feed.last_price_update_ts
 
     async def load_exchange_markets(self, pair: str) -> None:
         try:

@@ -242,22 +242,24 @@ class TestGridTradingBot(BotFixtures):
         assert health_status["exchange_status"] == "ok"
         assert health_status["overall"] is False
 
+    @pytest.mark.parametrize(("age_seconds", "fresh"), [(119, True), (121, False)])
     @pytest.mark.asyncio
-    async def test_health_status_flags_stale_ticker_feed(self, bot):
+    async def test_health_status_flags_a_ticker_feed_older_than_the_threshold(self, bot, age_seconds, fresh):
         bot._check_strategy_health = AsyncMock(return_value=True)
         bot._get_exchange_status = AsyncMock(return_value="ok")
-        bot.exchange_service._last_price_update_ts = time.monotonic() - 500
+        with patch("time.monotonic", return_value=time.monotonic() - age_seconds):
+            bot.exchange_service.ticker_feed.validate_price(100.0, "BTC/USDT")
 
         health_status = await bot.get_bot_health_status()
 
-        assert health_status["ticker_feed"] is False
-        assert health_status["overall"] is False
+        assert health_status["ticker_feed"] is fresh
+        assert health_status["overall"] is fresh
 
     @pytest.mark.asyncio
     async def test_health_status_fresh_ticker_feed_ok(self, bot):
         bot._check_strategy_health = AsyncMock(return_value=True)
         bot._get_exchange_status = AsyncMock(return_value="ok")
-        bot.exchange_service._last_price_update_ts = time.monotonic()
+        bot.exchange_service.ticker_feed.validate_price(100.0, "BTC/USDT")
 
         health_status = await bot.get_bot_health_status()
 
