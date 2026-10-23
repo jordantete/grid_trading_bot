@@ -737,3 +737,17 @@ def test_every_shipped_config_loads_to_the_values_the_old_getters_returned(name,
             continue
         expected = value.upper() if getter == "get_logging_level" else value
         assert _SCHEMA_VALUES[getter](config) == expected, getter
+
+
+class TestMalformedValues:
+    @pytest.mark.parametrize("raw", [None, 3, [], "config"])
+    def test_a_root_that_is_not_an_object_is_refused(self, raw):
+        assert _refused(raw).invalid_fields == ["(root)"]
+
+    @pytest.mark.parametrize(
+        ("section", "key"), [("grid_strategy", "num_grids"), ("trading_settings", "initial_balance")]
+    )
+    def test_an_integer_too_large_for_a_float_is_refused(self, valid_config, section, key):
+        valid_config[section][key] = 10**400
+
+        assert _refused(valid_config).invalid_fields == [f"{section}.{key}"]

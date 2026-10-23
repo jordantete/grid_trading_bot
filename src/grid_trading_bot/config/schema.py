@@ -166,6 +166,9 @@ def load_config(raw: dict[str, Any]) -> BotConfig:
 
     Raises ConfigValidationError naming every missing and invalid field at once.
     """
+    if not isinstance(raw, dict):
+        logger.error("The config must be a JSON object.")
+        raise ConfigValidationError(invalid_fields=["(root)"])
     loader = _Loader()
     values = loader.walk(BotConfig, raw, "")
     loader.check_cross_field_rules(values)
@@ -205,6 +208,13 @@ def _default_of(f: dataclasses.Field[Any]) -> Any:
     if f.default is not dataclasses.MISSING:
         return f.default
     return _ABSENT
+
+
+def _is_finite(value: int | float) -> bool:
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an int beyond the float range
+        return False
 
 
 def _has_sandbox(name: str) -> bool:
@@ -292,7 +302,7 @@ class _Loader:
 
         is_int = hint is int
         allowed = int if is_int else int | float
-        number_ok = isinstance(value, allowed) and not isinstance(value, bool) and math.isfinite(value)
+        number_ok = isinstance(value, allowed) and not isinstance(value, bool) and _is_finite(value)
         if number_ok and self._in_range(value, metadata):
             return value if is_int else float(value)
         self._invalid(path, f"must be {_describe_number(is_int, metadata)}")
