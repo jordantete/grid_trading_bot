@@ -159,12 +159,41 @@ class TestLiveOrderExecutionStrategy:
     async def test_an_unreadable_answer_is_resolved_by_the_client_order_id(self, setup_live_strategy):
         strategy, exchange_service = setup_live_strategy
         strategy.LOOKUP_DELAY = 0
-        exchange_service.place_order = AsyncMock(return_value={"id": "half-answer"})
+        exchange_service.place_order = AsyncMock(return_value={"status": "open"})
         exchange_service.fetch_order_by_client_id = AsyncMock(return_value=_raw("half-answer"))
 
         order = await strategy.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 100.0, CLIENT_ORDER_ID)
 
         assert order.status == OrderStatus.OPEN
+
+    async def test_an_answer_carrying_only_the_ids_is_read_by_the_order_id(self, setup_live_strategy, caplog):
+        strategy, exchange_service = setup_live_strategy
+        exchange_service.place_order = AsyncMock(
+            return_value={"id": "okx-1", "clientOrderId": CLIENT_ORDER_ID, "status": None, "type": "limit"}
+        )
+        exchange_service.fetch_order = AsyncMock(return_value=_raw("okx-1"))
+        exchange_service.fetch_order_by_client_id = AsyncMock()
+
+        with caplog.at_level("WARNING"):
+            order = await strategy.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 100.0, CLIENT_ORDER_ID)
+
+        assert (order.identifier, order.status) == ("okx-1", OrderStatus.OPEN)
+        exchange_service.fetch_order.assert_awaited_once_with("okx-1", "BTC/USDT")
+        exchange_service.fetch_order_by_client_id.assert_not_awaited()
+        assert caplog.records == []
+
+    @pytest.mark.parametrize("error", [OrderNotFoundError("not indexed yet"), DataFetchError("down")])
+    async def test_an_answer_carrying_only_the_ids_falls_back_to_the_client_order_id(self, setup_live_strategy, error):
+        strategy, exchange_service = setup_live_strategy
+        strategy.LOOKUP_DELAY = 0
+        exchange_service.place_order = AsyncMock(return_value={"id": "okx-2", "status": None})
+        exchange_service.fetch_order = AsyncMock(side_effect=error)
+        exchange_service.fetch_order_by_client_id = AsyncMock(return_value=_raw("okx-2"))
+
+        order = await strategy.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 100.0, CLIENT_ORDER_ID)
+
+        assert order.identifier == "okx-2"
+        exchange_service.fetch_order_by_client_id.assert_awaited_once_with(CLIENT_ORDER_ID, "BTC/USDT")
 
     async def test_a_market_order_whose_answer_was_lost_is_returned_closed(self, setup_live_strategy):
         strategy, exchange_service = setup_live_strategy

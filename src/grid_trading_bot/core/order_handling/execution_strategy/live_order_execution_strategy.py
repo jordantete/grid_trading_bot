@@ -149,8 +149,20 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
         try:
             return await self._parse_order_result(raw_order)
         except DataFetchError as error:
+            if raw_order.get("id") and not raw_order.get("status"):
+                acknowledged = await self._read_acknowledged(str(raw_order["id"]), pair)
+                if acknowledged is not None:
+                    return acknowledged
             self.logger.warning(f"Unreadable answer for order {client_order_id} ({error}); looking it up.")
             return await self._find_after_lost_answer(client_order_id, pair)
+
+    async def _read_acknowledged(self, order_id: str, pair: str) -> Order | None:
+        """Reads an order the exchange acknowledged by its ids only (OKX), None when that read fails."""
+        try:
+            return await self.get_order(order_id, pair)
+        except (DataFetchError, OrderNotFoundError) as error:
+            self.logger.info(f"Order {order_id} acknowledged but not readable yet ({error}).")
+            return None
 
     async def _find_after_lost_answer(self, client_order_id: str, pair: str) -> Order:
         """
