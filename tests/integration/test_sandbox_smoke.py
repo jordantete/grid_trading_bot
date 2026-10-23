@@ -110,39 +110,62 @@ async def test_ccxt_websocket_connection():
 
 
 # ---------------------------------------------------------------------------
-# F8: Client order id round trip on the Binance testnet
+# F8: Client order id round trip on the Binance testnet and the OKX demo
 # ---------------------------------------------------------------------------
 
-TESTNET_KEYS = ("BINANCE_TESTNET_API_KEY", "BINANCE_TESTNET_SECRET_KEY")
+TEST_VENUES = {
+    "binance-testnet": {
+        "keys": {"EXCHANGE_API_KEY": "BINANCE_TESTNET_API_KEY", "EXCHANGE_SECRET_KEY": "BINANCE_TESTNET_SECRET_KEY"},
+        "exchange": lambda: "binance",
+        "pair": "BTC/USDT",
+        "is_test_environment": lambda exchange: "testnet" in str(exchange.urls["api"]),
+    },
+    "okx-demo": {
+        "keys": {
+            "EXCHANGE_API_KEY": "OKX_DEMO_API_KEY",
+            "EXCHANGE_SECRET_KEY": "OKX_DEMO_SECRET_KEY",
+            "EXCHANGE_PASSWORD": "OKX_DEMO_PASSWORD",
+        },
+        # myokx for an OKX Europe account (my.okx.com), okx for a global one (www.okx.com).
+        "exchange": lambda: os.getenv("OKX_DEMO_EXCHANGE", "myokx"),
+        "pair": "BTC/USDC",
+        "is_test_environment": lambda exchange: (exchange.headers or {}).get("x-simulated-trading") == "1",
+    },
+}
 
-skip_without_testnet_keys = pytest.mark.skipif(
-    not all(os.getenv(key) for key in TESTNET_KEYS),
-    reason="Binance testnet keys not set (BINANCE_TESTNET_API_KEY, BINANCE_TESTNET_SECRET_KEY)",
-)
+
+def _venue_param(name: str):
+    missing = [key for key in TEST_VENUES[name]["keys"].values() if not os.getenv(key)]
+    return pytest.param(
+        name,
+        id=name,
+        marks=pytest.mark.skipif(bool(missing), reason=f"{name} keys not set ({', '.join(missing)})"),
+    )
 
 
 @pytest.mark.sandbox
-@skip_without_testnet_keys
 @skip_if_no_network
 @pytest.mark.timeout(60)
-async def test_a_testnet_order_is_found_by_its_client_id_before_and_after_its_cancel(monkeypatch, valid_config):
+@pytest.mark.parametrize("venue", [_venue_param(name) for name in TEST_VENUES])
+async def test_a_test_order_is_found_by_its_client_id_before_and_after_its_cancel(monkeypatch, valid_config, venue):
     """A tiny post-only buy far under the price, placed with a client id, is found by it while open and cancelled."""
     from grid_trading_bot.core.order_handling.placement_journal import new_client_order_id
     from grid_trading_bot.core.services.live_exchange_service import LiveExchangeService
 
-    monkeypatch.setenv("EXCHANGE_API_KEY", os.environ["BINANCE_TESTNET_API_KEY"])
-    monkeypatch.setenv("EXCHANGE_SECRET_KEY", os.environ["BINANCE_TESTNET_SECRET_KEY"])
+    spec = TEST_VENUES[venue]
+    for bot_key, test_key in spec["keys"].items():
+        monkeypatch.setenv(bot_key, os.environ[test_key])
     config_manager = config_manager_from(
         valid_config,
         {
-            "exchange": {"name": "binance", "post_only": True},
+            "exchange": {"name": spec["exchange"](), "post_only": True},
             "execution": {"websocket_max_retries": 1, "websocket_retry_base_delay": 1},
         },
     )
     service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
-    assert "testnet" in str(service.exchange.urls["api"]), "refusing to place an order outside the testnet"
+    assert spec["is_test_environment"](service.exchange), "refusing to place an order outside the test environment"
 
-    pair = "BTC/USDT"
+    pair = spec["pair"]
     client_order_id = new_client_order_id("5a4d0b0e")
     open_order_id = None
     try:
