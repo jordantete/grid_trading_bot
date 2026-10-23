@@ -22,6 +22,19 @@ from grid_trading_bot.core.services.exceptions import (
 from grid_trading_bot.core.services.live_exchange_service import LiveExchangeService
 
 
+async def _sent_request(exchange, endpoint: str) -> dict:
+    """Calls a ccxt endpoint method and returns the url and headers it hands to the transport, without sending."""
+    sent: dict = {}
+
+    async def capture(url, method="GET", headers=None, body=None):
+        sent.update(url=url, headers=headers or {})
+        return {}
+
+    exchange.fetch = capture
+    await getattr(exchange, endpoint)()
+    return sent
+
+
 def _with_exchange(config_manager, **fields):
     exchange = dataclasses.replace(config_manager.config.exchange, **fields)
     config_manager.config = dataclasses.replace(config_manager.config, exchange=exchange)
@@ -113,9 +126,9 @@ class TestLiveExchangeService:
             assert isinstance(api, dict)
             assert api["public"].startswith("https://testnet.binance.vision/")
             assert api["private"].startswith("https://testnet.binance.vision/")
-            assert service.exchange.sign("ping", "public", "GET", {})["url"] == (
-                "https://testnet.binance.vision/api/v3/ping"
-            )
+            request = await _sent_request(service.exchange, "public_get_ping")
+
+            assert request["url"] == "https://testnet.binance.vision/api/v3/ping"
         finally:
             await service.exchange.close()
 
@@ -128,9 +141,9 @@ class TestLiveExchangeService:
         _with_exchange(config_manager, name=name)
         service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
         try:
-            request = service.exchange.sign("account/balance", "private", "GET", {})
+            request = await _sent_request(service.exchange, "private_get_account_balance")
 
-            assert request["url"].startswith(f"https://{host}/")
+            assert request["url"].startswith(f"https://{host}/api/v5/account/balance")
             assert request["headers"]["OK-ACCESS-PASSPHRASE"] == "test_passphrase"
             assert service.exchange.headers["x-simulated-trading"] == "1"
         finally:
