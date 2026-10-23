@@ -8,7 +8,7 @@ import ccxt
 import pandas as pd
 
 from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.utils.constants import CANDLE_LIMITS, TIMEFRAME_MAPPINGS
+from grid_trading_bot.utils.constants import CANDLE_LIMITS
 
 from .exceptions import (
     DataFetchError,
@@ -71,13 +71,7 @@ class BacktestExchangeService(ExchangeInterface):
         try:
             since = self.exchange.parse8601(start_date)
             until = self.exchange.parse8601(end_date)
-            candles_per_request = self._get_candle_limit()
-            total_candles_needed = (until - since) // self._get_timeframe_in_ms(timeframe)
-
-            if total_candles_needed > candles_per_request:
-                df = self._fetch_ohlcv_in_chunks(pair, timeframe, since, until, candles_per_request)
-            else:
-                df = self._fetch_ohlcv_single_batch(pair, timeframe, since, until, candles_per_request)
+            df = self._fetch_ohlcv_in_chunks(pair, timeframe, since, until, self._get_candle_limit())
         except ccxt.NetworkError as e:
             raise DataFetchError(f"Network issue occurred while fetching OHLCV data: {e!s}") from e
         except ccxt.BaseError as e:
@@ -114,17 +108,6 @@ class BacktestExchangeService(ExchangeInterface):
         timestamp = pd.Timestamp(date)
         return timestamp.tz_convert("UTC").tz_localize(None) if timestamp.tzinfo else timestamp
 
-    def _fetch_ohlcv_single_batch(
-        self,
-        pair: str,
-        timeframe: str,
-        since: int,
-        until: int,
-        candles_per_request: int,
-    ) -> pd.DataFrame:
-        ohlcv = self._fetch_with_retry(self.exchange.fetch_ohlcv, pair, timeframe, since, limit=candles_per_request)
-        return self._format_ohlcv(ohlcv, until)
-
     def _fetch_ohlcv_in_chunks(
         self,
         pair: str,
@@ -156,9 +139,6 @@ class BacktestExchangeService(ExchangeInterface):
 
     def _get_candle_limit(self) -> int:
         return CANDLE_LIMITS.get(self.exchange_name, 500)  # Default to 500 if not found
-
-    def _get_timeframe_in_ms(self, timeframe: str) -> int:
-        return TIMEFRAME_MAPPINGS.get(timeframe, 60 * 1000)  # Default to 1m if not found
 
     def _fetch_with_retry(
         self,

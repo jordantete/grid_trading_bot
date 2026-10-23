@@ -140,7 +140,7 @@ class TestBacktestExchangeService:
 
     @pytest.mark.parametrize(
         ("exchange_name", "max_per_call", "candle_count"),
-        [("binance", 1000, 600), ("htx", 1000, 600), ("okx", 300, 400), ("myokx", 300, 400)],
+        [("binance", 1000, 600), ("htx", 1000, 600), ("okx", 300, 400), ("myokx", 300, 400), ("binance", 100, 300)],
     )
     def test_every_candle_of_the_range_arrives_whatever_the_exchange_cap(
         self, valid_config, monkeypatch, exchange_name, max_per_call, candle_count
@@ -195,8 +195,7 @@ class TestBacktestExchangeService:
 
     @patch("grid_trading_bot.core.services.backtest_exchange_service.ccxt.binance")
     @patch.object(BacktestExchangeService, "_is_pair_supported", return_value=True)
-    def test_fetch_ohlcv_single_batch(self, mock_is_pair_supported, mock_ccxt, config_manager):
-        # Mock the exchange instance and returned data
+    def test_a_range_the_first_call_covers_takes_one_call(self, mock_is_pair_supported, mock_ccxt, config_manager):
         mock_exchange = mock_ccxt.return_value
         mock_exchange.timeframes = {"1d": "1d"}
         mock_exchange.fetch_ohlcv.return_value = [
@@ -213,6 +212,7 @@ class TestBacktestExchangeService:
         assert len(df) == 2, "Expected 2 rows of data in DataFrame"
         assert df.iloc[0]["close"] == 34500
         assert df.iloc[1]["close"] == 35000
+        mock_exchange.fetch_ohlcv.assert_called_once()
 
     @patch("grid_trading_bot.core.services.backtest_exchange_service.ccxt.binance")
     @patch.object(BacktestExchangeService, "_is_pair_supported", return_value=True)
@@ -247,11 +247,12 @@ class TestBacktestExchangeService:
         mock_exchange.fetch_ohlcv.side_effect = [
             ccxt.BaseError("Network Error"),
             [[1622505600000, 34000, 35000, 33000, 34500, 1000]],
+            [],
         ]
 
         service = BacktestExchangeService(config_manager)
 
-        df = service._fetch_ohlcv_single_batch("BTC/USD", "1d", 1622505600000, 1622592000000, 1000)
+        df = service._fetch_ohlcv_in_chunks("BTC/USD", "1d", 1622505600000, 1622592000000, 1000)
 
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 1, "Expected 1 row of data in DataFrame"
