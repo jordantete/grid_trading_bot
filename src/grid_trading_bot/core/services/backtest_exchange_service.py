@@ -117,9 +117,9 @@ class BacktestExchangeService(ExchangeInterface):
         candles_per_request: int,
     ) -> pd.DataFrame:
         all_ohlcv = []
-        while since < until:
+        while since <= until:
             ohlcv = self._fetch_with_retry(self.exchange.fetch_ohlcv, pair, timeframe, since, limit=candles_per_request)
-            if not ohlcv:
+            if not ohlcv or ohlcv[-1][0] < since:
                 break
             all_ohlcv.extend(ohlcv)
             since = ohlcv[-1][0] + 1

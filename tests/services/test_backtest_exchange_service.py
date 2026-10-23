@@ -159,6 +159,32 @@ class TestBacktestExchangeService:
 
         assert list(df.index) == [pd.Timestamp(candle[0], unit="ms") for candle in _hourly_candles(candle_count)]
 
+    def test_a_range_of_one_instant_returns_its_candle(self, valid_config, monkeypatch):
+        _capping_exchange(monkeypatch, "binance", 1000, 3)
+        service = BacktestExchangeService(
+            config_manager_from(valid_config, {"trading_settings": {"historical_data_file": None}})
+        )
+
+        df = service.fetch_ohlcv("BTC/USDT", "1h", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")
+
+        assert list(df.index) == [pd.Timestamp(START_MS, unit="ms")]
+
+    def test_an_answer_that_does_not_move_forward_ends_the_fetch(self, valid_config, monkeypatch):
+        exchange = Mock()
+        exchange.parse8601.side_effect = [START_MS + 5 * HOUR_MS, START_MS + 10 * HOUR_MS]
+        exchange.fetch_ohlcv.return_value = _hourly_candles(2)
+        monkeypatch.setattr(ccxt, "binance", lambda: exchange)
+        service = BacktestExchangeService(
+            config_manager_from(valid_config, {"trading_settings": {"historical_data_file": None}})
+        )
+        service._is_pair_supported = Mock(return_value=True)
+        service._is_timeframe_supported = Mock(return_value=True)
+
+        with pytest.raises(DataFetchError, match=r"^No candles"):
+            service.fetch_ohlcv("BTC/USDT", "1h", "2024-01-01T05:00:00Z", "2024-01-01T10:00:00Z")
+
+        exchange.fetch_ohlcv.assert_called_once()
+
     def _hourly_csv(self, tmp_path):
         csv = tmp_path / "hourly.csv"
         rows = [f"{ts},1,2,0.5,1.5,10" for ts in pd.date_range("2023-12-31 20:00", "2024-01-01 03:00", freq="1h")]

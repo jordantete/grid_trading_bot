@@ -29,7 +29,7 @@ class ConfigManager:
         with open(self.config_file) as file:
             try:
                 return json.load(file)
-            except json.JSONDecodeError as e:
+            except ValueError as e:  # JSONDecodeError, or an integer longer than Python's 4300-digit limit
                 self.logger.error(f"Failed to parse config file {self.config_file}: {e}")
                 raise ConfigParseError(self.config_file, e) from e
 

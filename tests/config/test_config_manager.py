@@ -182,3 +182,11 @@ class TestConfigManagerBacktestMinimums:
         )
         assert config_manager.config.execution.backtest_min_amount == 0.001
         assert config_manager.config.execution.backtest_min_cost == 5.0
+
+
+def test_an_integer_too_long_for_python_to_parse_is_a_parse_error(tmp_path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text('{"grid_strategy": {"num_grids": ' + "9" * 5000 + "}}")
+
+    with pytest.raises(ConfigParseError):
+        ConfigManager(str(config_file))
