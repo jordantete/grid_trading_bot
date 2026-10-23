@@ -41,7 +41,6 @@ from grid_trading_bot.core.services.exceptions import (
     UnsupportedTimeframeError,
 )
 from grid_trading_bot.core.services.exchange_service_factory import ExchangeServiceFactory
-from grid_trading_bot.core.services.market_constraints import MarketConstraints
 from grid_trading_bot.core.validation.order_validator import OrderValidator
 from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
 from grid_trading_bot.strategies.plotter import Plotter
@@ -243,17 +242,12 @@ class GridTradingBot:
             skip_grid_init = False
             recovery_result = None
 
-            if self.trading_mode in {TradingMode.LIVE, TradingMode.PAPER_TRADING}:
-                await self.exchange_service.load_exchange_markets(self.trading_pair)
-                constraints = self.exchange_service.get_market_constraints(self.trading_pair)
+            await self.exchange_service.load_exchange_markets(self.trading_pair)
+            constraints = self.exchange_service.get_market_constraints(self.trading_pair)
+            if constraints is not None:
                 self.order_manager.set_market_constraints(constraints)
                 if self.reconciliation_service:
                     self.reconciliation_service.set_market_constraints(constraints)
-            else:
-                min_amount = self.config_manager.config.execution.backtest_min_amount
-                min_cost = self.config_manager.config.execution.backtest_min_cost
-                if min_amount is not None or min_cost is not None:
-                    self.order_manager.set_market_constraints(MarketConstraints(min_amount, min_cost))
 
             # Attempt state recovery for live trading
             refused = False
@@ -603,7 +597,7 @@ class GridTradingBot:
         return exchange_status.get("status", "unknown")
 
     def _check_ticker_feed_health(self) -> bool:
-        last_update = getattr(self.exchange_service, "last_price_update_ts", None)
+        last_update = self.exchange_service.last_price_update_ts
         if last_update is None:
             return True  # feed not started yet
         return (time.monotonic() - last_update) < self.TICKER_FEED_STALENESS_THRESHOLD
@@ -631,7 +625,7 @@ class GridTradingBot:
         }
 
     def get_account_snapshot(self) -> AccountSnapshot | None:
-        price = getattr(self.exchange_service, "last_price", None)
+        price = self.exchange_service.last_price
         if price is None:
             return None
         return self.balance_tracker.snapshot(price)

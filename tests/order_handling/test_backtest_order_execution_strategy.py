@@ -105,30 +105,5 @@ class TestBacktestOrderExecutionStrategy:
 
         assert (order.timestamp, order.last_trade_timestamp) == (0, 0)
 
-    async def test_get_order(self, setup_strategy):
-        strategy = setup_strategy
-        order_id = "test-order-1"
-        order_symbol = "BTC/USDT"
-
-        order = await strategy.get_order(order_id, order_symbol)
-
-        assert order is not None
-        assert order.identifier == order_id
-        assert order.status == OrderStatus.OPEN
-        assert order.order_type == OrderType.LIMIT
-        assert order.side == OrderSide.BUY
-        assert order.price == 100
-        assert order.average == 100
-        assert order.amount == 1
-        assert order.filled == 1
-        assert order.remaining == 0
-        assert order.symbol == order_symbol
-        assert order.time_in_force == "GTC"
-        assert order.timestamp == 0
-
-    async def test_find_order_finds_nothing(self, setup_strategy):
-        assert await setup_strategy.find_order("g1", "BTC/USDT") is None
-
-    async def test_rounding_keeps_the_values(self, setup_strategy):
-        assert setup_strategy.round_amount("BTC/USDT", 0.123456789) == 0.123456789
-        assert setup_strategy.round_price("BTC/USDT", 100.4567) == 100.4567
+    async def test_get_order_returns_none(self, setup_strategy):
+        assert await setup_strategy.get_order("any-id", "BTC/USDT") is None

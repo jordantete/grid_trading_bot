@@ -18,6 +18,7 @@ from .exceptions import (
     UnsupportedTimeframeError,
 )
 from .exchange_interface import ExchangeInterface
+from .market_constraints import MarketConstraints
 
 
 class BacktestExchangeService(ExchangeInterface):
@@ -202,6 +203,19 @@ class BacktestExchangeService(ExchangeInterface):
     @property
     def last_price(self) -> float | None:
         return None
+
+    @property
+    def last_price_update_ts(self) -> float | None:
+        return None
+
+    async def load_exchange_markets(self, pair: str) -> None:
+        return None
+
+    def get_market_constraints(self, pair: str) -> MarketConstraints | None:
+        execution = self.config_manager.config.execution
+        if execution.backtest_min_amount is None and execution.backtest_min_cost is None:
+            return None
+        return MarketConstraints(execution.backtest_min_amount, execution.backtest_min_cost)
 
     def round_amount(self, pair: str, amount: float) -> float:
         return amount

@@ -95,7 +95,7 @@ class LiveExchangeService(ExchangeInterface):
         self._max_price_deviation: float = 0.50
         self._consecutive_price_rejections = 0
         self._max_consecutive_price_rejections = 5
-        self.last_price_update_ts: float | None = None
+        self._last_price_update_ts: float | None = None
 
     def _get_env_variable(self, key: str) -> str:
         value = os.getenv(key)
@@ -173,7 +173,7 @@ class LiveExchangeService(ExchangeInterface):
 
         self._consecutive_price_rejections = 0
         self._last_known_price = price
-        self.last_price_update_ts = time.monotonic()
+        self._last_price_update_ts = time.monotonic()
         return price
 
     async def _subscribe_to_ticker_updates(
@@ -296,6 +296,10 @@ class LiveExchangeService(ExchangeInterface):
         except BaseError as e:
             raise DataFetchError(f"Error fetching current price: {e!s}") from e
 
+    @property
+    def last_price_update_ts(self) -> float | None:
+        return self._last_price_update_ts
+
     async def load_exchange_markets(self, pair: str) -> None:
         try:
             await self.circuit_breaker.call(self.exchange.load_markets)
@@ -308,7 +312,7 @@ class LiveExchangeService(ExchangeInterface):
             raise DataFetchError(f"Pair {pair} is not available on {self.exchange_name}.")
         self.logger.info(f"Loaded {len(self.exchange.markets)} markets from {self.exchange_name}.")
 
-    def get_market_constraints(self, pair: str) -> MarketConstraints:
+    def get_market_constraints(self, pair: str) -> MarketConstraints | None:
         market = (self.exchange.markets or {}).get(pair)
         if market is None:
             raise DataFetchError(f"Market metadata for {pair} not loaded. Call load_exchange_markets first.")

@@ -4,6 +4,8 @@ from typing import Any
 
 import pandas as pd
 
+from .market_constraints import MarketConstraints
+
 
 class ExchangeInterface(ABC):
     @abstractmethod
@@ -86,6 +88,22 @@ class ExchangeInterface(ABC):
     @abstractmethod
     def last_price(self) -> float | None:
         """The last price the ticker feed accepted, None before the first one."""
+        pass
+
+    @property
+    @abstractmethod
+    def last_price_update_ts(self) -> float | None:
+        """The monotonic time the ticker feed last accepted a price, None before the first one."""
+        pass
+
+    @abstractmethod
+    async def load_exchange_markets(self, pair: str) -> None:
+        """Loads the market metadata of `pair`; returns at once when the exchange has none to load."""
+        pass
+
+    @abstractmethod
+    def get_market_constraints(self, pair: str) -> MarketConstraints | None:
+        """The order minimums of `pair`, None when the exchange states none."""
         pass
 
     @abstractmethod

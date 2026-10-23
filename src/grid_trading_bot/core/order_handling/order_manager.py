@@ -278,9 +278,8 @@ class OrderManager:
         return True
 
     async def _refetch_cancelled(self, order: Order) -> Order | None:
-        """The exchange's view of an order just cancelled; None in backtest or when it cannot be read."""
-        if self.trading_mode == TradingMode.BACKTEST:
-            return None
+        """The exchange's view of an order just cancelled; None when the exchange has no view of it or it cannot be
+        read."""
         try:
             return await self.order_execution_strategy.get_order(order.identifier, self.trading_pair)
         except DataFetchError as e:

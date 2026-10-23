@@ -80,22 +80,7 @@ class BacktestOrderExecutionStrategy(OrderExecutionStrategyInterface):
         order_id: str,
         pair: str,
     ) -> Order | None:
-        return Order(
-            identifier=order_id,
-            status=OrderStatus.OPEN,
-            order_type=OrderType.LIMIT,
-            side=OrderSide.BUY,
-            price=100,
-            average=100,
-            amount=1,
-            filled=1,
-            remaining=0,
-            timestamp=0,
-            datetime="111",
-            last_trade_timestamp=1,
-            symbol=pair,
-            time_in_force="GTC",
-        )
+        return None
 
     async def find_order(self, client_order_id: str, pair: str) -> Order | None:
         """A backtest order never loses its answer, so there is nothing to find."""

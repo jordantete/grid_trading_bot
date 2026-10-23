@@ -195,6 +195,33 @@ class TestGridTradingBot(BotFixtures):
         bot.order_manager.set_market_constraints.assert_called_once_with(constraints)
         bot.reconciliation_service.set_market_constraints.assert_called_once_with(constraints)
 
+    @pytest.mark.parametrize(
+        ("execution", "expected"),
+        [
+            ({"backtest_min_amount": 0.001, "backtest_min_cost": 5.0}, MarketConstraints(0.001, 5.0)),
+            ({}, None),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_a_backtest_bot_takes_its_market_constraints_from_the_config(
+        self, valid_config, notification_handler, mock_event_bus, execution, expected
+    ):
+        config_manager = Mock(spec=ConfigManager)
+        config_manager.config = bot_config_from(
+            valid_config,
+            {"exchange": {"name": "binance", "trading_mode": "backtest"}, "execution": execution},
+        )
+        bot = GridTradingBot("config.json", config_manager, notification_handler, mock_event_bus, no_plot=True)
+        bot.balance_tracker.setup_balances = AsyncMock()
+        bot.order_status_tracker.start_tracking = Mock()
+        bot.strategy.initialize_strategy = Mock()
+        bot.strategy.run = AsyncMock()
+        bot._generate_and_log_performance = Mock(return_value={})
+
+        await bot.run()
+
+        assert bot.order_manager.market_constraints == expected
+
     @pytest.mark.asyncio
     async def test_get_bot_health_status(self, bot):
         bot._check_strategy_health = AsyncMock(return_value=True)
@@ -222,7 +249,7 @@ class TestGridTradingBot(BotFixtures):
     async def test_health_status_flags_stale_ticker_feed(self, bot):
         bot._check_strategy_health = AsyncMock(return_value=True)
         bot._get_exchange_status = AsyncMock(return_value="ok")
-        bot.exchange_service.last_price_update_ts = time.monotonic() - 500
+        bot.exchange_service._last_price_update_ts = time.monotonic() - 500
 
         health_status = await bot.get_bot_health_status()
 
@@ -233,7 +260,7 @@ class TestGridTradingBot(BotFixtures):
     async def test_health_status_fresh_ticker_feed_ok(self, bot):
         bot._check_strategy_health = AsyncMock(return_value=True)
         bot._get_exchange_status = AsyncMock(return_value="ok")
-        bot.exchange_service.last_price_update_ts = time.monotonic()
+        bot.exchange_service._last_price_update_ts = time.monotonic()
 
         health_status = await bot.get_bot_health_status()
 
@@ -389,7 +416,7 @@ class TestGridTradingBot(BotFixtures):
         bot.balance_tracker.snapshot.assert_not_called()
 
     def test_get_account_snapshot_is_none_without_a_price_feed(self, bot):
-        bot.exchange_service = Mock(spec=[])
+        assert bot.exchange_service.last_price is None
         bot.balance_tracker = Mock()
 
         assert bot.get_account_snapshot() is None

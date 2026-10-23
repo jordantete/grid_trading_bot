@@ -13,6 +13,7 @@ from grid_trading_bot.core.services.exceptions import (
     UnsupportedPairError,
     UnsupportedTimeframeError,
 )
+from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 
 class TestBacktestExchangeService:
@@ -26,6 +27,23 @@ class TestBacktestExchangeService:
     @pytest.fixture
     def backtest_service(self, config_manager):
         return BacktestExchangeService(config_manager)
+
+    def test_backtest_market_constraints_come_from_the_config(self, valid_config):
+        service = BacktestExchangeService(
+            config_manager_from(
+                valid_config,
+                {"exchange": {"name": "binance"}, "execution": {"backtest_min_amount": 0.001, "backtest_min_cost": 5}},
+            )
+        )
+
+        assert service.get_market_constraints("BTC/USDT") == MarketConstraints(0.001, 5)
+
+    def test_backtest_market_constraints_are_none_without_minimums(self, backtest_service):
+        assert backtest_service.get_market_constraints("BTC/USDT") is None
+
+    async def test_backtest_loads_no_markets_and_has_no_feed_time(self, backtest_service):
+        assert await backtest_service.load_exchange_markets("BTC/USDT") is None
+        assert backtest_service.last_price_update_ts is None
 
     @patch("grid_trading_bot.core.services.backtest_exchange_service.ccxt.binance")
     def test_initialization_supported_exchange(self, mock_ccxt, config_manager):

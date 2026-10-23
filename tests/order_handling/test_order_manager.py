@@ -38,7 +38,6 @@ class TestCancelOpenGridOrders:
     @pytest.mark.asyncio
     async def test_stacked_level_stays_waiting_until_its_last_order_is_cancelled(self, setup_order_manager):
         manager, grid_manager, _, _, order_book, order_execution_strategy, _ = setup_order_manager
-        manager.trading_mode = TradingMode.BACKTEST
         level = Mock(price=105.0)
         first = Mock(identifier="s1", side=OrderSide.SELL, amount=1.0, filled=0.0, remaining=1.0, price=105.0)
         second = Mock(identifier="s2", side=OrderSide.SELL, amount=1.0, filled=0.0, remaining=1.0, price=105.0)
@@ -47,6 +46,7 @@ class TestCancelOpenGridOrders:
         order_book.get_open_orders.return_value = [first, second]
         order_book.has_open_orders_at.side_effect = [True, False]
         order_execution_strategy.cancel_order = AsyncMock(return_value=True)
+        order_execution_strategy.get_order = AsyncMock(return_value=None)
 
         assert await manager.cancel_open_grid_orders() is True
 
