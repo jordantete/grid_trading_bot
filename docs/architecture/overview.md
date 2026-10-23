@@ -205,14 +205,14 @@ The shared strategy handles:
 
 ## Trading Modes
 
-The trading mode is read in one place, `assemble_bot` (`core/bot_management/bot_assembly.py`), which `GridTradingBot.__init__` calls, plus `cli.py` and the two factories. The assembly builds each component with the behaviour its mode needs, so no other component asks which mode it runs in:
+The trading mode is read in `assemble_bot` (`core/bot_management/bot_assembly.py`), which `GridTradingBot.__init__` calls, in `cli.py`, in the two factories, and in `core/bot_management/grid_trading_bot.py` for the steps that only live and paper trading take (the open-order check at a fresh start, crash and halt handling, the stop notification, health entries). The assembly builds each component with the behaviour its mode needs, so no other component asks which mode it runs in (`cli.py` builds the notification handler the same way and passes it in):
 
-- **`fail_fast`** on `OrderManager` (the strategy reads it from there): an unexpected error during placement, liquidation, an initial purchase or booking is re-raised (backtest) or alerted and handled (live, paper)
+- **`fail_fast`** on `OrderManager`, which passes it to `Liquidation` (the strategy reads it from the manager). When true (backtest), the run re-raises an unexpected error while handling a fill, a booking error or an unexpected error in a liquidation attempt (including reading the exchange balance for the next attempt), and a booking error after the initial purchase. When false (live, paper), these are logged, alerted and handled. Placement errors do not read it: they are handled the same way in every mode
 - **`BalanceSource`** on `BalanceTracker` and `StateRecoveryService`: `VIRTUAL` (backtest and paper) takes the starting balances from the config and restores them from the database; `EXCHANGE` (live) fetches and restores them from the exchange
-- **`enabled`** on `NotificationHandler`: alerts are sent in live and paper trading only
+- **`enabled`** on `NotificationHandler`, set by `cli.py`: alerts are sent in live and paper trading only
 - **Strategy class**: `BacktestGridStrategy` or `LiveGridStrategy`; the reconciliation service (live) and the plotter (backtest) are built only for their mode
 
-`ExchangeInterface` declares `load_exchange_markets`, `get_market_constraints` and `last_price_update_ts`, so the bot calls them on any exchange service; `BacktestExchangeService` answers from the config (`execution.backtest_min_amount`, `backtest_min_cost`). `tests/test_mode_boundaries.py` fails when `TradingMode` is named outside `config/`, `cli.py`, `grid_trading_bot.py`, `bot_assembly.py` and the two factories.
+`ExchangeInterface` declares `load_exchange_markets`, `get_market_constraints` and `last_price_update_ts`, so the bot calls them on any exchange service; `BacktestExchangeService` answers from the config (`execution.backtest_min_amount`, `backtest_min_cost`). `tests/test_mode_boundaries.py` fails when `TradingMode` is named outside `config/`, `cli.py`, `core/bot_management/grid_trading_bot.py`, `core/bot_management/bot_assembly.py` and the two factories.
 
 | Mode | Exchange Service | Execution Strategy | Additional Tasks |
 |------|-----------------|-------------------|-----------------|

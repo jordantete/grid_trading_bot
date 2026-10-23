@@ -89,7 +89,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 ### Key Design Patterns
 
 - **Factory Pattern**: `ExchangeServiceFactory` and `OrderExecutionStrategyFactory` select implementations based on `TradingMode`
-- **Behaviour at construction**: `assemble_bot` is the one place that reads the mode to build components. `OrderManager` gets `fail_fast`, `BalanceTracker` and `StateRecoveryService` get a `BalanceSource`, `NotificationHandler` gets `enabled`, and the bot picks the strategy class. `tests/test_mode_boundaries.py` keeps `TradingMode` within `config/`, `cli.py`, `grid_trading_bot.py`, `bot_assembly.py` and the two factories
+- **Behaviour at construction**: `assemble_bot` reads the mode to build the components. `OrderManager` gets `fail_fast`, `BalanceTracker` and `StateRecoveryService` get a `BalanceSource`, and the assembly picks the strategy class; `cli.py` builds the `NotificationHandler` with `enabled` and passes it in. `tests/test_mode_boundaries.py` keeps `TradingMode` within `config/`, `cli.py`, `grid_trading_bot.py`, `bot_assembly.py` and the two factories
 - **Event Bus**: carries `STOP_BOT` only. Order updates go through `OrderManager.apply_order_update` (balance, level, paired order, save, in that order), and every placement through `Placement.submit_limit` and the `PlacementJournal`
 - **State Machine**: `GridLevel` transitions through `GridCycleState` enum states as orders are placed and filled
 - **Strategy Pattern**: `TradingStrategyInterface` ABC; `GridTradingStrategy` is the shared base, with `BacktestGridStrategy` and `LiveGridStrategy` as the two run paths; the grid has two modes (`simple_grid`, `hedged_grid`)
@@ -97,7 +97,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 ### Trading Modes
 
 Configured via `exchange.trading_mode` in `config.json`:
-- **`backtest`**: Simulates on historical OHLCV data (CSV or fetched via CCXT). No real orders. Runs `BacktestGridStrategy`; an unexpected error in an order operation is re-raised (`fail_fast`), and notifications are off
+- **`backtest`**: Simulates on historical OHLCV data (CSV or fetched via CCXT). No real orders. Runs `BacktestGridStrategy`; an unexpected error while handling a fill or a liquidation attempt is re-raised (`fail_fast`), and notifications are off
 - **`paper_trading`**: Connects to exchange sandbox APIs with real market data. Runs `LiveGridStrategy`, BotController + HealthCheck; balances are virtual (`BalanceSource.VIRTUAL`)
 - **`live`**: Real trading with actual funds. Same architecture as paper trading but against production APIs, with balances fetched from the exchange (`BalanceSource.EXCHANGE`) and the `ReconciliationService`. Includes SQLite state persistence for crash recovery (a checkpoint after every order operation, merge recovery on restart); paper trading persists and resumes its state the same way
 
