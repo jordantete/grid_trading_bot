@@ -102,19 +102,21 @@ class LiveExchangeService(ExchangeInterface):
 
     def _initialize_exchange(self) -> Any:
         try:
-            exchange = getattr(ccxtpro, self.exchange_name)(
-                {
-                    "apiKey": self.api_key,
-                    "secret": self.secret_key,
-                    "enableRateLimit": True,
-                },
-            )
-
-            if self.is_paper_trading_activated:
-                self._enable_sandbox_mode(exchange)
-            return exchange
+            exchange_class = getattr(ccxtpro, self.exchange_name)
         except AttributeError:
             raise UnsupportedExchangeError(f"The exchange '{self.exchange_name}' is not supported.") from None
+        exchange = exchange_class(
+            {
+                "apiKey": self.api_key,
+                "secret": self.secret_key,
+                "enableRateLimit": True,
+            },
+        )
+        if exchange.requiredCredentials.get("password") is True:
+            exchange.password = self._get_env_variable("EXCHANGE_PASSWORD")
+        if self.is_paper_trading_activated:
+            self._enable_sandbox_mode(exchange)
+        return exchange
 
     def _enable_sandbox_mode(self, exchange: Any) -> None:
         if exchange.has.get("sandbox") is not True:

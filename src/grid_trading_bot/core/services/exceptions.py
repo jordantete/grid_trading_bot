@@ -101,6 +101,6 @@ class CircuitBreakerOpenError(ExchangeServiceError):
 
 
 class MissingEnvironmentVariableError(ExchangeServiceError):
-    """Raised when env variable are missing (EXCHANGE_API_KEY and/or EXCHANGE_SECRET_KEY)."""
+    """Raised when an exchange credential (EXCHANGE_API_KEY, EXCHANGE_SECRET_KEY, EXCHANGE_PASSWORD) is missing."""
 
     pass

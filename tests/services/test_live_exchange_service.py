@@ -49,6 +49,7 @@ class TestLiveExchangeService:
     def setup_env_vars(self, monkeypatch):
         monkeypatch.setenv("EXCHANGE_API_KEY", "test_api_key")
         monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test_secret_key")
+        monkeypatch.setenv("EXCHANGE_PASSWORD", "test_passphrase")
 
     @patch("grid_trading_bot.core.services.live_exchange_service.ccxtpro")
     @patch("grid_trading_bot.core.services.live_exchange_service.getattr")
@@ -115,6 +116,50 @@ class TestLiveExchangeService:
             assert service.exchange.sign("ping", "public", "GET", {})["url"] == (
                 "https://testnet.binance.vision/api/v3/ping"
             )
+        finally:
+            await service.exchange.close()
+
+    @pytest.mark.parametrize(("name", "host"), [("okx", "www.okx.com"), ("myokx", "eea.okx.com")])
+    @pytest.mark.asyncio
+    async def test_a_paper_okx_signs_with_the_passphrase_in_demo_mode(
+        self, config_manager, setup_env_vars, monkeypatch, name, host
+    ):
+        monkeypatch.setenv("EXCHANGE_PASSWORD", " test_passphrase ")
+        _with_exchange(config_manager, name=name)
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=True)
+        try:
+            request = service.exchange.sign("account/balance", "private", "GET", {})
+
+            assert request["url"].startswith(f"https://{host}/")
+            assert request["headers"]["OK-ACCESS-PASSPHRASE"] == "test_passphrase"
+            assert service.exchange.headers["x-simulated-trading"] == "1"
+        finally:
+            await service.exchange.close()
+
+    @pytest.mark.asyncio
+    async def test_a_live_okx_does_not_ask_for_demo_trading(self, config_manager, setup_env_vars):
+        _with_exchange(config_manager, name="myokx")
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+        try:
+            assert "x-simulated-trading" not in (service.exchange.headers or {})
+        finally:
+            await service.exchange.close()
+
+    def test_okx_without_a_passphrase_refuses_to_start(self, config_manager, setup_env_vars, monkeypatch):
+        monkeypatch.delenv("EXCHANGE_PASSWORD", raising=False)
+        _with_exchange(config_manager, name="okx")
+
+        with pytest.raises(
+            MissingEnvironmentVariableError, match="Missing required environment variable: EXCHANGE_PASSWORD"
+        ):
+            LiveExchangeService(config_manager, is_paper_trading_activated=False)
+
+    @pytest.mark.asyncio
+    async def test_binance_starts_without_a_passphrase(self, config_manager, setup_env_vars, monkeypatch):
+        monkeypatch.delenv("EXCHANGE_PASSWORD", raising=False)
+        service = LiveExchangeService(config_manager, is_paper_trading_activated=False)
+        try:
+            assert not service.exchange.password
         finally:
             await service.exchange.close()
 

@@ -296,6 +296,7 @@ class FakeExchange:
     calls_path: ClassVar[Path | None] = None
     tick_interval: ClassVar[float] = 0.05
     has: ClassVar[dict[str, Any]] = {"sandbox": True}
+    requiredCredentials: ClassVar[dict[str, bool]] = {"apiKey": True, "secret": True}  # noqa: N815
 
     def __init__(self, _params: dict):
         self.urls = {"api": "https://fake.invalid"}
