@@ -107,3 +107,10 @@ class TestBacktestOrderExecutionStrategy:
 
     async def test_get_order_returns_none(self, setup_strategy):
         assert await setup_strategy.get_order("any-id", "BTC/USDT") is None
+
+    async def test_find_order_finds_nothing(self, setup_strategy):
+        assert await setup_strategy.find_order("g1", "BTC/USDT") is None
+
+    async def test_rounding_keeps_the_values(self, setup_strategy):
+        assert setup_strategy.round_amount("BTC/USDT", 0.123456789) == 0.123456789
+        assert setup_strategy.round_price("BTC/USDT", 100.4567) == 100.4567
