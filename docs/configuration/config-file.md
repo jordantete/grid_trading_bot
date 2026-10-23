@@ -132,8 +132,8 @@ silently distort the profit spacing the whole strategy is built on.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `timeframe` | string | Yes | OHLCV timeframe (e.g., `1m`, `5m`, `1h`, `1d`). |
-| `period.start_date` | string | Yes | Start date in ISO 8601 format. |
-| `period.end_date` | string | Yes | End date in ISO 8601 format. |
+| `period.start_date` | string | Yes | Start date in ISO 8601 format. With a CSV file, a date with an offset is converted to UTC and one without is read as UTC. |
+| `period.end_date` | string | Yes | End date in ISO 8601 format. Same reading as `period.start_date`. |
 | `initial_balance` | float | Yes | Starting balance in quote currency. |
 | `historical_data_file` | string | No | Path to local CSV file for offline backtesting. If omitted, data is fetched via CCXT. |
 

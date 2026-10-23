@@ -47,6 +47,7 @@ See the [Environment Variables](../configuration/environment-variables.md) page 
 | `ERROR_OCCURRED` | Error Occurred | When an unexpected error occurs; when a liquidation fails (first failure, then every 10 minutes), stops on a remainder under the exchange minimum or on an exchange holding less free crypto than the books, or is interrupted by the shutdown; when an open order carrying the bot's `clientOrderId` prefix is unknown at restart; when a liquidation was in progress at restart (the position may still be open, the bot halts); when a background loop fails for the first time in a row; when a market order executed by the exchange cannot be booked (the bot halts) |
 | `HEALTH_CHECK_ALERT` | Health Check Alert | When the health check detects an issue |
 | `STATE_RECOVERY_COMPLETE` | State Recovery Complete | After a successful state recovery on restart; lists the rejected and ghost orders that were not re-placed |
+| `ACCOUNTING_NOT_RESTORED` | Cost basis and PnL not restored | When the cost basis or the realized PnL cannot be restored or replayed during a live or paper recovery. Trading resumes; realized and unrealized PnL may be wrong until the next fresh start |
 | `BOT_HALTED` | Bot Halted | When the bot halts. The text asks you to check the exchange for orders left open before running `resume` |
 | `BOT_SUSPENDED` | Bot Suspended | When the bot stops with its open orders kept; the next start resumes them |
 | `START_REFUSED_HALTED` | Start Refused | Once, when a start is refused because the config is halted |

@@ -113,6 +113,8 @@ Alloy parses each log line to extract:
 - **Level** — Log severity (DEBUG, INFO, WARNING, ERROR)
 - **Message** — The log content
 
+The service is the logger name of the class that wrote the line. Limit order placement, the initial purchase and the liquidation log as `Placement`, `InitialPurchase` and `Liquidation` (they were `OrderManager`); the strategies as `BacktestGridStrategy` and `LiveGridStrategy` (`GridTradingStrategy`); the recovery steps as `ExchangeResolution` and `BalanceRestore` (`StateRecoveryService`); the ticker stream as `LiveTickerFeed` (`LiveExchangeService`). The dashboard queries follow these names; an external Loki query that filters on the old logger name needs the same change.
+
 ## Alerts
 
 Grafana and Loki only display data: they send no alert. Alerts go through Apprise (`APPRISE_NOTIFICATION_URLS`): order failures, errors, health check issues (CPU, memory, disk, stale ticker feed) and TP/SL triggers. See [Notifications](../usage/notifications.md).

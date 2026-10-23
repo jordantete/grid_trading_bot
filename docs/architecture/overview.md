@@ -18,7 +18,8 @@ src/grid_trading_bot/
 ├── core/
 │   ├── exceptions.py                   # GridBotError hierarchy
 │   ├── bot_management/                 # Bot lifecycle and orchestration
-│   │   ├── grid_trading_bot.py         # Builds the components, runs, stops, recovers
+│   │   ├── bot_assembly.py             # Reads the trading mode and builds the wired components
+│   │   ├── grid_trading_bot.py         # Calls the assembly, runs, stops, recovers
 │   │   ├── event_bus.py                # STOP_BOT only
 │   │   ├── stop_request.py             # Stop kinds and exit codes
 │   │   ├── supervised_loop.py          # Background loops: retry, alert, CRASH after 3 failures
@@ -40,10 +41,15 @@ src/grid_trading_bot/
 │   ├── indicators/
 │   │   └── atr_calculator.py           # ATR for dynamic spacing and the trailing stop
 │   ├── order_handling/                 # Order lifecycle
-│   │   ├── order_manager.py            # Placement, fill pipeline, market legs, liquidation
+│   │   ├── order_manager.py            # Lock, fill pipeline, grid init and regrid; delegates the rest
+│   │   ├── placement.py                # Limit orders through the journal, retries, replacements
+│   │   ├── initial_purchase.py         # Market buy that funds the sells above the price
+│   │   ├── liquidation.py              # Position close, take-profit and stop-loss exits
+│   │   ├── market_entry.py             # Journals market legs and sends them
 │   │   ├── order.py                    # Order model (timestamps in ms)
 │   │   ├── order_book.py               # Order-to-level mapping
 │   │   ├── placement_journal.py        # Placements written before they are sent
+│   │   ├── balance_source.py           # VIRTUAL (config, database) or EXCHANGE starting balances
 │   │   ├── balance_tracker.py          # Fiat and crypto, free and reserved
 │   │   ├── fee_calculator.py           # Fees in the currency received
 │   │   ├── pnl_ledger.py               # Realized PnL
@@ -57,6 +63,8 @@ src/grid_trading_bot/
 │   ├── persistence/                    # State persistence (live and paper)
 │   │   ├── state_persistence_service.py  # One-transaction snapshots, periodic checkpoint
 │   │   ├── state_recovery_service.py     # Resume, refuse or defer a start
+│   │   ├── exchange_resolution.py        # Settles restored orders and journal entries against the exchange
+│   │   ├── balance_restore.py            # Restores balances, reservations and accounting into the tracker
 │   │   ├── state_repository_interface.py
 │   │   ├── sqlite_state_repository.py    # SQLite backend (WAL)
 │   │   ├── serializers.py                # Model serialization, config hash
@@ -69,7 +77,8 @@ src/grid_trading_bot/
 │   │   ├── exchange_interface.py
 │   │   ├── exchange_service_factory.py
 │   │   ├── backtest_exchange_service.py
-│   │   ├── live_exchange_service.py    # ccxt pro, ticker feed, sandbox for paper
+│   │   ├── live_exchange_service.py    # ccxt pro, sandbox for paper
+│   │   ├── live_ticker_feed.py         # Websocket ticker stream, price validation
 │   │   ├── circuit_breaker.py
 │   │   ├── market_constraints.py       # Exchange minimums and precision
 │   │   └── exceptions.py
@@ -77,7 +86,9 @@ src/grid_trading_bot/
 │       ├── order_validator.py
 │       └── exceptions.py
 ├── strategies/
-│   ├── grid_trading_strategy.py        # Backtest loop and live ticker loop, TP/SL, trailing stop, regrid
+│   ├── grid_trading_strategy.py        # Shared base: grid init, TP/SL, trailing stop, regrid, state export
+│   ├── backtest_grid_strategy.py       # Candle loop, order simulator, report from the candles, plot
+│   ├── live_grid_strategy.py           # Ticker loop, ATR refresh, report from the live metrics
 │   ├── trading_strategy_interface.py
 │   ├── trading_performance_analyzer.py # Metrics and the display summary
 │   ├── performance_metrics.py          # Typed metrics
@@ -101,7 +112,8 @@ flowchart TD
     BotController --> Bot
     HealthCheck --> Bot
     Bot --> ExchangeService["ExchangeService (factory)"]
-    Bot --> Strategy["GridTradingStrategy"]
+    Bot --> Assembly["assemble_bot"]
+    Assembly -. builds .-> Strategy["BacktestGridStrategy or LiveGridStrategy"]
     Bot --> OrderManager["OrderManager"]
     Bot --> Tracker["OrderStatusTracker (live, paper)"]
     Bot --> Simulator["OrderSimulator (backtest)"]
@@ -113,6 +125,11 @@ flowchart TD
     Strategy --> TrailingStop["TrailingStopLoss + ATRCalculator"]
     Tracker --> OrderManager
     Simulator --> OrderManager
+    OrderManager --> Placement["Placement"]
+    OrderManager --> InitialPurchase["InitialPurchase"]
+    OrderManager --> Liquidation["Liquidation"]
+    InitialPurchase --> MarketEntry["MarketEntrySender"]
+    Liquidation --> MarketEntry
     OrderManager --> BalanceTracker["BalanceTracker"]
     OrderManager --> OrderBook["OrderBook"]
     OrderManager --> Journal["PlacementJournal"]
@@ -122,6 +139,8 @@ flowchart TD
     GridManager --> GridLevel["GridLevel"]
     PersistenceService --> StateRepository["SQLiteStateRepository"]
     RecoveryService --> StateRepository
+    RecoveryService --> Resolution["ExchangeResolution"]
+    RecoveryService --> BalanceRestore["BalanceRestore"]
 ```
 
 ## Design Patterns
@@ -147,7 +166,7 @@ Order updates do not travel on the event bus. The order tracker (live and paper 
 
 ### Placement Journal
 
-Every order the bot places goes through one helper in `OrderManager` and a `PlacementJournal` (`core/order_handling/placement_journal.py`). The helper rounds the quantity and the price to the exchange precision, reserves the funds, marks the grid level as busy, writes the entry to the `pending_placements` table, then sends the order with its `clientOrderId`. An accepted order enters the order book and leaves the journal. An entry whose send failed for a transient reason stays, with its funds reserved, and the order tracker retries the journal at the end of every poll; an entry whose outcome is unknown is looked up by its `clientOrderId` before it is sent again. A refusal drops the entry and releases its funds. The reserved amounts always equal what the open orders and the journal entries hold.
+Every limit order the bot places goes through `Placement` (`core/order_handling/placement.py`, called by `OrderManager`) and a `PlacementJournal` (`core/order_handling/placement_journal.py`). `Placement` rounds the quantity and the price to the exchange precision, reserves the funds, marks the grid level as busy, writes the entry to the `pending_placements` table, then sends the order with its `clientOrderId`. An accepted order enters the order book and leaves the journal. An entry whose send failed for a transient reason stays, with its funds reserved, and the order tracker retries the journal at the end of every poll; an entry whose outcome is unknown is looked up by its `clientOrderId` before it is sent again. A refusal drops the entry and releases its funds. The reserved amounts always equal what the open orders and the journal entries hold.
 
 The tracker applies the fills of one poll in the order the price reaches them (buys from the highest price down, then sells from the lowest up), as the backtest simulator does. Exceptions derive from `GridBotError`: a `DataFetchError` is a transient exchange failure and is retried, an `OrderRefusedError` (the bot's own checks or the exchange refusing the order) is expected and logged at WARNING.
 
@@ -172,12 +191,12 @@ stateDiagram-v2
 
 ### Strategy Pattern
 
-`TradingStrategyInterface` defines the ABC. `GridTradingStrategy` implements it with two execution modes:
+`TradingStrategyInterface` defines the ABC. `GridTradingStrategy` holds the logic both modes share, and two classes built on it own what differs:
 
-- **Backtest mode** — Iterates over OHLCV rows synchronously
-- **Live/Paper mode** — Consumes a WebSocket price stream asynchronously
+- **`BacktestGridStrategy`**: loads the history, iterates over the OHLCV rows synchronously, fills orders through the `OrderSimulator`, builds the report from the candles and plots the result
+- **`LiveGridStrategy`**: consumes the WebSocket price stream asynchronously, refreshes the ATR at each candle close, builds the report from the live metrics and has no plot. It takes a `mode_label` (`live` or `paper`) for its log lines
 
-The strategy handles:
+The shared strategy handles:
 
 1. Initial purchase (enough crypto to fund the sell orders placed above the current price)
 2. Grid order initialization across computed levels
@@ -185,6 +204,15 @@ The strategy handles:
 4. Take-profit and stop-loss monitoring
 
 ## Trading Modes
+
+The trading mode is read in one place, `assemble_bot` (`core/bot_management/bot_assembly.py`), which `GridTradingBot.__init__` calls, plus `cli.py` and the two factories. The assembly builds each component with the behaviour its mode needs, so no other component asks which mode it runs in:
+
+- **`fail_fast`** on `OrderManager` (the strategy reads it from there): an unexpected error during placement, liquidation, an initial purchase or booking is re-raised (backtest) or alerted and handled (live, paper)
+- **`BalanceSource`** on `BalanceTracker` and `StateRecoveryService`: `VIRTUAL` (backtest and paper) takes the starting balances from the config and restores them from the database; `EXCHANGE` (live) fetches and restores them from the exchange
+- **`enabled`** on `NotificationHandler`: alerts are sent in live and paper trading only
+- **Strategy class**: `BacktestGridStrategy` or `LiveGridStrategy`; the reconciliation service (live) and the plotter (backtest) are built only for their mode
+
+`ExchangeInterface` declares `load_exchange_markets`, `get_market_constraints` and `last_price_update_ts`, so the bot calls them on any exchange service; `BacktestExchangeService` answers from the config (`execution.backtest_min_amount`, `backtest_min_cost`). `tests/test_mode_boundaries.py` fails when `TradingMode` is named outside `config/`, `cli.py`, `grid_trading_bot.py`, `bot_assembly.py` and the two factories.
 
 | Mode | Exchange Service | Execution Strategy | Additional Tasks |
 |------|-----------------|-------------------|-----------------|
@@ -224,13 +252,13 @@ A resume works as follows:
 1. **Config compatibility**. The DB name carries a hash of `grid_strategy`, `exchange`, `pair` and `trading_settings.timeframe`; `risk_management` is not part of it
 2. **Grid level restoration**. Overlays saved states and paired-level references onto freshly computed grid levels
 3. **Order restoration**. Reconstructs Order objects from DB, repopulates the OrderBook
-4. **Exchange reconciliation**. Each journal entry that may have been sent is looked up by its `clientOrderId` first: found open, it is adopted into the book; found filled, it is booked like a fill made while the bot was down; never received, it is sent again at the first poll. A market entry (the initial purchase or a liquidation leg) that executed nothing is dropped, one found executed is booked once as closed, and one still open defers the start. A liquidation found in the journal books what it sold, sends an "Error Occurred" alert that the position may still be open, and halts the bot (halt marker, exit 0) instead of resuming the grid; sell what is left by hand, then run `resume`. Then, for each locally-open order, the bot fetches its current status from the exchange:
+4. **Exchange reconciliation** (`ExchangeResolution`). Each journal entry that may have been sent is looked up by its `clientOrderId` first: found open, it is adopted into the book; found filled, it is booked like a fill made while the bot was down; never received, it is sent again at the first poll. A market entry (the initial purchase or a liquidation leg) that executed nothing is dropped, one found executed is booked once as closed, and one still open defers the start. A liquidation found in the journal books what it sold, sends an "Error Occurred" alert that the position may still be open, and halts the bot (halt marker, exit 0) instead of resuming the grid; sell what is left by hand, then run `resume`. Then, for each locally-open order, the bot fetches its current status from the exchange:
     - Filled (fully or partly) while bot was down → books each fill once, with its fee, and places the paired order
     - Cancelled or expired on exchange → frees the level, releases the reserved funds, and re-places the order on its level right after the recovery
     - Rejected on exchange → frees the level and releases the funds; listed in the recovery notification, not re-placed
     - Not found → marked as ghost, funds released, listed with its level in the recovery notification, not re-placed (its fate is unknown)
     - Orphan orders on exchange (neither in the local book nor in the journal) → logged as warnings, not auto-adopted; one carrying the bot's `clientOrderId` prefix also sends an alert
-5. **Balance restoration**. Live: the balances come from the exchange, and the reserved amounts are recomputed from the open orders and the journal entries. Paper: the virtual balances come from the DB, the reserved amounts are recomputed from the open orders and the journal entries, and the fills are booked on them
+5. **Balance restoration** (`BalanceRestore`). Live: the balances come from the exchange, and the reserved amounts are recomputed from the open orders and the journal entries. Paper: the virtual balances come from the DB, the reserved amounts are recomputed from the open orders and the journal entries, and the fills are booked on them. If the cost basis and realized PnL cannot be restored or replayed (either mode), the recovery still resumes and sends an `ACCOUNTING_NOT_RESTORED` alert
 
 ### Configuration
 

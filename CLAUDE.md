@@ -65,17 +65,19 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 
 ### Core Modules
 
-- **`core/bot_management/`** — Bot lifecycle: `GridTradingBot` (orchestrator), `EventBus` (pub/sub, `STOP_BOT` only), `BotController` (CLI), `HealthCheck`, `NotificationHandler` (Apprise alerts)
+- **`core/bot_management/`** — Bot lifecycle: `GridTradingBot` (orchestrator), `bot_assembly.py` (`assemble_bot` reads the trading mode and builds the wired components, returned as `BotComponents`), `EventBus` (pub/sub, `STOP_BOT` only), `BotController` (CLI), `HealthCheck`, `NotificationHandler` (Apprise alerts)
 - **`core/grid_management/`** — `GridManager` computes grid levels (arithmetic/geometric spacing), `GridLevel` waits in its home (free) state, moves to `WAITING_FOR_*_FILL` while it holds orders, and returns home when the last one fills or is cancelled; each `GridStrategy` plans the initial orders and picks the level of every paired order
-- **`core/order_handling/`** — `OrderManager` orchestrates order placement and pairing (buy fill → place sell above, sell fill → place buy below) through one placement helper and a `PlacementJournal` (each placement written to the database before it is sent, then retried at every poll until it is placed or refused). `BalanceTracker` tracks fiat/crypto with reserved amounts and books fees in the currency received. `OrderBook` maps orders to grid levels
-- **`core/persistence/`** — SQLite state persistence (live and paper trading): `StatePersistenceService` (one-transaction snapshots saved by `OrderManager` after every order operation; alerts, then halts after 3 failed writes in a row), `StateRecoveryService` (resumes, refuses or defers a start; never deletes the database), the `pending_placements` journal (schema v4), `SQLiteStateRepository` (WAL-mode SQLite backend), `Serializers` (Order/GridLevel/Balance ↔ dict). DB path: `data/{BASE}_{QUOTE}/state_{config_hash[:8]}.db`
-- **`core/services/`** — Exchange abstraction via `ExchangeInterface` ABC. `BacktestExchangeService` reads CSV/CCXT OHLCV data. `LiveExchangeService` uses CCXT Pro WebSockets
+- **`core/order_handling/`** — `OrderManager` keeps the lock and the fill pipeline (buy fill → place sell above, sell fill → place buy below) and delegates to `Placement` (every limit order, through the `PlacementJournal`: written to the database before it is sent, then retried at every poll until it is placed or refused), `InitialPurchase`, `Liquidation` (position close, TP/SL exits) and `MarketEntrySender` (journals and sends market legs). `BalanceTracker` tracks fiat/crypto with reserved amounts and books fees in the currency received; its `BalanceSource` (`VIRTUAL` or `EXCHANGE`) says where the starting balances come from. `OrderBook` maps orders to grid levels
+- **`core/persistence/`** — SQLite state persistence (live and paper trading): `StatePersistenceService` (one-transaction snapshots saved by `OrderManager` after every order operation; alerts, then halts after 3 failed writes in a row), `StateRecoveryService` (resumes, refuses or defers a start; never deletes the database; delegates to `ExchangeResolution` for the orders and journal entries and to `BalanceRestore` for the balances and accounting), the `pending_placements` journal (schema v4), `SQLiteStateRepository` (WAL-mode SQLite backend), `Serializers` (Order/GridLevel/Balance ↔ dict). DB path: `data/{BASE}_{QUOTE}/state_{config_hash[:8]}.db`
+- **`core/services/`** — Exchange abstraction via `ExchangeInterface` ABC. `BacktestExchangeService` reads CSV/CCXT OHLCV data. `LiveExchangeService` uses CCXT Pro WebSockets and delegates its ticker stream to `LiveTickerFeed`. `ExchangeInterface` declares `load_exchange_markets`, `get_market_constraints` and `last_price_update_ts` for every service
 - **`core/order_handling/execution_strategy/`** — `OrderExecutionStrategyInterface` ABC. Backtest variant is instant; live variant sends a `clientOrderId` with every order and, after a lost answer, looks the order up by that id before reporting it placed, not placed or unknown
 - **`core/validation/`** — `OrderValidator` for order quantity/price validation
 
 ### Strategy Layer
 
-- **`strategies/grid_trading_strategy.py`** — Implements `TradingStrategyInterface`. Handles both backtest (iterate OHLCV rows) and live (WebSocket price stream) execution loops. Manages the initial purchase (sized to fund the sell orders above the price), grid order initialization, take-profit/stop-loss
+- **`strategies/grid_trading_strategy.py`** — Implements `TradingStrategyInterface`; the base both modes share. Manages the initial purchase (sized to fund the sell orders above the price), grid order initialization, take-profit/stop-loss, trailing stop and regrid
+- **`strategies/backtest_grid_strategy.py`**: `BacktestGridStrategy`: loads the history, iterates the OHLCV rows, fills through the `OrderSimulator`, reports from the candles and plots
+- **`strategies/live_grid_strategy.py`**: `LiveGridStrategy(mode_label)`: consumes the WebSocket price stream, refreshes the ATR at each candle close, reports from the live metrics (no plot)
 - **`strategies/trading_performance_analyzer.py`** — Computes ROI, max drawdown, Sharpe ratio, etc.
 - **`strategies/plotter.py`** — Plotly visualization for backtest results
 
@@ -87,16 +89,17 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 ### Key Design Patterns
 
 - **Factory Pattern**: `ExchangeServiceFactory` and `OrderExecutionStrategyFactory` select implementations based on `TradingMode`
-- **Event Bus**: carries `STOP_BOT` only. Order updates go through `OrderManager.apply_order_update` (balance, level, paired order, save, in that order), and every placement through `OrderManager._submit_limit` and the `PlacementJournal`
+- **Behaviour at construction**: `assemble_bot` is the one place that reads the mode to build components. `OrderManager` gets `fail_fast`, `BalanceTracker` and `StateRecoveryService` get a `BalanceSource`, `NotificationHandler` gets `enabled`, and the bot picks the strategy class. `tests/test_mode_boundaries.py` keeps `TradingMode` within `config/`, `cli.py`, `grid_trading_bot.py`, `bot_assembly.py` and the two factories
+- **Event Bus**: carries `STOP_BOT` only. Order updates go through `OrderManager.apply_order_update` (balance, level, paired order, save, in that order), and every placement through `Placement.submit_limit` and the `PlacementJournal`
 - **State Machine**: `GridLevel` transitions through `GridCycleState` enum states as orders are placed and filled
-- **Strategy Pattern**: `TradingStrategyInterface` ABC; currently one implementation (`GridTradingStrategy`) with two modes (`simple_grid`, `hedged_grid`)
+- **Strategy Pattern**: `TradingStrategyInterface` ABC; `GridTradingStrategy` is the shared base, with `BacktestGridStrategy` and `LiveGridStrategy` as the two run paths; the grid has two modes (`simple_grid`, `hedged_grid`)
 
 ### Trading Modes
 
 Configured via `exchange.trading_mode` in `config.json`:
-- **`backtest`**: Simulates on historical OHLCV data (CSV or fetched via CCXT). No real orders
-- **`paper_trading`**: Connects to exchange sandbox APIs with real market data. Runs BotController + HealthCheck
-- **`live`**: Real trading with actual funds. Same architecture as paper trading but against production APIs. Includes SQLite state persistence for crash recovery (a checkpoint after every order operation, merge recovery on restart); paper trading persists and resumes its state the same way
+- **`backtest`**: Simulates on historical OHLCV data (CSV or fetched via CCXT). No real orders. Runs `BacktestGridStrategy`; an unexpected error in an order operation is re-raised (`fail_fast`), and notifications are off
+- **`paper_trading`**: Connects to exchange sandbox APIs with real market data. Runs `LiveGridStrategy`, BotController + HealthCheck; balances are virtual (`BalanceSource.VIRTUAL`)
+- **`live`**: Real trading with actual funds. Same architecture as paper trading but against production APIs, with balances fetched from the exchange (`BalanceSource.EXCHANGE`) and the `ReconciliationService`. Includes SQLite state persistence for crash recovery (a checkpoint after every order operation, merge recovery on restart); paper trading persists and resumes its state the same way
 
 ## Testing
 
