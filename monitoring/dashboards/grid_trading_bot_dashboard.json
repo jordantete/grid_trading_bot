@@ -44,7 +44,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |~ \"LiveExchangeService|BacktestExchangeService\" |= \"current price\" | regexp \"current price: (?P<price>[\\\\d.]+)\" | unwrap price [$__auto])",
+          "expr": "last_over_time({job=\"grid_trading_bot\", trading_pair=\"$trading_pair\"} |= \"LiveTickerFeed\" |= \"current price\" | regexp \"current price: (?P<price>[\\\\d.]+)\" | unwrap price [$__auto])",
           "legendFormat": "Price"
         },
         {

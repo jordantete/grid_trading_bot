@@ -18,6 +18,7 @@ LINE_FILTER = re.compile(r'\|= "((?:[^"\\]|\\.)*)"')
 REGEX_FILTER = re.compile(r'\|~ "((?:[^"\\]|\\.)*)"')
 REGEXP_STAGE = re.compile(r'\| regexp "((?:[^"\\]|\\.)*)"')
 SERVICE_LABEL = re.compile(r'service="([^"]*)"')
+LOG_METHODS = {"debug", "info", "warning", "error", "critical", "exception"}
 
 
 def _source_texts() -> tuple[list[str], set[str]]:
@@ -30,6 +31,43 @@ def _source_texts() -> tuple[list[str], set[str]]:
             elif isinstance(node, ast.ClassDef):
                 class_names.add(node.name)
     return fragments, class_names
+
+
+def _is_log_call(node: ast.AST) -> bool:
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in LOG_METHODS):
+        return False
+    owner = node.func.value
+    return (isinstance(owner, ast.Attribute) and owner.attr == "logger") or (
+        isinstance(owner, ast.Name) and owner.id == "logger"
+    )
+
+
+def _strings_under(nodes: list[ast.AST]) -> list[str]:
+    return [
+        n.value for root in nodes for n in ast.walk(root) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    ]
+
+
+def _emitted_texts_by_class() -> dict[str, list[str]]:
+    """The text a logger class can put in a log line: its file's log calls and its module-level formatter functions."""
+    emitted: dict[str, list[str]] = {}
+    for path in SOURCE_DIR.rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        texts = _strings_under([n for n in ast.walk(tree) if _is_log_call(n)])
+        texts += _strings_under([n for n in tree.body if isinstance(n, ast.FunctionDef)])
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                emitted.setdefault(node.name, []).extend(texts)
+    return emitted
+
+
+def _logger_filters(expr: str) -> tuple[list[str], list[str]]:
+    """The logger classes a query names (service label or quoted class name) and the message texts it filters on."""
+    texts = LINE_FILTER.findall(expr)
+    for alternatives in REGEX_FILTER.findall(expr):
+        texts.extend(alternatives.split("|"))
+    loggers = SERVICE_LABEL.findall(expr) + [text for text in texts if text in CLASS_NAMES]
+    return loggers, [text for text in texts if text not in CLASS_NAMES]
 
 
 def _queries() -> list[tuple[str, str]]:
@@ -50,6 +88,7 @@ def _required_texts(expr: str) -> list[str]:
 
 
 FRAGMENTS, CLASS_NAMES = _source_texts()
+EMITTED_BY_CLASS = _emitted_texts_by_class()
 QUERIES = _queries()
 
 
@@ -61,6 +100,18 @@ def test_dashboard_filters_match_source_text(panel, expr):
         if text not in CLASS_NAMES and not any(text in fragment for fragment in FRAGMENTS)
     ]
     assert not missing, f"Panel {panel!r} filters on text that no longer exists in src/: {missing}"
+
+
+@pytest.mark.parametrize(("panel", "expr"), QUERIES, ids=[f"{panel}-{i}" for i, (panel, _) in enumerate(QUERIES)])
+def test_dashboard_messages_come_from_the_logger_the_query_names(panel, expr):
+    """A filter like "Buy" is a runtime value, so a named logger must emit at least one of the query's texts."""
+    loggers, messages = _logger_filters(expr)
+    orphans = [
+        logger
+        for logger in loggers
+        if not any(message in text for message in messages for text in EMITTED_BY_CLASS.get(logger, []))
+    ]
+    assert not orphans, f"Panel {panel!r} names loggers that log none of {messages}: {orphans}"
 
 
 def test_dashboard_service_labels_are_class_names():
