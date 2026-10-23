@@ -65,6 +65,7 @@ def build_stack(
     trading_mode: str = "live",
     store: RecordingStore | None = None,
     config_hash: str = "3f2a9c1d",
+    execution: FakeExecution | None = None,
 ) -> TradingStack:
     config = ConfigManager.from_dict(stack_config(trading_mode=trading_mode))
     grid = GridManager(config, StrategyType.SIMPLE_GRID)
@@ -78,7 +79,7 @@ def build_stack(
     balances._balance = Decimal(str(fiat))
     balances._crypto_balance = Decimal(str(crypto))
     book = OrderBook()
-    execution = FakeExecution(market_price=ARMING_PRICE)
+    execution = execution if execution is not None else FakeExecution(market_price=ARMING_PRICE)
     notifications = Mock()
     notifications.async_send_notification = AsyncMock()
     journal = PlacementJournal()

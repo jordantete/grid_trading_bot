@@ -93,11 +93,11 @@ class TestTakeProfitStopLoss:
     async def test_tp_delegates_to_close_positions(self, setup_order_manager, fail_fast):
         manager, *_ = setup_order_manager
         manager.fail_fast = fail_fast
-        manager.close_positions = AsyncMock()
+        manager.liquidation.close_positions = AsyncMock()
 
         await manager.execute_take_profit_or_stop_loss_order(current_price=100.0, take_profit_order=True)
 
-        manager.close_positions.assert_awaited_once_with(liquidate=True, current_price=100.0)
+        manager.liquidation.close_positions.assert_awaited_once_with(liquidate=True, current_price=100.0)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("fail_fast", [True, False])
@@ -106,14 +106,14 @@ class TestTakeProfitStopLoss:
         manager.fail_fast = fail_fast
 
         async def liquidated(**_kwargs):
-            manager._liquidated = True
+            manager.liquidation.liquidated = True
             manager.balance_tracker.crypto_balance = 0.0
 
-        manager.close_positions = AsyncMock(side_effect=liquidated)
+        manager.liquidation.close_positions = AsyncMock(side_effect=liquidated)
 
         await manager.execute_take_profit_or_stop_loss_order(current_price=90.0, stop_loss_order=True)
 
-        manager.close_positions.assert_awaited_once_with(liquidate=True, current_price=90.0)
+        manager.liquidation.close_positions.assert_awaited_once_with(liquidate=True, current_price=90.0)
         notification_handler.async_send_notification.assert_awaited_once_with(
             NotificationType.STOP_LOSS_TRIGGERED,
             order_details="Stop loss at 90.0: open orders cancelled, position liquidated.",
@@ -122,7 +122,7 @@ class TestTakeProfitStopLoss:
     @pytest.mark.asyncio
     async def test_an_incomplete_liquidation_says_so(self, setup_order_manager):
         manager, _, _, _, _, _, notification_handler = setup_order_manager
-        manager.close_positions = AsyncMock()
+        manager.liquidation.close_positions = AsyncMock()
 
         await manager.execute_take_profit_or_stop_loss_order(current_price=90.0, stop_loss_order=True)
 

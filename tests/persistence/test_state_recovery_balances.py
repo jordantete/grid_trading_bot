@@ -73,9 +73,7 @@ def _exchange_balances(before, executions):
 
 
 async def _restarted(repository, before, exchange_balances, trading_mode="live"):
-    after = build_stack(fiat=0.0, crypto=0.0, trading_mode=trading_mode)
-    after.execution = before.execution
-    after.manager.order_execution_strategy = before.execution
+    after = build_stack(fiat=0.0, crypto=0.0, trading_mode=trading_mode, execution=before.execution)
     exchange_service = Mock()
     exchange_service.get_balance = AsyncMock(return_value=exchange_balances)
     exchange_service.fetch_open_orders = AsyncMock(return_value=[])
@@ -419,7 +417,7 @@ class TestJournalRecovery:
         await before.manager.initialize_grid_orders(ARMING_PRICE)
         before.execution.fail_next_limit_order = OrderNotPlacedError("exchange unavailable")
         async with before.manager._locked():
-            await before.manager._submit_limit(
+            await before.manager.placement.submit_limit(
                 OrderSide.SELL,
                 before.grid.grid_levels[110.0],
                 0.5,

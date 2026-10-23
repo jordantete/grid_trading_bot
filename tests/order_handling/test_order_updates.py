@@ -127,7 +127,7 @@ class TestFills:
 
     async def test_a_fill_after_the_positions_closed_is_booked_without_a_paired_order(self, stack):
         buy = stack.execution.order_at(100.0, OrderSide.BUY)
-        stack.manager._positions_closed = True
+        stack.manager.liquidation.positions_closed = True
         crypto_before = stack.balances.get_adjusted_crypto_balance()
 
         await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
@@ -333,7 +333,7 @@ class TestEndedOrders:
 
     async def test_an_ended_order_after_the_positions_closed_is_settled_not_replaced(self, stack):
         buy = stack.execution.order_at(90.0, OrderSide.BUY)
-        stack.manager._positions_closed = True
+        stack.manager.liquidation.positions_closed = True
 
         await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.CANCELED))
 

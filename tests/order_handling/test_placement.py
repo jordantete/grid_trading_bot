@@ -11,9 +11,9 @@ from tests.fakes.trading_stack import ARMING_PRICE, build_stack, reserved_matche
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.exceptions import BookingError
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
-from grid_trading_bot.core.order_handling import order_manager as order_manager_module
+from grid_trading_bot.core.order_handling import placement as placement_module
+from grid_trading_bot.core.order_handling.liquidation import Liquidation
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
-from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.placement_journal import PendingPlacement, PlacementPurpose
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
@@ -239,7 +239,7 @@ class TestSubmitLimit:
         stack = build_stack(store=RecordingStore())
         await stack.manager.close_positions(liquidate=False)
 
-        placed = await stack.manager._submit_limit(
+        placed = await stack.manager.placement.submit_limit(
             OrderSide.BUY, stack.grid.grid_levels[80.0], 1.0, PlacementPurpose.GRID
         )
 
@@ -253,7 +253,7 @@ class TestSubmitLimit:
 
         async def place_then_close(*args):
             order = await real_execute(*args)
-            stack.manager._positions_closed = True
+            stack.manager.liquidation.positions_closed = True
             return order
 
         stack.execution.execute_limit_order = place_then_close
@@ -265,7 +265,7 @@ class TestSubmitLimit:
 
     async def test_an_order_that_cannot_be_adopted_keeps_its_sent_entry_and_reservation(self, monkeypatch):
         stack = build_stack(store=RecordingStore())
-        real_adopt = order_manager_module.adopt_order
+        real_adopt = placement_module.adopt_order
         calls = []
 
         def fail_first(*args):
@@ -274,7 +274,7 @@ class TestSubmitLimit:
                 raise RuntimeError("book broken")
             return real_adopt(*args)
 
-        monkeypatch.setattr(order_manager_module, "adopt_order", fail_first)
+        monkeypatch.setattr(placement_module, "adopt_order", fail_first)
 
         await stack.manager.initialize_grid_orders(ARMING_PRICE)
 
@@ -465,7 +465,7 @@ class TestRecoveredFills:
 
     async def test_recovered_fills_place_nothing_once_the_positions_are_closed(self, armed):
         fills = [await self._recovered_buy(armed, 100.0)]
-        armed.manager._positions_closed = True
+        armed.manager.liquidation.positions_closed = True
 
         await armed.manager.place_paired_orders_for_recovered_fills(fills)
 
@@ -477,7 +477,7 @@ def _order_manager_warnings(caplog):
     return [
         record.getMessage()
         for record in caplog.records
-        if record.name == "OrderManager" and record.levelno == logging.WARNING
+        if record.name in ("OrderManager", "Placement") and record.levelno == logging.WARNING
     ]
 
 
@@ -674,7 +674,7 @@ class TestRetries:
         stack = build_stack(store=RecordingStore())
         stack.execution.fail_next_limit_order = OrderNotPlacedError("exchange down")
         await stack.manager.initialize_grid_orders(ARMING_PRICE)
-        stack.manager._positions_closed = True
+        stack.manager.liquidation.positions_closed = True
         orders_before = len(stack.execution.orders)
 
         await stack.manager.retry_pending_placements()
@@ -686,7 +686,7 @@ class TestRetries:
 
     async def test_a_sent_entry_is_kept_once_the_positions_are_closed(self):
         stack, entry, _held = await _arm_with_one_lost_placement(OrderOutcomeUnknownError("timeout"))
-        stack.manager._positions_closed = True
+        stack.manager.liquidation.positions_closed = True
         calls = list(stack.execution.calls)
 
         await stack.manager.retry_pending_placements()
@@ -741,7 +741,7 @@ class TestRetries:
         stack.execution.execute_limit_order = first_two_not_placed
         await stack.manager.initialize_grid_orders(ARMING_PRICE)
         first, second = stack.journal.limit_entries()
-        real_adopt = order_manager_module.adopt_order
+        real_adopt = placement_module.adopt_order
         adoptions = []
 
         def fail_first(*args):
@@ -750,7 +750,7 @@ class TestRetries:
                 raise RuntimeError("book broken")
             return real_adopt(*args)
 
-        monkeypatch.setattr(order_manager_module, "adopt_order", fail_first)
+        monkeypatch.setattr(placement_module, "adopt_order", fail_first)
         saves_before = len(store.saves)
 
         await stack.manager.retry_pending_placements()
@@ -842,13 +842,13 @@ class TestBulkCancelResolvesSentEntries:
     def _watch_regrid(stack):
         """Records the journal size, the open and total exchange orders at rebuild, and the sent flag of each drop."""
         dropped_sent = []
-        real_drop = stack.manager._drop_entry
+        real_drop = stack.manager.placement.drop_entry
 
         async def drop(entry):
             dropped_sent.append(entry.sent)
             await real_drop(entry)
 
-        stack.manager._drop_entry = drop
+        stack.manager.placement.drop_entry = drop
         at_rebuild = []
 
         def rebuild():
@@ -1259,7 +1259,7 @@ class TestInitialPurchase:
 
 
 class FakeClock:
-    """Stands in for `OrderManager._clock` and `_sleep`: sleeping only moves the time forward."""
+    """Stands in for `Liquidation.clock` and `sleep`: sleeping only moves the time forward."""
 
     def __init__(self, now: float = 1000.0):
         self.now = now
@@ -1276,8 +1276,8 @@ class FakeClock:
 def _liquidating_stack(crypto: float = 2.0, fiat: float = 0.0, store=None, trading_mode: str = "live"):
     stack = build_stack(fiat=fiat, crypto=crypto, store=store, trading_mode=trading_mode)
     clock = FakeClock()
-    stack.manager._clock = clock
-    stack.manager._sleep = clock.sleep
+    stack.manager.liquidation.clock = clock
+    stack.manager.liquidation.sleep = clock.sleep
     return stack, clock
 
 
@@ -1590,7 +1590,7 @@ class TestLiquidation:
             await clock.sleep(delay)
             stack.manager.interrupt_liquidation()
 
-        stack.manager._sleep = interrupted_sleep
+        stack.manager.liquidation.sleep = interrupted_sleep
 
         await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
 
@@ -1766,7 +1766,7 @@ class TestLiquidation:
         assert any(message.startswith("Liquidation interrupted by the shutdown") for message in errors)
 
     async def test_the_backoff_is_read_from_the_class_at_call_time(self, monkeypatch):
-        monkeypatch.setattr(OrderManager, "LIQUIDATION_BACKOFF", (0.2,))
+        monkeypatch.setattr(Liquidation, "LIQUIDATION_BACKOFF", (0.2,))
         stack, clock = _liquidating_stack(crypto=2.0)
         stack.execution.market_order_failures = [OrderNotPlacedError("exchange unavailable")] * 3
 
@@ -2006,7 +2006,7 @@ class TestReplacementsForRecoveredEnds:
         stack = build_stack()
         await stack.manager.initialize_grid_orders(ARMING_PRICE)
         ended = await _ended_while_down(stack, 90.0, OrderSide.BUY)
-        stack.manager._positions_closed = True
+        stack.manager.liquidation.positions_closed = True
 
         await stack.manager.place_replacements_for_recovered_ends([ended])
 

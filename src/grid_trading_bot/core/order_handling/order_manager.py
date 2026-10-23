@@ -1,43 +1,34 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-import copy
 from dataclasses import replace
 import logging
-import time
 from typing import Any
 
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
-from grid_trading_bot.core.exceptions import BookingError, OrderRefusedError
-from grid_trading_bot.core.services.exceptions import (
-    DataFetchError,
-    OrderEndedUnfilledError,
-    OrderNotPlacedError,
-    OrderOutcomeUnknownError,
-    PostOnlyRejectedError,
-)
+from grid_trading_bot.core.exceptions import OrderRefusedError
+from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.market_constraints import MarketConstraints
 
 from ..grid_management.grid_level import GridLevel
 from ..grid_management.grid_manager import GridManager
 from ..order_handling.balance_tracker import BalanceTracker
 from ..order_handling.order_book import OrderBook
-from ..validation.exceptions import InvalidOrderQuantityError
 from ..validation.order_validator import OrderValidator
 from .exceptions import GridFeasibilityError
-from .execution_strategy.order_execution_strategy_interface import (
-    OrderExecutionStrategyInterface,
-)
-from .order import ENDED_UNFILLED_STATUSES, FINAL_STATUSES, Order, OrderSide, OrderStatus, OrderType
-from .placement_journal import PendingPlacement, PlacementJournal, PlacementPurpose, adopt_order, new_client_order_id
+from .execution_strategy.order_execution_strategy_interface import OrderExecutionStrategyInterface
+from .initial_purchase import InitialPurchase
+from .liquidation import Liquidation
+from .market_entry import MarketEntrySender
+from .order import ENDED_UNFILLED_STATUSES, Order, OrderSide, OrderStatus
+from .placement import Placement
+from .placement_journal import PendingPlacement, PlacementJournal, PlacementPurpose
 from .state_store import ArmingFlags, StateStore
 
 
 class OrderManager:
-    MAX_MARKET_LEGS = 3
-    LIQUIDATION_BACKOFF = (1, 2, 4, 8, 16, 30)
-    LIQUIDATION_ALERT_INTERVAL = 600.0
+    """Runs every order operation under one lock: applies order updates and delegates the rest to collaborators."""
 
     def __init__(
         self,
@@ -69,30 +60,79 @@ class OrderManager:
         self.market_constraints: MarketConstraints | None = None
         self._lock = asyncio.Lock()
         self._outbox: list[tuple[NotificationType, dict[str, Any]]] = []
-        self._positions_closed = False
         self._resolving_for_cancel = False
-        self._retry_errors_alerted: set[str] = set()
-        self._liquidated = False
-        self._liquidation_interrupted = asyncio.Event()
-        self._clock: Callable[[], float] = time.monotonic
-        self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
         self.exchange_balance: Callable[[], Awaitable[float]] | None = None
+        market_entries = MarketEntrySender(
+            self.journal, order_execution_strategy, trading_pair, config_hash, self._save_pending
+        )
+        self.liquidation = Liquidation(
+            balance_tracker=balance_tracker,
+            order_book=order_book,
+            journal=self.journal,
+            order_execution_strategy=order_execution_strategy,
+            market_entries=market_entries,
+            notification_handler=notification_handler,
+            trading_pair=trading_pair,
+            fail_fast=fail_fast,
+            notify=self._notify,
+            send_now=self._send,
+            locked=self._locked,
+            save_state=self._save_state,
+            cancel_grid_orders=lambda: self.cancel_open_grid_orders(),
+            market_constraints=lambda: self.market_constraints,
+            exchange_balance=lambda: self.exchange_balance,
+        )
+        self.placement = Placement(
+            grid_manager=grid_manager,
+            order_validator=order_validator,
+            balance_tracker=balance_tracker,
+            order_book=order_book,
+            order_execution_strategy=order_execution_strategy,
+            journal=self.journal,
+            trading_pair=trading_pair,
+            config_hash=config_hash,
+            notify=self._notify,
+            locked=self._locked,
+            save_state=self._save_state,
+            save_pending=self._save_pending,
+            market_constraints=lambda: self.market_constraints,
+            positions_closed=lambda: self.positions_closed,
+            apply_update=self._apply_update,
+            report_unfunded=self._report_unfunded,
+        )
+        self.initial_purchase = InitialPurchase(
+            grid_manager=grid_manager,
+            balance_tracker=balance_tracker,
+            order_book=order_book,
+            journal=self.journal,
+            market_entries=market_entries,
+            notify=self._notify,
+            locked=self._locked,
+            save_state=self._save_state,
+            market_constraints=lambda: self.market_constraints,
+            positions_closed=lambda: self.positions_closed,
+            purchase_done=lambda: self.arming.initial_purchase_done,
+            mark_purchase_done=self._mark_initial_purchase_done,
+        )
 
     @property
     def positions_closed(self) -> bool:
         """Whether `close_positions` has run: no order is placed from then on."""
-        return self._positions_closed
+        return self.liquidation.positions_closed
 
     @property
     def liquidated(self) -> bool:
         """Whether a liquidation ran to its end, with nothing more it could sell."""
-        return self._liquidated
+        return self.liquidation.liquidated
 
     def set_market_constraints(self, constraints: MarketConstraints) -> None:
         self.market_constraints = constraints
 
     def restore_arming(self, arming: ArmingFlags) -> None:
         self.arming = arming
+
+    def _mark_initial_purchase_done(self) -> None:
+        self.arming = replace(self.arming, initial_purchase_done=True)
 
     @asynccontextmanager
     async def _locked(self) -> AsyncIterator[None]:
@@ -136,6 +176,10 @@ class OrderManager:
         if self.state_store is not None:
             await self.state_store.save(self.arming)
 
+    async def _save_pending(self, entry: PendingPlacement) -> bool:
+        """Saves `entry` before it is sent; True without a store."""
+        return self.state_store is None or await self.state_store.save_pending(entry)
+
     def validate_grid_feasibility(self, current_price: float) -> None:
         """
         Validates that every grid level produces an order above the exchange minimums.
@@ -159,13 +203,8 @@ class OrderManager:
                 "Grid is not feasible on this exchange — increase capital or reduce num_grids. " + "; ".join(violations)
             )
 
-    async def initialize_grid_orders(
-        self,
-        current_price: float,
-    ):
-        """
-        Places the initial grid orders the strategy plans for the current price, then saves the state.
-        """
+    async def initialize_grid_orders(self, current_price: float):
+        """Places the initial grid orders the strategy plans for the current price, then saves the state."""
         async with self._locked():
             try:
                 await self._place_initial_orders(current_price)
@@ -176,7 +215,7 @@ class OrderManager:
     async def _place_initial_orders(self, current_price: float) -> None:
         unfunded: list[tuple[OrderSide, float]] = []
         for grid_level, side in self.grid_manager.get_initial_order_plan(current_price):
-            if self._positions_closed:
+            if self.positions_closed:
                 self.logger.info("Positions are closed; skipping the remaining initial grid orders.")
                 break
             if not self.grid_manager.can_place_order(grid_level, side):
@@ -184,7 +223,7 @@ class OrderManager:
             total_balance_value = self.balance_tracker.get_total_balance_value(current_price)
             quantity = self.grid_manager.get_order_size_for_grid_level(total_balance_value, current_price, side)
             try:
-                await self._submit_limit(side, grid_level, quantity, PlacementPurpose.GRID)
+                await self.placement.submit_limit(side, grid_level, quantity, PlacementPurpose.GRID)
             except OrderRefusedError as e:
                 self.logger.info(f"Initial {side.value} order at {grid_level.price} not placed: {e}")
                 unfunded.append((side, grid_level.price))
@@ -209,11 +248,9 @@ class OrderManager:
 
     async def cancel_open_grid_orders(self) -> bool:
         """
-        Cancels all open grid orders, releases their reserved funds and resets
-        their grid level states so orders can be re-placed.
-
-        Returns True only if every open order was cancelled. On the first
-        failure it stops and returns False, leaving remaining orders open.
+        Cancels all open grid orders, releases their reserved funds and resets their grid level states so orders can be
+        re-placed. Returns True only if every open order was cancelled; on the first failure it stops and returns
+        False, leaving remaining orders open.
         """
         async with self._locked():
             try:
@@ -249,7 +286,7 @@ class OrderManager:
         try:
             for entry in [entry for entry in self.journal.limit_entries() if entry.sent]:
                 try:
-                    await self._resolve_sent_entry(entry)
+                    await self.placement.resolve_sent_entry(entry)
                 except DataFetchError as e:
                     self.logger.error(
                         f"Could not look up placement {entry.client_order_id}; aborting bulk cancellation: {e}"
@@ -279,11 +316,13 @@ class OrderManager:
             self.order_book.remove_open_order(order)
             await self.balance_tracker.record_execution(order, newly_filled)
             if grid_level is not None:
-                self.grid_manager.rollback_order_placement(grid_level, order.side, self._level_busy(grid_level))
+                self.grid_manager.rollback_order_placement(
+                    grid_level, order.side, self.placement.level_busy(grid_level)
+                )
             self.logger.info(f"Cancelled {order.side.value} order {order.identifier} at {order.price}.")
 
         for entry in self.journal.limit_entries():
-            await self._drop_entry(entry)
+            await self.placement.drop_entry(entry)
         return True
 
     async def _refetch_cancelled(self, order: Order) -> Order | None:
@@ -294,241 +333,6 @@ class OrderManager:
         except DataFetchError as e:
             self.logger.warning(f"Could not refetch cancelled order {order.identifier}; using local state: {e}")
             return None
-
-    async def _submit_limit(
-        self,
-        side: OrderSide,
-        grid_level: GridLevel,
-        quantity: float,
-        purpose: PlacementPurpose,
-        source_level: GridLevel | None = None,
-        source_order_id: str | None = None,
-    ) -> Order | None:
-        """
-        Places one limit order on `grid_level` through the journal: rounds and checks it, reserves its funds, holds
-        the level, saves the entry, then sends it. Returns the order once the exchange holds it and None while the
-        entry stays pending; raises OrderRefusedError when the bot or the exchange refuses it.
-        """
-        if self._positions_closed:
-            self.logger.info(f"Positions are closed; not placing {side.value} order at {grid_level.price}.")
-            return None
-        price = self.order_execution_strategy.round_price(self.trading_pair, grid_level.price)
-        validated = self._validate_order_quantity(side, quantity, price)
-        rounded = self.order_execution_strategy.round_amount(self.trading_pair, validated)
-        if rounded <= 0:
-            raise InvalidOrderQuantityError(f"{side.value.capitalize()} quantity {validated} rounds to {rounded}.")
-        if self.market_constraints is not None:
-            violation = self.market_constraints.violation(rounded, price)
-            if violation:
-                raise InvalidOrderQuantityError(f"Order at {price}: {violation}")
-        await self._reserve_funds(side, rounded, price)
-        entry = PendingPlacement(
-            client_order_id=new_client_order_id(self.config_hash),
-            order_type=OrderType.LIMIT,
-            side=side,
-            quantity=rounded,
-            price=price,
-            purpose=purpose,
-            level_price=grid_level.price,
-            source_level_price=source_level.price if source_level is not None else None,
-            source_order_id=source_order_id,
-            created_at=int(time.time() * 1000),
-        )
-        self.journal.add(entry)
-        self.grid_manager.mark_level_pending(grid_level, side)
-        return await self._send_entry(entry)
-
-    async def _send_entry(self, entry: PendingPlacement) -> Order | None:
-        """
-        Saves `entry` as sent, then sends it. Returns the order the exchange holds, or None while the entry waits for
-        a retry; a refusal drops the entry and raises OrderRefusedError.
-        """
-        entry.sent = True
-        if self.state_store is not None and not await self.state_store.save_pending(entry):
-            entry.sent = False
-            self.logger.warning(f"Placement {entry.client_order_id} could not be saved; it is sent at the next poll.")
-            return None
-        entry.attempts += 1
-        try:
-            order = await self.order_execution_strategy.execute_limit_order(
-                entry.side, self.trading_pair, entry.quantity, entry.limit_price, entry.client_order_id
-            )
-        except PostOnlyRejectedError as e:
-            entry.sent = False
-            self.logger.info(
-                f"Maker-only {entry.side.value} order at {entry.price} would have crossed ({e}); "
-                "retried at the next poll."
-            )
-            return None
-        except OrderRefusedError:
-            await self._drop_entry(entry)
-            raise
-        except OrderNotPlacedError as e:
-            entry.sent = False
-            self._report_pending(entry, e)
-            return None
-        except DataFetchError as e:
-            # The request may have reached the exchange, so the next retry looks the order up before sending again.
-            self._report_pending(entry, e)
-            return None
-        except Exception as e:
-            await self._drop_entry(entry)
-            context = f"Placement of the {entry.side.value} order at {entry.price} failed"
-            self.logger.error(f"{context}: {e}", exc_info=True)
-            self._notify(NotificationType.ERROR_OCCURRED, error_details=f"{context}: {e}")
-            return None
-        return self._adopt(entry, order)
-
-    def _adopt(self, entry: PendingPlacement, order: Order) -> Order:
-        """Moves an order the exchange holds for `entry` from the journal into the book."""
-        adopt_order(entry, order, self.grid_manager, self.order_book)
-        self.journal.remove(entry.client_order_id)
-        self._retry_errors_alerted.discard(entry.client_order_id)
-        if entry.attempts > 1:
-            self.logger.info(f"Placement {entry.client_order_id} placed after {entry.attempts} attempts.")
-        if entry.purpose is PlacementPurpose.PAIRED:
-            self._notify(NotificationType.ORDER_PLACED, order_details=str(order))
-        return order
-
-    async def _drop_entry(self, entry: PendingPlacement) -> None:
-        """Removes a limit entry that will not become an order: releases its funds and frees its level."""
-        self.journal.remove(entry.client_order_id)
-        self._retry_errors_alerted.discard(entry.client_order_id)
-        await self._release_funds(entry.side, entry.quantity, entry.limit_price)
-        grid_level = self.grid_manager.grid_levels.get(entry.level_price) if entry.level_price is not None else None
-        if grid_level is not None:
-            self.grid_manager.rollback_order_placement(grid_level, entry.side, self._level_busy(grid_level))
-
-    def _level_busy(self, grid_level: GridLevel) -> bool:
-        return self.order_book.has_open_orders_at(grid_level) or bool(self.journal.pending_at(grid_level.price))
-
-    def _report_pending(self, entry: PendingPlacement, error: Exception) -> None:
-        self.logger.warning(
-            f"{entry.side.value.capitalize()} order at {entry.price} not placed yet ({error}); "
-            "retried at the next poll."
-        )
-        if entry.attempts == 1:
-            self._notify(
-                NotificationType.ORDER_PENDING,
-                error_details=f"{entry.side.value} {entry.quantity} at {entry.price}: {error}",
-            )
-
-    def _report_refusal(self, purpose: PlacementPurpose, price: float, error: OrderRefusedError) -> None:
-        """Reports a refused placement; a paired or re-placed order the grid expected also raises an alert."""
-        details = f"{purpose.value.capitalize()} order at {price} refused: {error}"
-        self.logger.warning(details)
-        if purpose in (PlacementPurpose.PAIRED, PlacementPurpose.REPLACEMENT):
-            self._notify(NotificationType.ORDER_FAILED, error_details=details)
-
-    async def retry_pending_placements(self) -> None:
-        """Resolves or sends again, in creation order, every limit placement the journal holds, then saves."""
-        async with self._locked():
-            if not self.journal.limit_entries():
-                return
-            try:
-                if self._positions_closed:
-                    # A sent entry may be an order the exchange holds, so only a lookup may drop it.
-                    for entry in [entry for entry in self.journal.limit_entries() if not entry.sent]:
-                        await self._drop_entry(entry)
-                    return
-                for entry in self.journal.limit_entries():
-                    if self.journal.get(entry.client_order_id) is entry:
-                        await self._retry_entry(entry)
-            finally:
-                await self._save_state()
-
-    async def _retry_entry(self, entry: PendingPlacement) -> None:
-        level_price = entry.level_price
-        if level_price is None:
-            self._report_retry_error(entry, RuntimeError(f"limit placement {entry.client_order_id} has no level price"))
-            return
-        try:
-            if entry.sent and await self._resolve_sent_entry(entry) is not None:
-                return
-            await self._send_entry(entry)
-        except OrderRefusedError as e:
-            if entry.purpose is PlacementPurpose.GRID:
-                self._report_unfunded([(entry.side, level_price)])
-            else:
-                self._report_refusal(entry.purpose, level_price, e)
-        except DataFetchError as e:
-            self.logger.warning(f"Could not look up placement {entry.client_order_id}; retried at the next poll: {e}")
-        except Exception as e:
-            self._report_retry_error(entry, e)
-
-    def _report_retry_error(self, entry: PendingPlacement, error: Exception) -> None:
-        """Logs a retry that failed unexpectedly, and alerts once per entry."""
-        details = f"Retry of placement {entry.client_order_id} failed: {error}"
-        self.logger.error(details, exc_info=error)
-        if entry.client_order_id not in self._retry_errors_alerted:
-            self._retry_errors_alerted.add(entry.client_order_id)
-            self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
-
-    async def _resolve_sent_entry(self, entry: PendingPlacement) -> Order | None:
-        """
-        Looks a sent entry up by its client id. Adopts the order the exchange holds and applies what it already did, or
-        marks the entry unsent when the exchange never received it. Raises DataFetchError when the lookup fails.
-        """
-        found = await self.order_execution_strategy.find_order(entry.client_order_id, self.trading_pair)
-        if found is None:
-            entry.sent = False
-            return None
-        local = self._adopt(entry, copy.copy(found))
-        if found.status != OrderStatus.OPEN:
-            await self._apply_update(local, found)
-        return local
-
-    async def _replace_on_level(self, order: Order, grid_level: GridLevel) -> None:
-        """Re-places an order that ended unfilled on its level, for the quantity it did not fill."""
-        quantity = order.remaining if order.remaining and order.remaining > 0 else order.amount
-        try:
-            await self._submit_limit(
-                order.side, grid_level, quantity, PlacementPurpose.REPLACEMENT, source_order_id=order.identifier
-            )
-        except OrderRefusedError as e:
-            self._report_refusal(PlacementPurpose.REPLACEMENT, grid_level.price, e)
-        except Exception as e:
-            details = f"Failed to re-place order {order.identifier} at grid level {grid_level.price}: {e}"
-            self.logger.error(details, exc_info=True)
-            self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
-
-    def _validate_order_quantity(self, side: OrderSide, order_quantity: float, price: float) -> float:
-        if side == OrderSide.BUY:
-            return self.order_validator.adjust_and_validate_buy_quantity(
-                balance=self.balance_tracker.balance,
-                order_quantity=order_quantity,
-                price=price,
-            )
-        return self.order_validator.adjust_and_validate_sell_quantity(
-            crypto_balance=self.balance_tracker.crypto_balance,
-            order_quantity=order_quantity,
-        )
-
-    async def _reserve_funds(self, side: OrderSide, quantity: float, price: float) -> None:
-        if side == OrderSide.BUY:
-            await self.balance_tracker.reserve_funds_for_buy(quantity * price)
-        else:
-            await self.balance_tracker.reserve_funds_for_sell(quantity)
-
-    async def _release_funds(self, side: OrderSide, quantity: float, price: float) -> None:
-        if side == OrderSide.BUY:
-            await self.balance_tracker.release_reserved_fiat(quantity * price)
-        else:
-            await self.balance_tracker.release_reserved_crypto(quantity)
-
-    def _handle_order_error(self, error: Exception, context: str) -> None:
-        if isinstance(error, DataFetchError | OrderRefusedError):
-            self.logger.error(f"{context} - {error!s}", exc_info=True)
-            self._notify(
-                NotificationType.ORDER_FAILED,
-                error_details=f"{context}. {error}",
-            )
-        else:
-            self.logger.error(f"Unexpected error: {context}: {error}", exc_info=True)
-            self._notify(
-                NotificationType.ERROR_OCCURRED,
-                error_details=f"{context}: {error!s}",
-            )
 
     async def apply_order_update(self, update: Order) -> None:
         """
@@ -561,15 +365,12 @@ class OrderManager:
         newly_filled = local.apply_update(update)
         self.order_book.remove_open_order(local)
         await self.balance_tracker.record_execution(local, newly_filled)
-        self._notify(
-            NotificationType.ORDER_CANCELLED,
-            order_details=str(local),
-        )
+        self._notify(NotificationType.ORDER_CANCELLED, order_details=str(local))
         grid_level = self.order_book.get_grid_level_for_order(local)
         if grid_level is None:
             self.logger.warning(f"Order {local.identifier} ended ({local.status.value}) without a grid level.")
         else:
-            self.grid_manager.rollback_order_placement(grid_level, local.side, self._level_busy(grid_level))
+            self.grid_manager.rollback_order_placement(grid_level, local.side, self.placement.level_busy(grid_level))
         if local.status == OrderStatus.REJECTED:
             self.logger.error(f"The exchange rejected order {local.identifier} at {local.price}; not re-placing it.")
             self._notify(
@@ -579,20 +380,20 @@ class OrderManager:
             return
         if grid_level is None:
             return
-        if self._positions_closed:
+        if self.positions_closed:
             self.logger.info(f"Positions are closed; not re-placing ended order {local.identifier}.")
             return
         if self._resolving_for_cancel:
             self.logger.info(f"Orders are being cancelled; not re-placing ended order {local.identifier}.")
             return
-        await self._replace_on_level(local, grid_level)
+        await self.placement.replace_on_level(local, grid_level)
 
     async def _settle_fill(self, local: Order, update: Order) -> None:
         newly_filled = local.apply_update(update)
         self.order_book.remove_open_order(local)
         await self.balance_tracker.record_execution(local, newly_filled)
         self._notify(NotificationType.ORDER_FILLED, order_details=str(local))
-        if self._positions_closed:
+        if self.positions_closed:
             self.logger.info(f"Positions already closed; fill of {local.identifier} booked without a paired order.")
             return
         grid_level = self.order_book.get_grid_level_for_order(local)
@@ -611,20 +412,10 @@ class OrderManager:
                 error_details=f"Failed handling filled order {local.identifier}: {e}",
             )
 
-    async def _handle_order_completion(
-        self,
-        order: Order,
-        grid_level: GridLevel,
-    ) -> None:
-        """
-        Transitions the filled level, then places the paired order on the level the strategy chooses.
-
-        Args:
-            order: The filled Order instance.
-            grid_level: The grid level associated with the filled order.
-        """
+    async def _handle_order_completion(self, order: Order, grid_level: GridLevel) -> None:
+        """Transitions the filled level, then places the paired order on the level the strategy chooses."""
         self.logger.info(f"{order.side.value.capitalize()} order completed at grid level {grid_level}.")
-        self.grid_manager.complete_order(grid_level, order.side, self._level_busy(grid_level))
+        self.grid_manager.complete_order(grid_level, order.side, self.placement.level_busy(grid_level))
         if self._resolving_for_cancel:
             self.logger.info(f"Orders are being cancelled; no paired order placed for {order.identifier}.")
             return
@@ -645,26 +436,16 @@ class OrderManager:
         if target is None:
             return
         try:
-            await self._submit_limit(
+            await self.placement.submit_limit(
                 side, target, quantity, PlacementPurpose.PAIRED, grid_level, source_order_id=filled_order.identifier
             )
         except OrderRefusedError as e:
-            self._report_refusal(PlacementPurpose.PAIRED, target.price, e)
+            self.placement.report_refusal(PlacementPurpose.PAIRED, target.price, e)
 
-    async def place_paired_orders_for_recovered_fills(
-        self,
-        filled_orders: list[tuple[Order, GridLevel]],
-    ) -> None:
+    async def place_paired_orders_for_recovered_fills(self, filled_orders: list[tuple[Order, GridLevel]]) -> None:
         """
-        Places paired orders for orders that filled while the bot was down.
-
-        For each recovered fill, places the corresponding paired order
-        (buy fill → sell above, sell fill → buy below) without re-triggering
-        grid state transitions (already done during reconciliation).
-
-        Args:
-            filled_orders: List of (Order, GridLevel) tuples for orders
-                that were found CLOSED on the exchange during recovery.
+        Places the paired order (buy fill → sell above, sell fill → buy below) of each order recovery found CLOSED on
+        the exchange, without re-triggering grid state transitions (already done during reconciliation).
         """
         async with self._locked():
             try:
@@ -672,7 +453,9 @@ class OrderManager:
                     try:
                         await self._place_paired_order(order, grid_level)
                     except Exception as e:
-                        self._handle_order_error(e, f"Error placing paired order for recovered fill {order.identifier}")
+                        self.placement.handle_order_error(
+                            e, f"Error placing paired order for recovered fill {order.identifier}"
+                        )
             finally:
                 await self._save_state()
 
@@ -681,437 +464,28 @@ class OrderManager:
         async with self._locked():
             try:
                 for order, grid_level in ended:
-                    await self._replace_on_level(order, grid_level)
+                    await self.placement.replace_on_level(order, grid_level)
             finally:
                 await self._save_state()
+
+    async def retry_pending_placements(self) -> None:
+        """Resolves or sends again, in creation order, every limit placement the journal holds, then saves."""
+        await self.placement.retry_pending_placements()
 
     async def perform_initial_purchase(self, current_price: float) -> bool:
-        """
-        Buys, once, the crypto the grid's sells need. Returns whether the purchase is done; it is not while the
-        exchange cannot take or confirm the order, and the caller tries again at its next tick.
-        """
-        async with self._locked():
-            if self.arming.initial_purchase_done:
-                self.logger.info("Initial purchase already done; skipping it.")
-                return True
-            done = False
-            try:
-                if self._positions_closed:
-                    self.logger.info("Positions are closed; skipping the initial purchase.")
-                    done = True
-                else:
-                    done = await self._buy_initial_position(current_price)
-                return done
-            finally:
-                if done:
-                    self.arming = replace(self.arming, initial_purchase_done=True)
-                await self._save_state()
-
-    async def _buy_initial_position(self, current_price: float) -> bool:
-        entry = next((e for e in self.journal.entries() if e.purpose is PlacementPurpose.INITIAL_PURCHASE), None)
-        if entry is None:
-            quantity = self.grid_manager.get_initial_order_quantity(
-                current_fiat_balance=self.balance_tracker.balance,
-                current_crypto_balance=self.balance_tracker.crypto_balance,
-                current_price=current_price,
-            )
-            if quantity <= 0:
-                self.logger.warning("Initial purchase quantity is zero or negative. Skipping initial purchase.")
-                return True
-            if self.market_constraints is not None:
-                violation = self.market_constraints.violation(quantity, current_price)
-                if violation:
-                    self.logger.warning(f"Skipping initial purchase: {violation}")
-                    self._notify(NotificationType.ORDER_FAILED, error_details=f"Initial purchase skipped: {violation}")
-                    return True
-            try:
-                entry = self._new_market_entry(
-                    OrderSide.BUY, quantity, current_price, PlacementPurpose.INITIAL_PURCHASE
-                )
-            except OrderRefusedError as e:
-                self.logger.warning(f"Skipping initial purchase: {e}")
-                self._notify(NotificationType.ORDER_FAILED, error_details=f"Initial purchase skipped: {e}")
-                return True
-
-        for _ in range(self.MAX_MARKET_LEGS):
-            self.logger.info(f"Performing initial crypto purchase: {entry.quantity} at price {current_price}.")
-            try:
-                order = await self._send_market_entry(entry)
-            except OrderRefusedError as e:
-                self.journal.remove(entry.client_order_id)
-                self.logger.warning(f"Initial purchase refused: {e}")
-                self._notify(
-                    NotificationType.ORDER_FAILED, error_details=f"Error while performing initial purchase. {e}"
-                )
-                return True
-            except DataFetchError as e:
-                self.logger.warning(f"Initial purchase not done yet; retried at the next tick: {e}")
-                if entry.attempts == 1:
-                    self._notify(
-                        NotificationType.ORDER_PENDING, error_details=f"Initial purchase of {entry.quantity}: {e}"
-                    )
-                return False
-            except Exception as e:
-                self.logger.error(f"Unexpected error during the initial purchase: {e}", exc_info=True)
-                if entry.attempts == 1:
-                    self._notify(
-                        NotificationType.ERROR_OCCURRED, error_details=f"Error while performing initial purchase: {e}"
-                    )
-                return False
-            try:
-                await self._book_initial_purchase(order)
-            except Exception as e:
-                error = BookingError(order, e)
-                self.logger.error(f"Initial purchase not booked: {error}", exc_info=True)
-                self._notify(
-                    NotificationType.ERROR_OCCURRED,
-                    error_details=(
-                        f"Initial purchase not booked: {error}. The bot halts. Check this order on the exchange, "
-                        "then see going-live.md for resume vs keeping the database."
-                    ),
-                )
-                raise error from e
-            self.journal.remove(entry.client_order_id)
-            remaining = entry.quantity - order.filled
-            if self._is_dust(remaining, current_price):
-                return True
-            try:
-                entry = self._new_market_entry(
-                    OrderSide.BUY, remaining, current_price, PlacementPurpose.INITIAL_PURCHASE
-                )
-            except OrderRefusedError as e:
-                self.logger.warning(f"Initial purchase remainder {remaining} is dust for the exchange: {e}")
-                return True
-
-        self.journal.remove(entry.client_order_id)
-        self.logger.warning(
-            f"Initial purchase stopped after {self.MAX_MARKET_LEGS} legs; {entry.quantity} left unbought."
-        )
-        return True
-
-    def _new_market_entry(
-        self, side: OrderSide, quantity: float, price: float, purpose: PlacementPurpose
-    ) -> PendingPlacement:
-        entry = PendingPlacement(
-            client_order_id=new_client_order_id(self.config_hash),
-            order_type=OrderType.MARKET,
-            side=side,
-            quantity=self.order_execution_strategy.round_amount(self.trading_pair, quantity),
-            price=price,
-            purpose=purpose,
-            created_at=int(time.time() * 1000),
-        )
-        self.journal.add(entry)
-        return entry
-
-    async def _send_market_entry(self, entry: PendingPlacement) -> Order:
-        """
-        Sends one market leg through the journal, looking it up first when an earlier send's outcome is unknown.
-        A found order is returned only once it is closed and filled; one that ended, closed included, without a fill has
-        taken its client id, so the entry moves to a new one. A lookup counts as an attempt.
-        Raises DataFetchError when the order is not placed or its outcome stays unknown, OrderRefusedError on a refusal.
-        Every raise leaves the entry in the journal, unsent under a client id no order took, unless it may be live.
-        """
-        if entry.price is None:
-            raise ValueError(f"Market placement {entry.client_order_id} has no reference price.")
-        if entry.sent:
-            entry.attempts += 1
-            found = await self.order_execution_strategy.find_order(entry.client_order_id, self.trading_pair)
-            if found is not None and found.status == OrderStatus.OPEN:
-                raise OrderOutcomeUnknownError(f"Market order {entry.client_order_id} is still open on the exchange.")
-            if found is not None and found.filled:
-                settled = copy.copy(found)
-                settled.status = OrderStatus.CLOSED
-                settled.average = found.average or found.price or entry.price
-                return settled
-            if found is not None and found.status not in FINAL_STATUSES:
-                raise OrderOutcomeUnknownError(
-                    f"Market order {entry.client_order_id} is {found.status.value} on the exchange without a fill."
-                )
-            if found is not None:
-                self._move_to_new_client_id(entry)
-            entry.sent = False
-        entry.sent = True
-        if self.state_store is not None and not await self.state_store.save_pending(entry):
-            entry.sent = False
-            raise OrderNotPlacedError(f"Placement {entry.client_order_id} could not be saved before sending.")
-        entry.attempts += 1
-        try:
-            order = await self.order_execution_strategy.execute_market_order(
-                entry.side, self.trading_pair, entry.quantity, entry.price, entry.client_order_id
-            )
-        except OrderNotPlacedError:
-            entry.sent = False
-            raise
-        except (OrderEndedUnfilledError, OrderRefusedError) as e:
-            self._move_to_new_client_id(entry)
-            if isinstance(e, OrderRefusedError):
-                raise
-            raise OrderNotPlacedError(f"{e} Next attempt under client id {entry.client_order_id}.") from e
-        if not order.filled:
-            taken = entry.client_order_id
-            self._move_to_new_client_id(entry)
-            raise OrderNotPlacedError(f"Market order {taken} closed without a fill.")
-        return order
-
-    def _move_to_new_client_id(self, entry: PendingPlacement) -> None:
-        """Re-keys, unsent, an entry whose client id an order that executed nothing may already hold."""
-        self.journal.remove(entry.client_order_id)
-        entry.client_order_id = new_client_order_id(self.config_hash)
-        entry.sent = False
-        entry.attempts = 0
-        self.journal.add(entry)
-
-    async def _book_initial_purchase(self, order: Order) -> None:
-        # A leg whose remainder was cancelled is final for what it filled; the next leg buys the rest.
-        order.status = OrderStatus.CLOSED
-        await self.balance_tracker.update_after_initial_purchase(initial_order=order)
-        self.logger.info(f"Initial crypto purchase completed. Order details: {order}")
-        self.order_book.add_order(order)
-        self._notify(NotificationType.ORDER_PLACED, order_details=f"Initial purchase done: {order!s}")
-
-    def _is_dust(self, quantity: float, price: float) -> bool:
-        if quantity <= 0:
-            return True
-        return self.market_constraints is not None and self.market_constraints.violation(quantity, price) is not None
+        """Buys, once, the crypto the grid's sells need; returns whether the purchase is done."""
+        return await self.initial_purchase.perform(current_price)
 
     async def close_positions(self, liquidate: bool, current_price: float | None = None) -> None:
-        """
-        Cancels every open grid order and drops the journal's limit entries, once; then, when asked, sells the crypto
-        until it is sold, under the exchange minimum, or interrupted. A liquidation that failed or was interrupted
-        runs again on the next call that asks for it. A liquidation without the current price is refused before
-        anything is cancelled.
-
-        Note: `cancel_open_grid_orders` acquires `self._lock` itself, so it must be awaited outside any lock held by
-        this method to avoid deadlocking.
-        """
-        if liquidate and current_price is None:
-            raise ValueError("A liquidation needs the current price.")
-        if not self._positions_closed:
-            self._positions_closed = True
-            cancelled = await self.cancel_open_grid_orders()
-            if not cancelled:
-                self.logger.error("Could not cancel all open grid orders during shutdown.")
-                await self.notification_handler.async_send_notification(
-                    NotificationType.ERROR_OCCURRED,
-                    error_details="Shutdown: some open grid orders could not be cancelled on the exchange.",
-                )
-        elif not liquidate:
-            self.logger.info("close_positions already executed; skipping.")
-            return
-        # The first check already refused a liquidation without a price; this one narrows the type for _liquidate.
-        if not liquidate or current_price is None:
-            return
-        if self._liquidated:
-            self.logger.info("Positions already liquidated; skipping.")
-            return
-        await self._liquidate(current_price)
+        """Cancels the grid orders once, then sells the crypto when asked; awaited outside the order lock."""
+        await self.liquidation.close_positions(liquidate, current_price)
 
     def interrupt_liquidation(self) -> None:
         """Ends a liquidation's retries; the attempt in progress, or a first one, still runs."""
-        self._liquidation_interrupted.set()
-
-    @property
-    def _base_currency(self) -> str:
-        return self.trading_pair.split("/")[0]
-
-    async def _liquidate(self, current_price: float) -> None:
-        """
-        Sells the free crypto at market until none is left. A failed attempt is retried after a growing delay,
-        except a sale the exchange executed and the bot could not book, which ends the liquidation with an alert and
-        keeps its entry so it is never sent again; a refusal re-reads the exchange balance first, and a remainder under
-        the exchange minimum stops with an alert. Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL
-        seconds. A backtest re-raises what is neither an exchange failure nor a refusal, since nothing would ever
-        interrupt its retries.
-        """
-        failures = 0
-        last_alert_at: float | None = None
-        exchange_cap: float | None = None
-        while True:
-            if failures and self._liquidation_interrupted.is_set():
-                await self._send_liquidation_alert(
-                    f"Liquidation interrupted by the shutdown, {self.balance_tracker.crypto_balance} "
-                    f"{self._base_currency} still open."
-                )
-                return
-            error: Exception | None = None
-            booking_error: BookingError | None = None
-            sold: float | None = None
-            async with self._locked():
-                try:
-                    sold = await self._liquidation_attempt(current_price, exchange_cap)
-                except BookingError as e:
-                    if self.fail_fast:
-                        raise
-                    booking_error = e
-                except (DataFetchError, OrderRefusedError) as e:
-                    error = e
-                except Exception as e:
-                    error = e
-                    self.logger.error(f"Liquidation attempt {failures + 1} raised: {e}", exc_info=True)
-                    if self.fail_fast:
-                        raise
-                finally:
-                    await self._save_state()
-            if booking_error is not None:
-                await self._send_liquidation_alert(
-                    f"Liquidation sale not booked: {booking_error}. The bot halts. Check this order on the exchange, "
-                    "then see going-live.md for resume vs keeping the database.",
-                    exc_info=booking_error,
-                )
-                return
-            if error is None:
-                if sold is None:
-                    self._liquidated = True
-                    return
-                if exchange_cap is not None:
-                    exchange_cap = max(exchange_cap - sold, 0.0)
-                continue
-            failures += 1
-            backoff = self.LIQUIDATION_BACKOFF
-            delay = backoff[min(failures, len(backoff)) - 1]
-            self.logger.warning(f"Liquidation attempt {failures} failed: {error}; next attempt in {delay} s.")
-            if isinstance(error, OrderRefusedError):
-                exchange_cap = await self._read_exchange_free_base(exchange_cap)
-            now = self._clock()
-            if last_alert_at is None or now - last_alert_at >= self.LIQUIDATION_ALERT_INTERVAL:
-                last_alert_at = now
-                await self._send_liquidation_alert(self._liquidation_failure_text(failures, error))
-            if not self._liquidation_interrupted.is_set():
-                await self._pause(delay)
-
-    async def _liquidation_attempt(self, current_price: float, exchange_cap: float | None) -> float | None:
-        """
-        One market sell, under the lock: a leg whose outcome is unknown is looked up first, otherwise the leg a failed
-        attempt left, or a new one, sells the free crypto. Returns the quantity sold, or None once nothing more can be
-        sold. Raises DataFetchError while the outcome is unknown or the order was not placed, OrderRefusedError on a
-        refusal.
-        """
-        entry = next((e for e in self.journal.entries() if e.purpose is PlacementPurpose.LIQUIDATION), None)
-        if entry is None or not entry.sent:
-            quantity = self._liquidation_quantity(current_price, exchange_cap)
-            if quantity is None:
-                if entry is not None:
-                    self.journal.remove(entry.client_order_id)
-                return None
-            if entry is None:
-                # The entry stays in the journal until the liquidation ends, so a restart in between halts.
-                entry = self._new_market_entry(OrderSide.SELL, quantity, current_price, PlacementPurpose.LIQUIDATION)
-            else:
-                entry.quantity = quantity
-        order = await self._send_market_entry(entry)
-        try:
-            sold = await self._book_liquidation(order)
-        except Exception as e:
-            raise BookingError(order, e) from e
-        self.journal.remove(entry.client_order_id)
-        return sold
-
-    def _liquidation_quantity(self, current_price: float, exchange_cap: float | None) -> float | None:
-        """The quantity of the next leg, or None when nothing can be sold."""
-        quantity = self.balance_tracker.crypto_balance
-        if exchange_cap is not None:
-            quantity = min(quantity, exchange_cap)
-        if quantity > 0:
-            try:
-                quantity = self.order_execution_strategy.round_amount(self.trading_pair, quantity)
-            except OrderRefusedError as e:
-                self._stop_liquidation(
-                    f"Liquidation stopped: {quantity} {self._base_currency} left, which the exchange cannot round "
-                    f"({e})."
-                )
-                return None
-        if quantity <= 0:
-            if self.balance_tracker.crypto_balance > 0:
-                self._stop_liquidation(
-                    f"Liquidation stopped: the exchange holds no more free {self._base_currency}; the books still "
-                    f"show {self.balance_tracker.crypto_balance} {self._base_currency}."
-                )
-            else:
-                self.logger.info("No crypto balance left to liquidate.")
-            return None
-        if self.market_constraints is not None:
-            violation = self.market_constraints.violation(quantity, current_price)
-            if violation:
-                self._stop_liquidation(
-                    f"Liquidation stopped: {quantity} {self._base_currency} left, under the exchange minimum "
-                    f"({violation})."
-                )
-                return None
-        return quantity
-
-    def _stop_liquidation(self, details: str) -> None:
-        self.logger.error(details)
-        self._notify(NotificationType.ERROR_OCCURRED, error_details=details)
-
-    async def _book_liquidation(self, order: Order) -> float:
-        await self.balance_tracker.update_after_liquidation(order)
-        self.order_book.add_order(order)
-        return order.filled
-
-    async def _read_exchange_free_base(self, fallback: float | None) -> float | None:
-        if self.exchange_balance is None:
-            return fallback
-        try:
-            return await self.exchange_balance()
-        except DataFetchError as e:
-            self.logger.warning(f"Could not read the exchange balance for the next liquidation attempt: {e}")
-        except Exception as e:
-            self.logger.error(f"Reading the exchange balance for the next attempt failed: {e}", exc_info=True)
-            if self.fail_fast:
-                raise
-        return fallback
-
-    async def _pause(self, delay: float) -> None:
-        """Waits `delay` seconds, or until the liquidation is interrupted."""
-        sleeper = asyncio.ensure_future(self._sleep(delay))
-        interrupted = asyncio.ensure_future(self._liquidation_interrupted.wait())
-        try:
-            await asyncio.wait({sleeper, interrupted}, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            sleeper.cancel()
-            interrupted.cancel()
-
-    def _liquidation_failure_text(self, failures: int, error: Exception) -> str:
-        position = f"{self.balance_tracker.crypto_balance} {self._base_currency}"
-        if failures == 1:
-            return f"Liquidation of {position} failed ({error}); retrying until it succeeds."
-        return f"Liquidation still failing after {failures} attempts ({error}); {position} still open."
-
-    async def _send_liquidation_alert(self, details: str, exc_info: BaseException | None = None) -> None:
-        self.logger.error(details, exc_info=exc_info)
-        await self._send([(NotificationType.ERROR_OCCURRED, {"error_details": details})])
+        self.liquidation.interrupt()
 
     async def execute_take_profit_or_stop_loss_order(
-        self,
-        current_price: float,
-        take_profit_order: bool = False,
-        stop_loss_order: bool = False,
+        self, current_price: float, take_profit_order: bool = False, stop_loss_order: bool = False
     ) -> None:
-        """
-        Closes the position after a take-profit or stop-loss event: `close_positions` cancels
-        every open grid order, then liquidates the full crypto balance, in every trading mode.
-
-        Args:
-            current_price (float): The current market price triggering the event.
-            take_profit_order (bool): Indicates whether this is a take-profit event.
-            stop_loss_order (bool): Indicates whether this is a stop-loss event.
-        """
-        if not (take_profit_order or stop_loss_order):
-            self.logger.warning("No take profit or stop loss action specified.")
-            return
-
-        event = "Take profit" if take_profit_order else "Stop loss"
-        await self.close_positions(liquidate=True, current_price=current_price)
-        left = self.balance_tracker.crypto_balance
-        if not self._liquidated:
-            outcome = "liquidation incomplete (see the liquidation alerts)"
-        elif left > 0:
-            outcome = f"liquidation stopped with {left} {self._base_currency} left (see the liquidation alerts)"
-        else:
-            outcome = "position liquidated"
-        await self.notification_handler.async_send_notification(
-            NotificationType.TAKE_PROFIT_TRIGGERED if take_profit_order else NotificationType.STOP_LOSS_TRIGGERED,
-            order_details=f"{event} at {current_price}: open orders cancelled, {outcome}.",
-        )
-        self.logger.info(f"{event} triggered at {current_price}; close_positions executed.")
+        """Closes the position after a take-profit or stop-loss event, then reports how the liquidation ended."""
+        await self.liquidation.execute_take_profit_or_stop_loss_order(current_price, take_profit_order, stop_loss_order)
