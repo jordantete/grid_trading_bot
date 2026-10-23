@@ -310,6 +310,7 @@ class StateRecoveryService:
     # ── Notification ─────────────────────────────────────────────────────
 
     async def _send_recovery_notification(self, result: RecoveryResult) -> None:
+        """Reports the resumed state; a failed notification is only logged, the recovery stands."""
         details = (
             f"Orders reconciled: {result.orders_reconciled}\n"
             f"Orders filled while down: {len(result.orders_filled_while_down)}\n"
@@ -320,7 +321,10 @@ class StateRecoveryService:
         )
         if result.not_replaced:
             details += "\nNot re-placed: " + "; ".join(result.not_replaced)
-        await self.notification_handler.async_send_notification(
-            NotificationType.STATE_RECOVERY_COMPLETE,
-            recovery_details=details,
-        )
+        try:
+            await self.notification_handler.async_send_notification(
+                NotificationType.STATE_RECOVERY_COMPLETE,
+                recovery_details=details,
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to send the recovery notification: {e}")

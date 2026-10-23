@@ -868,6 +868,22 @@ class TestStateRecoveryService:
         assert "recovery_details" in call_args[1]
         assert "Orders reconciled:" in call_args[1]["recovery_details"]
 
+    async def test_a_failed_recovery_notification_leaves_the_recovery_resumed(
+        self,
+        service,
+        mock_repository,
+        config_manager,
+        mock_notification_handler,
+        caplog,
+    ):
+        _set_valid_bot_state(mock_repository, config_manager)
+        mock_notification_handler.async_send_notification.side_effect = RuntimeError("apprise down")
+
+        result = await service.attempt_recovery()
+
+        assert result.outcome is RecoveryOutcome.RESUMED
+        assert "apprise down" in caplog.text
+
     # 13. Balance recalculated from open orders (not stale DB values)
     async def test_balance_reserved_not_from_stale_db(
         self,
