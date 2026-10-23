@@ -78,6 +78,16 @@ class OrderManager:
         self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
         self.exchange_balance: Callable[[], Awaitable[float]] | None = None
 
+    @property
+    def positions_closed(self) -> bool:
+        """Whether `close_positions` has run: no order is placed from then on."""
+        return self._positions_closed
+
+    @property
+    def liquidated(self) -> bool:
+        """Whether a liquidation ran to its end, with nothing more it could sell."""
+        return self._liquidated
+
     def set_market_constraints(self, constraints: MarketConstraints) -> None:
         self.market_constraints = constraints
 

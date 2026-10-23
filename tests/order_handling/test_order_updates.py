@@ -483,8 +483,7 @@ class TestPlacementEntryState:
 
 class TestClientOrderIds:
     async def test_every_grid_order_is_sent_with_a_client_order_id_of_this_config(self):
-        stack = build_stack()
-        stack.manager.config_hash = "3f2a9c1d8e7b6a5f"
+        stack = build_stack(config_hash="3f2a9c1d8e7b6a5f")
 
         await stack.manager.initialize_grid_orders(ARMING_PRICE)
 

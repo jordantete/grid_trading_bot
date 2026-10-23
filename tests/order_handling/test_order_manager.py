@@ -137,12 +137,15 @@ class TestTakeProfitStopLoss:
 class TestNoNewOrderOnceClosed:
     @pytest.mark.asyncio
     async def test_initialize_grid_orders_sends_nothing(self, setup_order_manager):
-        manager, grid_manager, order_validator, _, _, order_execution_strategy, _ = setup_order_manager
+        manager, grid_manager, order_validator, _, order_book, order_execution_strategy, _ = setup_order_manager
         grid_manager.get_initial_order_plan.return_value = [(Mock(price=49000), OrderSide.BUY)]
         grid_manager.can_place_order.return_value = True
         order_validator.adjust_and_validate_buy_quantity.return_value = 0.01
         order_execution_strategy.execute_limit_order = AsyncMock()
-        manager._positions_closed = True
+        order_book.get_open_orders.return_value = []
+        order_book.get_buy_orders_with_grid.return_value = []
+        order_book.get_sell_orders_with_grid.return_value = []
+        await manager.close_positions(liquidate=False)
 
         await manager.initialize_grid_orders(49500)
 

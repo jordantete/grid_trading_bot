@@ -237,7 +237,7 @@ class TestSubmitLimit:
 
     async def test_nothing_is_placed_once_the_positions_are_closed(self):
         stack = build_stack(store=RecordingStore())
-        stack.manager._positions_closed = True
+        await stack.manager.close_positions(liquidate=False)
 
         placed = await stack.manager._submit_limit(
             OrderSide.BUY, stack.grid.grid_levels[80.0], 1.0, PlacementPurpose.GRID
@@ -1044,7 +1044,7 @@ class TestInitialPurchase:
 
     async def test_no_purchase_once_the_positions_are_closed(self):
         stack = build_stack(crypto=0.0, store=RecordingStore())
-        stack.manager._positions_closed = True
+        await stack.manager.close_positions(liquidate=False)
 
         assert await stack.manager.perform_initial_purchase(ARMING_PRICE) is True
 
@@ -1336,7 +1336,7 @@ class TestLiquidation:
         assert _market_sells(stack) == [2.0]
         assert stack.balances.crypto_balance == 0.0
         assert stack.balances.balance == pytest.approx(2.0 * ARMING_PRICE * (1 - 0.001))
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
         assert len(stack.journal) == 0
         assert clock.sleeps == []
 
@@ -1348,7 +1348,7 @@ class TestLiquidation:
 
         assert _market_sells(stack) == []
         assert stack.balances.crypto_balance == 2.0
-        assert not stack.manager._liquidated
+        assert not stack.manager.liquidated
 
     async def test_a_liquidation_without_the_current_price_leaves_the_grid_untouched(self):
         stack, _ = _liquidating_stack(crypto=20.0, fiat=2700.0)
@@ -1372,7 +1372,7 @@ class TestLiquidation:
             stack.balances.reserved_fiat,
             stack.balances.reserved_crypto,
         ) == balances_before
-        assert not stack.manager._positions_closed
+        assert not stack.manager.positions_closed
 
     async def test_closing_without_liquidation_cancels_the_grid_and_keeps_the_crypto(self):
         stack, _ = _liquidating_stack(crypto=20.0, fiat=2700.0)
@@ -1418,7 +1418,7 @@ class TestLiquidation:
 
         await asyncio.wait_for(stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE), timeout=2)
 
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_nothing_to_sell_sends_no_market_order(self):
         stack, _ = _liquidating_stack(crypto=0.0)
@@ -1427,7 +1427,7 @@ class TestLiquidation:
 
         assert _market_sells(stack) == []
         assert _liquidation_alerts(stack) == []
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_a_position_under_the_exchange_minimum_stops_with_one_alert(self):
         stack, _ = _liquidating_stack(crypto=0.001)
@@ -1440,7 +1440,7 @@ class TestLiquidation:
         alerts = _liquidation_alerts(stack)
         assert len(alerts) == 1
         assert "Liquidation stopped: 0.001 BTC left, under the exchange minimum" in alerts[0]
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_a_remainder_the_exchange_cannot_round_stops_like_dust(self):
         stack, clock = _liquidating_stack(crypto=2.0)
@@ -1471,7 +1471,7 @@ class TestLiquidation:
         alerts = _liquidation_alerts(stack)
         assert len(alerts) == 1
         assert "Liquidation stopped: 1.0 BTC left, which the exchange cannot round" in alerts[0]
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_transient_failures_are_retried_with_a_growing_delay_until_the_sale(self):
         stack, clock = _liquidating_stack(crypto=2.0)
@@ -1496,7 +1496,7 @@ class TestLiquidation:
         alerts = _liquidation_alerts(stack)
         assert len(alerts) == 2
         assert "still failing after 25 attempts" in alerts[1]
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_a_refusal_rereads_the_exchange_balance_and_sells_what_it_holds(self):
         stack, clock = _liquidating_stack(crypto=2.0)
@@ -1509,7 +1509,7 @@ class TestLiquidation:
         assert _market_sells(stack) == [1.5]
         assert clock.sleeps == [1]
         assert stack.balances.crypto_balance == pytest.approx(0.5)
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     @pytest.mark.parametrize("read_error", [TypeError("must be real number, not NoneType"), DataFetchError("down")])
     async def test_a_failing_balance_read_after_a_refusal_keeps_the_liquidation_going(self, read_error):
@@ -1521,7 +1521,7 @@ class TestLiquidation:
 
         assert _market_sells(stack) == [2.0]
         assert clock.sleeps == [1]
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_an_unexpected_error_of_an_attempt_is_a_failed_attempt_retried_with_an_alert(self, caplog):
         stack, clock = _liquidating_stack(crypto=2.0)
@@ -1531,7 +1531,7 @@ class TestLiquidation:
 
         assert _market_sells(stack) == [2.0]
         assert clock.sleeps == [1, 2]
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
         assert len(_liquidation_alerts(stack)) == 1
         assert any(
             record.levelno == logging.ERROR and record.exc_info and "attempt 1" in record.getMessage()
@@ -1547,7 +1547,7 @@ class TestLiquidation:
 
         assert clock.sleeps == []
         assert _market_sells(stack) == []
-        assert not stack.manager._liquidated
+        assert not stack.manager.liquidated
         assert any("attempt 1 raised: boom" in message for message in _errors(caplog))
 
     async def test_an_unexpected_balance_read_error_fails_a_backtest_without_retrying(self):
@@ -1567,7 +1567,7 @@ class TestLiquidation:
         await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
 
         assert _market_sells(stack) == [2.0]
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_an_interruption_ends_the_retries_after_the_first_attempt_with_an_alert(self):
         stack, clock = _liquidating_stack(crypto=2.0)
@@ -1579,7 +1579,7 @@ class TestLiquidation:
         assert clock.sleeps == []
         assert len(stack.execution.market_order_failures) == 2
         assert stack.balances.crypto_balance == 2.0
-        assert not stack.manager._liquidated
+        assert not stack.manager.liquidated
         assert "Liquidation interrupted by the shutdown, 2.0 BTC still open." in _liquidation_alerts(stack)[-1]
 
     async def test_an_interruption_during_a_wait_ends_the_retries(self):
@@ -1596,7 +1596,7 @@ class TestLiquidation:
 
         assert clock.sleeps == [1]
         assert len(stack.execution.market_order_failures) == 2
-        assert not stack.manager._liquidated
+        assert not stack.manager.liquidated
 
     async def test_an_interrupted_liquidation_runs_again_when_asked_again(self):
         stack, _ = _liquidating_stack(crypto=2.0)
@@ -1607,7 +1607,7 @@ class TestLiquidation:
         await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
 
         assert _market_sells(stack) == [2.0]
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_a_partial_leg_is_booked_and_the_rest_sold_at_once(self):
         stack, clock = _liquidating_stack(crypto=2.0)
@@ -1618,7 +1618,7 @@ class TestLiquidation:
         assert _market_sells(stack) == [2.0, pytest.approx(1.2)]
         assert clock.sleeps == []
         assert stack.balances.crypto_balance == pytest.approx(0.0, abs=1e-8)
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_a_lost_answer_is_found_by_its_client_id_before_selling_again(self):
         stack, clock = _liquidating_stack(crypto=2.0)
@@ -1640,7 +1640,7 @@ class TestLiquidation:
         assert stack.balances.crypto_balance == 0.0
         assert clock.sleeps == [1]
         assert len(stack.journal) == 0
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_a_lost_order_found_still_open_is_looked_up_again_not_sold_again(self):
         stack, clock = _liquidating_stack(crypto=2.0)
@@ -1673,7 +1673,7 @@ class TestLiquidation:
         assert stack.balances.crypto_balance == 0.0
         assert clock.sleeps == [1, 2]
         assert len(stack.journal) == 0
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     @pytest.mark.parametrize("filled", [0.0, None])
     async def test_a_lost_order_found_closed_without_a_fill_is_sold_again_under_a_new_client_id(self, filled):
@@ -1698,7 +1698,7 @@ class TestLiquidation:
         assert second != first
         assert stack.balances.crypto_balance == 0.0
         assert len(stack.journal) == 0
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_a_close_drops_an_unsent_paired_entry_and_releases_its_funds(self):
         stack, _ = _liquidating_stack(crypto=20.0, fiat=2700.0)
@@ -1773,7 +1773,7 @@ class TestLiquidation:
         await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
 
         assert clock.sleeps == [0.2, 0.2, 0.2]
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
     async def test_an_entry_that_cannot_be_saved_is_not_sent(self):
         store = RecordingStore()
@@ -1785,7 +1785,7 @@ class TestLiquidation:
 
         assert _market_sells(stack) == []
         assert "execute_market_order" not in stack.execution.calls
-        assert not stack.manager._liquidated
+        assert not stack.manager.liquidated
 
     @pytest.mark.parametrize(
         "error", [OrderNotPlacedError("exchange unavailable"), OrderRejectedError("insufficient balance")]
@@ -1799,7 +1799,7 @@ class TestLiquidation:
         await stack.manager.close_positions(liquidate=True, current_price=ARMING_PRICE)
 
         assert stack.store.observed[-1] == [(PlacementPurpose.LIQUIDATION, False)]
-        assert not stack.manager._liquidated
+        assert not stack.manager.liquidated
 
     async def test_a_leg_the_exchange_never_received_is_sent_again_under_the_same_client_id(self):
         stack, _ = _liquidating_stack(crypto=2.0)
@@ -1870,7 +1870,7 @@ class TestLiquidation:
 
         assert _market_sells(stack) == []
         assert len(stack.journal) == 0
-        assert stack.manager._liquidated
+        assert stack.manager.liquidated
 
 
 class TestBookingErrors:
@@ -1883,7 +1883,7 @@ class TestBookingErrors:
 
         [sale] = _market_orders(stack, OrderSide.SELL)
         assert clock.sleeps == []
-        assert not stack.manager._liquidated
+        assert not stack.manager.liquidated
         assert stack.balances.crypto_balance == 2.0
         assert stack.book.get_order(sale.identifier) is None
         [entry] = stack.journal.entries()
