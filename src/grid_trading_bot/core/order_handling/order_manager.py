@@ -365,7 +365,13 @@ class OrderManager:
         newly_filled = local.apply_update(update)
         self.order_book.remove_open_order(local)
         await self.balance_tracker.record_execution(local, newly_filled)
-        self._notify(NotificationType.ORDER_CANCELLED, order_details=str(local))
+        if update.post_only_crossed:
+            self.logger.info(
+                f"Maker-only order {local.identifier} at {local.price} would have crossed and was cancelled by the "
+                "exchange; re-placing it."
+            )
+        else:
+            self._notify(NotificationType.ORDER_CANCELLED, order_details=str(local))
         grid_level = self.order_book.get_grid_level_for_order(local)
         if grid_level is None:
             self.logger.warning(f"Order {local.identifier} ended ({local.status.value}) without a grid level.")

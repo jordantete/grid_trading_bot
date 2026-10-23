@@ -54,6 +54,7 @@ class Order:
         fee: dict[str, str | float] | None = None,
         cost: float | None = None,
         info: dict[str, str | float | dict] | None = None,
+        post_only_crossed: bool = False,
     ):
         self.identifier = identifier
         self.status = status  # 'open', 'closed', 'canceled', 'expired', 'rejected'
@@ -74,6 +75,7 @@ class Order:
         self.fee = fee  # fee info, if available
         self.cost = cost  # 'filled' * 'price' (filling price used where available)
         self.info = info  # Original unparsed structure for debugging or auditing
+        self.post_only_crossed = post_only_crossed  # cancelled by the exchange because it would have crossed
 
     @property
     def liquidity(self) -> Liquidity:

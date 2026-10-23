@@ -15,6 +15,19 @@ from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 from ..order import Order, OrderSide, OrderStatus, OrderType
 from .order_execution_strategy_interface import OrderExecutionStrategyInterface
 
+# OKX accepts a maker-only order that would cross, then cancels it with this source instead of refusing it.
+_OKX_POST_ONLY_CANCEL_SOURCE = "31"
+
+
+def _post_only_crossed(raw_order: dict) -> bool:
+    """Whether the exchange cancelled this unfilled maker-only order because it would have crossed."""
+    info = raw_order.get("info")
+    if raw_order.get("status") != "canceled" or raw_order.get("filled") or not isinstance(info, dict):
+        return False
+    return info.get("cancelSource") == _OKX_POST_ONLY_CANCEL_SOURCE or "POST_ONLY" in str(
+        info.get("cancelSourceReason") or ""
+    )
+
 
 class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
     LOOKUP_ATTEMPTS = 3
@@ -260,6 +273,7 @@ class LiveOrderExecutionStrategy(OrderExecutionStrategyInterface):
             fee=fee,
             cost=raw_order_result.get("cost"),
             info=raw_order_result.get("info", raw_order_result),
+            post_only_crossed=_post_only_crossed(raw_order_result),
         )
 
     async def _handle_partial_fill(

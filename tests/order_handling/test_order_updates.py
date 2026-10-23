@@ -412,6 +412,18 @@ class TestEndedOrders:
         assert reserved_matches_open_orders(stack)
         assert not {NotificationType.ORDER_FAILED, NotificationType.ERROR_OCCURRED} & set(_sent(stack))
 
+    async def test_a_post_only_order_the_exchange_cancelled_for_crossing_is_replaced_without_an_alert(self, stack):
+        buy = stack.execution.order_at(90.0, OrderSide.BUY)
+        view = stack.execution.end(buy.identifier, OrderStatus.CANCELED)
+        view.post_only_crossed = True
+
+        await stack.manager.apply_order_update(view)
+
+        replacement = stack.execution.order_at(90.0, OrderSide.BUY)
+        assert replacement.identifier != buy.identifier
+        assert reserved_matches_open_orders(stack)
+        assert NotificationType.ORDER_CANCELLED not in _sent(stack)
+
 
 class TestBulkCancellation:
     async def test_a_bulk_cancel_releases_every_reservation_and_frees_the_levels(self, stack):

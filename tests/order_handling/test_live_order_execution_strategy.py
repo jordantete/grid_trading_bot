@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock, Mock, patch
 
+import ccxt
 import pytest
 
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
@@ -488,6 +489,44 @@ class TestLiveOrderExecutionStrategyPostOnlyRejection:
             await strategy.execute_limit_order(OrderSide.BUY, "BTC/USDT", 1.0, 100.0, CLIENT_ORDER_ID)
 
         assert exchange_service.place_order.await_count == 1
+
+
+class TestPostOnlyCrossing:
+    @staticmethod
+    def _okx_order(state, cancel_source, filled="0"):
+        info = {
+            "instId": "BTC-USDC",
+            "ordId": "okx-9",
+            "clOrdId": CLIENT_ORDER_ID,
+            "ordType": "post_only",
+            "side": "buy",
+            "px": "100",
+            "sz": "1",
+            "accFillSz": filled,
+            "state": state,
+            "cancelSource": cancel_source,
+            "cTime": "1700000000000",
+            "uTime": "1700000000100",
+        }
+        return ccxt.okx().parse_order(info)
+
+    async def test_an_okx_order_cancelled_because_it_would_have_crossed_is_flagged(self, setup_live_strategy):
+        strategy, _ = setup_live_strategy
+
+        order = await strategy._parse_order_result(self._okx_order("canceled", "31"))
+
+        assert (order.status, order.post_only_crossed) == (OrderStatus.CANCELED, True)
+
+    @pytest.mark.parametrize(
+        ("state", "cancel_source", "filled"),
+        [("canceled", "1", "0"), ("canceled", "", "0"), ("live", "", "0"), ("canceled", "31", "0.5")],
+    )
+    async def test_any_other_order_is_not_flagged(self, setup_live_strategy, state, cancel_source, filled):
+        strategy, _ = setup_live_strategy
+
+        order = await strategy._parse_order_result(self._okx_order(state, cancel_source, filled))
+
+        assert order.post_only_crossed is False
 
 
 class TestParsedFees:
