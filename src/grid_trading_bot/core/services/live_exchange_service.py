@@ -86,8 +86,6 @@ class LiveExchangeService(ExchangeInterface):
         )
         self.ticker_feed = LiveTickerFeed(
             self.exchange,
-            max_price_deviation=0.50,
-            max_consecutive_price_rejections=5,
             websocket_max_retries=self.config_manager.config.execution.websocket_max_retries,
             websocket_retry_base_delay=self.config_manager.config.execution.websocket_retry_base_delay,
         )

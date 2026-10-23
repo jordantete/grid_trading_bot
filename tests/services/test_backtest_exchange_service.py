@@ -108,7 +108,7 @@ class TestBacktestExchangeService:
 
         assert isinstance(result, pd.DataFrame), "Expected result to be a DataFrame"
         assert len(result) == 5, "Expected 5 rows of data"
-        pd.testing.assert_frame_equal(result, mock_data)
+        pd.testing.assert_frame_equal(result, mock_data.set_index("timestamp"))
 
     def test_a_date_range_without_candles_names_the_pair_the_dates_and_the_file(self, tmp_path, valid_config):
         csv = tmp_path / "candles.csv"

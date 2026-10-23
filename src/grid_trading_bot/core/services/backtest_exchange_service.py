@@ -91,7 +91,7 @@ class BacktestExchangeService(ExchangeInterface):
         try:
             df = pd.read_csv(file_path, parse_dates=["timestamp"])
             df["timestamp"] = pd.to_datetime(df["timestamp"])
-            df.set_index("timestamp", inplace=True)
+            df = df.set_index("timestamp")
             start_timestamp = self._to_naive_utc(start_date)
             end_timestamp = self._to_naive_utc(end_date)
             filtered_df = df.loc[start_timestamp:end_timestamp]
@@ -133,7 +133,7 @@ class BacktestExchangeService(ExchangeInterface):
     ) -> pd.DataFrame:
         df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df.set_index("timestamp", inplace=True)
+        df = df.set_index("timestamp")
         until_timestamp = pd.to_datetime(until, unit="ms")
         return df[df.index <= until_timestamp]
 

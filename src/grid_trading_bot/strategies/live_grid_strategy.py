@@ -208,7 +208,7 @@ class LiveGridStrategy(GridTradingStrategy):
             return None
 
         live_data = pd.DataFrame(self.live_trading_metrics, columns=["timestamp", "account_value", "price"])
-        live_data.set_index("timestamp", inplace=True)
+        live_data = live_data.set_index("timestamp")
         initial_price = live_data.iloc[0]["price"]
         final_price = live_data.iloc[-1]["price"]
         return live_data, initial_price, final_price, live_data.iloc[0]["account_value"]

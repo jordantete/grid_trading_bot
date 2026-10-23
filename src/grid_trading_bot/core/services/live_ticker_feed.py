@@ -9,6 +9,9 @@ from ccxt.base.errors import ExchangeError, NetworkError
 
 from .exceptions import DataFetchError
 
+MAX_PRICE_DEVIATION = 0.50
+MAX_CONSECUTIVE_PRICE_REJECTIONS = 5
+
 
 class LiveTickerFeed:
     """Streams validated ticker prices from an exchange websocket and keeps the last accepted price."""
@@ -16,10 +19,10 @@ class LiveTickerFeed:
     def __init__(
         self,
         exchange: Any,
-        max_price_deviation: float,
-        max_consecutive_price_rejections: int,
         websocket_max_retries: int,
         websocket_retry_base_delay: int,
+        max_price_deviation: float = MAX_PRICE_DEVIATION,
+        max_consecutive_price_rejections: int = MAX_CONSECUTIVE_PRICE_REJECTIONS,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.exchange = exchange

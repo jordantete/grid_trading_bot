@@ -34,6 +34,7 @@ class ConfigManager:
                 raise ConfigParseError(self.config_file, e) from e
 
     def get_config_hash(self) -> str:
+        # Imported here: serializers imports balance_tracker, which imports fee_calculator, which imports this module.
         from grid_trading_bot.core.persistence.serializers import compute_config_hash
 
         return compute_config_hash(self.config)
