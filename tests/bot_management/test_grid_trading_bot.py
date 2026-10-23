@@ -170,9 +170,8 @@ class TestGridTradingBot(BotFixtures):
             logger_instance.error.assert_any_call("An unexpected error occurred.")
             logger_instance.error.assert_any_call(ANY)
 
-    @patch("grid_trading_bot.core.bot_management.grid_trading_bot.GridTradingStrategy")
     @pytest.mark.asyncio
-    async def test_run_loads_markets_and_sets_constraints_in_live_mode(self, mock_strategy, bot):
+    async def test_run_loads_markets_and_sets_constraints_in_live_mode(self, bot):
         bot.balance_tracker = Mock()
         bot.balance_tracker.setup_balances = AsyncMock()
         bot.order_status_tracker.start_tracking = Mock()
@@ -422,9 +421,8 @@ class TestGridTradingBot(BotFixtures):
     def test_the_order_manager_signs_its_orders_with_the_config_hash(self, bot, config_manager):
         assert bot.order_manager.config_hash == compute_config_hash(config_manager.config)
 
-    @patch("grid_trading_bot.core.bot_management.grid_trading_bot.GridTradingStrategy")
     @pytest.mark.asyncio
-    async def test_run_strategy_with_exception(self, mock_strategy, bot):
+    async def test_run_strategy_with_exception(self, bot):
         # Arrange: Mock dependencies
         bot.balance_tracker = Mock()
         bot.balance_tracker.setup_balances = AsyncMock()
@@ -482,9 +480,8 @@ class TestGridTradingBot(BotFixtures):
 
         assert bot._stop.await_args.args[0] is request
 
-    @patch("grid_trading_bot.core.bot_management.grid_trading_bot.GridTradingStrategy")
     @pytest.mark.asyncio
-    async def test_run_with_plotting_enabled(self, mock_strategy, bot):
+    async def test_run_with_plotting_enabled(self, bot):
         bot.no_plot = False
         bot.balance_tracker.setup_balances = AsyncMock()
         bot.exchange_service.load_exchange_markets = AsyncMock()

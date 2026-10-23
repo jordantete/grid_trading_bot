@@ -2,6 +2,7 @@ import pytest
 
 pytest_plugins = [
     "tests.fixtures.order_handling",
+    "tests.fixtures.strategies",
 ]
 
 

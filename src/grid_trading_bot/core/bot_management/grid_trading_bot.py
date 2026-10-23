@@ -43,12 +43,14 @@ from grid_trading_bot.core.services.exceptions import (
 )
 from grid_trading_bot.core.services.exchange_service_factory import ExchangeServiceFactory
 from grid_trading_bot.core.validation.order_validator import OrderValidator
-from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
+from grid_trading_bot.strategies.backtest_grid_strategy import BacktestGridStrategy
+from grid_trading_bot.strategies.live_grid_strategy import LiveGridStrategy
 from grid_trading_bot.strategies.plotter import Plotter
 from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
 
 if TYPE_CHECKING:
     from grid_trading_bot.core.domain.strategy_type import StrategyType
+    from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
 
 from .notification.notification_content import NotificationType
 from .notification.notification_handler import NotificationHandler
@@ -196,29 +198,40 @@ class GridTradingBot:
                 notify=self.notification_handler.async_send_notification,
             )
 
-            order_simulator = OrderSimulator(
-                order_book=order_book,
-                grid_manager=grid_manager,
-                order_update_handler=self.order_manager,
-                slippage=self.config_manager.config.execution.backtest_slippage,
-            )
-
             trading_performance_analyzer = TradingPerformanceAnalyzer(self.config_manager, order_book)
-            plotter = Plotter(grid_manager, order_book) if self.trading_mode == TradingMode.BACKTEST else None
-            self.strategy = GridTradingStrategy(
-                self.config_manager,
-                self.event_bus,
-                self.exchange_service,
-                grid_manager,
-                self.order_manager,
-                self.balance_tracker,
-                trading_performance_analyzer,
-                self.trading_mode,
-                trading_pair,
-                plotter,
-                order_simulator,
-                backtest_clock=backtest_clock,
-            )
+            self.strategy: GridTradingStrategy
+            if self.trading_mode == TradingMode.BACKTEST:
+                order_simulator = OrderSimulator(
+                    order_book=order_book,
+                    grid_manager=grid_manager,
+                    order_update_handler=self.order_manager,
+                    slippage=self.config_manager.config.execution.backtest_slippage,
+                )
+                self.strategy = BacktestGridStrategy(
+                    self.config_manager,
+                    self.event_bus,
+                    self.exchange_service,
+                    grid_manager,
+                    self.order_manager,
+                    self.balance_tracker,
+                    trading_performance_analyzer,
+                    trading_pair,
+                    plotter=Plotter(grid_manager, order_book),
+                    order_simulator=order_simulator,
+                    backtest_clock=backtest_clock,
+                )
+            else:
+                self.strategy = LiveGridStrategy(
+                    self.config_manager,
+                    self.event_bus,
+                    self.exchange_service,
+                    grid_manager,
+                    self.order_manager,
+                    self.balance_tracker,
+                    trading_performance_analyzer,
+                    trading_pair,
+                    mode_label="live" if self.trading_mode == TradingMode.LIVE else "paper",
+                )
 
             if self.state_persistence_service:
                 self.state_persistence_service.strategy_state_provider = self.strategy.export_strategy_state

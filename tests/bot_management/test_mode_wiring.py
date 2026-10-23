@@ -10,8 +10,11 @@ from grid_trading_bot import cli
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
+from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
 from grid_trading_bot.core.order_handling.balance_source import BalanceSource
 from grid_trading_bot.core.services import live_exchange_service
+from grid_trading_bot.strategies.backtest_grid_strategy import BacktestGridStrategy
+from grid_trading_bot.strategies.live_grid_strategy import LiveGridStrategy
 
 
 @pytest.fixture
@@ -52,3 +55,23 @@ def test_each_mode_builds_its_components_with_its_behaviour(
     if mode != "backtest":
         assert bot.state_recovery_service.balance_source is source
     assert handler.enabled is alerts
+
+
+@pytest.mark.parametrize(
+    ("mode", "strategy_class", "label"),
+    [
+        ("backtest", BacktestGridStrategy, None),
+        ("paper_trading", LiveGridStrategy, "paper"),
+        ("live", LiveGridStrategy, "live"),
+    ],
+)
+def test_each_mode_builds_its_strategy(tmp_path, fake_exchange, mode, strategy_class, label):
+    config_manager = _config_manager(tmp_path, mode)
+
+    bot = GridTradingBot(
+        "config.json", config_manager, NotificationHandler([], enabled=False), EventBus(), no_plot=True
+    )
+
+    assert type(bot.strategy) is strategy_class
+    if label is not None:
+        assert bot.strategy.mode_label == label

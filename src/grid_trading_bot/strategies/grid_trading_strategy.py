@@ -1,30 +1,23 @@
+from abc import abstractmethod
 import asyncio
-from collections import deque
 from contextvars import ContextVar
 import logging
 import math
 
-import numpy as np
 import pandas as pd
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.schema import TrailingTrigger
-from grid_trading_bot.config.trading_mode import TradingMode
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.exceptions import BookingError
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
-from grid_trading_bot.core.indicators.atr_calculator import ATRCalculator
-from grid_trading_bot.core.order_handling.backtest_clock import BacktestClock
 from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
-from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.risk_management.trailing_stop_loss import TrailingStopLoss
-from grid_trading_bot.core.services.exceptions import DataFetchError, HistoricalMarketDataFileNotFoundError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 from grid_trading_bot.strategies.performance_metrics import PerformanceMetrics
-from grid_trading_bot.strategies.plotter import Plotter
 from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
 
 from .trading_strategy_interface import TradingStrategyInterface
@@ -34,8 +27,10 @@ _IN_TICK: ContextVar[bool] = ContextVar("in_ticker_update", default=False)
 
 
 class GridTradingStrategy(TradingStrategyInterface):
-    TICKER_REFRESH_INTERVAL = 3  # in seconds
-    MAX_LIVE_METRICS = 86_400  # 24h at ~1 data point per 3 seconds
+    """
+    Grid logic shared by the backtest and the live strategies: grid initialisation, TP/SL, trailing stop, regrid,
+    state export and restore. Subclasses supply the trading session, the report data and the plot.
+    """
 
     def __init__(
         self,
@@ -46,11 +41,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         order_manager: OrderManager,
         balance_tracker: BalanceTracker,
         trading_performance_analyzer: TradingPerformanceAnalyzer,
-        trading_mode: TradingMode,
         trading_pair: str,
-        plotter: Plotter | None = None,
-        order_simulator: OrderSimulator | None = None,
-        backtest_clock: BacktestClock | None = None,
     ):
         super().__init__(config_manager, balance_tracker)
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -58,57 +49,17 @@ class GridTradingStrategy(TradingStrategyInterface):
         self.exchange_service = exchange_service
         self.grid_manager = grid_manager
         self.order_manager = order_manager
-        self.order_simulator = order_simulator
-        self.backtest_clock = backtest_clock
         self.trading_performance_analyzer = trading_performance_analyzer
-        self.trading_mode = trading_mode
         self.trading_pair = trading_pair
-        self.plotter = plotter
-        self.data: pd.DataFrame | None = None
-        self.close_prices: np.ndarray | None = None
-        self.live_trading_metrics: deque = deque(maxlen=self.MAX_LIVE_METRICS)
         self._running = True
         self._tick_lock = asyncio.Lock()
         self.armed = False
         self.stop_reason: str | None = None
-        self._starting_account_value: float | None = None
         trailing_config = config_manager.config.risk_management.trailing_stop_loss
         self.trailing_stop: TrailingStopLoss | None = (
             TrailingStopLoss(trailing_config.atr_multiplier) if trailing_config.enabled else None
         )
         self._bars_since_regrid: int = 0
-        self._trailing_atr_series: pd.Series | None = None
-        self._dynamic_atr_series: pd.Series | None = None
-        self._live_atr: dict[int, float] = {}  # period -> latest ATR (live mode, Task 8)
-        self._next_candle_close: pd.Timestamp | None = None
-
-    async def _initialize_historical_data(self) -> pd.DataFrame | None:
-        """
-        Initializes historical market data (OHLCV).
-        In LIVE or PAPER_TRADING mode returns None. In BACKTEST mode a load failure is logged and raised.
-        Uses asyncio.to_thread to avoid blocking the event loop during I/O.
-        """
-        if self.trading_mode != TradingMode.BACKTEST:
-            return None
-
-        try:
-            timeframe, start_date, end_date = self._extract_config()
-            return await asyncio.to_thread(
-                self.exchange_service.fetch_ohlcv, self.trading_pair, timeframe, start_date, end_date
-            )
-        except (DataFetchError, HistoricalMarketDataFileNotFoundError) as e:
-            self.logger.error(f"Failed to initialize data for backtest trading mode: {e}")
-            raise
-
-    def _extract_config(self) -> tuple[str, str, str]:
-        """
-        Extracts configuration values for timeframe, start date, and end date.
-
-        Returns:
-            tuple: A tuple containing the timeframe, start date, and end date as strings.
-        """
-        settings = self.config_manager.config.trading_settings
-        return settings.timeframe, settings.period.start_date, settings.period.end_date
 
     def initialize_strategy(self):
         """
@@ -147,11 +98,7 @@ class GridTradingStrategy(TradingStrategyInterface):
         skip_grid_init: bool = False,
     ):
         """
-        Starts the trading session based on the configured mode.
-
-        For backtesting, this simulates the strategy using historical data.
-        For live or paper trading, this interacts with the exchange to manage
-        real-time trading.
+        Resets the session state, then runs the trading session until it ends or the bot stops it.
 
         Args:
             skip_initial_purchase: If True, skip the initial crypto purchase (recovery mode).
@@ -163,184 +110,11 @@ class GridTradingStrategy(TradingStrategyInterface):
         self._running = True
         self.armed = False
         self.stop_reason = None
-        self.data = await self._initialize_historical_data()
+        await self._run_session(skip_initial_purchase, skip_grid_init)
 
-        if self.trading_mode == TradingMode.BACKTEST:
-            self._precompute_backtest_atr()
-            start_index = self._initialize_dynamic_grid_backtest()
-            await self._run_backtest(start_index)
-            self.logger.info("Ending backtest simulation")
-            self._running = False
-        else:
-            await self._run_live_or_paper_trading(
-                skip_initial_purchase=skip_initial_purchase,
-                skip_grid_init=skip_grid_init,
-            )
-
-    async def _run_live_or_paper_trading(
-        self,
-        skip_initial_purchase: bool = False,
-        skip_grid_init: bool = False,
-    ):
-        """
-        Executes live or paper trading sessions based on real-time ticker updates.
-
-        The method listens for ticker updates, initializes grid orders when
-        the price is inside the grid range, and manages take-profit and stop-loss events.
-
-        Args:
-            skip_initial_purchase: If True, skip initial purchase on grid init (recovery).
-            skip_grid_init: If True, mark grid orders as already initialized (recovery).
-        """
-        self.logger.info(f"Starting {'live' if self.trading_mode == TradingMode.LIVE else 'paper'} trading")
-
-        dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
-        if dynamic_spacing.enabled and not self.grid_manager.is_initialized:
-            timeframe = self.config_manager.config.trading_settings.timeframe
-            period = dynamic_spacing.atr_period
-            candles = await self.exchange_service.fetch_recent_ohlcv(self.trading_pair, timeframe, period * 3)
-            atr = ATRCalculator.compute(candles, period)
-            current_price = await self.exchange_service.get_current_price(self.trading_pair)
-            self.grid_manager.regrid(current_price, atr)
-            self.logger.info(f"Initial dynamic grid built live (center {current_price}, ATR {atr}).")
-
-        grid_orders_initialized = skip_grid_init
-
-        async def on_ticker_update(current_price):
-            async with self._tick_lock:
-                token = _IN_TICK.set(True)
-                try:
-                    await process_ticker_update(current_price)
-                finally:
-                    _IN_TICK.reset(token)
-
-        async def process_ticker_update(current_price):
-            nonlocal grid_orders_initialized
-            try:
-                if not self._running:
-                    self.logger.info("Trading stopped; halting price updates.")
-                    return
-
-                account_value = self.balance_tracker.get_total_balance_value(current_price)
-                self.live_trading_metrics.append((pd.Timestamp.now(), account_value, current_price))
-
-                grid_orders_initialized = await self._initialize_grid_orders_once(
-                    current_price,
-                    grid_orders_initialized,
-                    skip_initial_purchase=skip_initial_purchase,
-                )
-
-                if not grid_orders_initialized:
-                    return
-
-                fresh_candle = await self._maybe_refresh_live_atr(pd.Timestamp.now())
-
-                trailing_atr = self._live_atr.get(
-                    self.config_manager.config.risk_management.trailing_stop_loss.atr_period,
-                    math.nan,
-                )
-                if await self._handle_trailing_stop(current_price, trailing_atr):
-                    return
-
-                if await self._handle_take_profit_stop_loss(current_price):
-                    return
-
-                # Volatility regrid is cooldown-counted in bars; only evaluate it once per
-                # closed candle, not on every ~3s ticker tick.
-                if fresh_candle:
-                    dynamic_atr = self._live_atr.get(
-                        self.config_manager.config.grid_strategy.dynamic_spacing.atr_period,
-                        math.nan,
-                    )
-                    await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
-
-            except Exception as e:
-                self.logger.error(f"Error during ticker update: {e}", exc_info=True)
-
-        try:
-            await self.exchange_service.listen_to_ticker_updates(
-                self.trading_pair,
-                on_ticker_update,
-                self.TICKER_REFRESH_INTERVAL,
-            )
-
-        except Exception as e:
-            self.logger.error(f"Error in live/paper trading loop: {e}", exc_info=True)
-            self._running = False
-            kind = StopKind.FEED_LOST if isinstance(e, DataFetchError) else StopKind.CRASH
-            await self.event_bus.publish(Events.STOP_BOT, StopRequest(kind, f"Live trading loop failed: {e}"))
-
-        finally:
-            self.logger.info("Exiting live/paper trading loop.")
-
-    async def _run_backtest(self, start_index: int = 0) -> None:
-        """
-        Executes the backtesting simulation based on historical OHLCV data.
-
-        This method simulates trading using preloaded data, managing grid levels,
-        executing orders, and updating account values over the timeframe.
-
-        Args:
-            start_index (int): Candle index at which trading may start (ATR warm-up for dynamic grids).
-        """
-        if self.data is None:
-            self.logger.error("No data available for backtesting.")
-            return
-
-        self.logger.info("Starting backtest simulation")
-        close_prices = self.data["close"].to_numpy()
-        self.close_prices = close_prices
-        high_prices = self.data["high"].to_numpy()
-        low_prices = self.data["low"].to_numpy()
-        timestamps = self.data.index
-        account_values = np.full(len(self.data), np.nan)
-        crypto_values = np.full(len(self.data), np.nan)
-        grid_orders_initialized = False
-        self._starting_account_value = self.balance_tracker.get_total_balance_value(close_prices[0])
-
-        for i, (current_price, high_price, low_price, timestamp) in enumerate(
-            zip(close_prices, high_prices, low_prices, timestamps, strict=False),
-        ):
-            if self.backtest_clock is not None:
-                self.backtest_clock.set(timestamp)
-            if i >= start_index and self.stop_reason is None:
-                if not grid_orders_initialized:
-                    # The grid is placed at this candle's close, so its high and low are already in the past.
-                    grid_orders_initialized = await self._initialize_grid_orders_once(current_price, False)
-                else:
-                    await self._simulate_backtest_candle(i, current_price, high_price, low_price, timestamp)
-
-            account_values[i] = self.balance_tracker.get_total_balance_value(current_price)
-            crypto_values[i] = self.balance_tracker.get_adjusted_crypto_balance() * current_price
-
-        self.data["account_value"] = account_values
-        self.data["crypto_value"] = crypto_values
-
-    async def _simulate_backtest_candle(
-        self,
-        index: int,
-        current_price: float,
-        high_price: float,
-        low_price: float,
-        timestamp: pd.Timestamp,
-    ) -> None:
-        """
-        Fills the orders the candle crosses, then applies the trailing stop, TP/SL and the
-        volatility regrid at its close. A stop sets `stop_reason`, which ends trading.
-        """
-        if self.order_simulator is None:
-            raise RuntimeError("A backtest needs its order simulator.")
-        await self.order_simulator.simulate_order_fills(high_price, low_price, timestamp)
-
-        trailing_atr = self._backtest_atr_at(self._trailing_atr_series, index)
-        if await self._handle_trailing_stop(current_price, trailing_atr):
-            return
-
-        if await self._handle_take_profit_stop_loss(current_price):
-            return
-
-        dynamic_atr = self._backtest_atr_at(self._dynamic_atr_series, index)
-        await self._maybe_regrid_on_volatility(current_price, dynamic_atr)
+    @abstractmethod
+    async def _run_session(self, skip_initial_purchase: bool, skip_grid_init: bool) -> None:
+        """Runs the trading session on this strategy's price source."""
 
     async def _initialize_grid_orders_once(
         self,
@@ -378,7 +152,7 @@ class GridTradingStrategy(TradingStrategyInterface):
             try:
                 done = await self.order_manager.perform_initial_purchase(current_price)
             except BookingError as e:
-                if self.trading_mode == TradingMode.BACKTEST:
+                if self.order_manager.fail_fast:
                     raise
                 self.logger.error(f"Initial purchase executed but not booked; halting: {e}")
                 self.stop_reason = "booking_error"
@@ -406,66 +180,36 @@ class GridTradingStrategy(TradingStrategyInterface):
         Returns:
             tuple: The typed metrics (None without data), their display summary and the formatted orders.
         """
-        if self.trading_mode == TradingMode.BACKTEST:
-            if self.data is None or self.close_prices is None or self._starting_account_value is None:
-                self.logger.warning("No backtest data; no performance report.")
-                return None, {}, []
-            initial_price = self.close_prices[0]
-            final_price = self.close_prices[-1]
-            snapshot = self.balance_tracker.snapshot(final_price)
-            return self.trading_performance_analyzer.generate_performance_summary(
-                self.data,
-                initial_price,
-                self.balance_tracker.get_adjusted_fiat_balance(),
-                self.balance_tracker.get_adjusted_crypto_balance(),
-                final_price,
-                self.balance_tracker.total_fees,
-                snapshot.realized_pnl,
-                snapshot.unrealized_pnl,
-                initial_balance=self._starting_account_value,
-                armed=self.armed,
-                stop_reason=self.stop_reason,
-            )
-        else:
-            if not self.live_trading_metrics:
-                self.logger.warning("No account value data available for live/paper trading mode.")
-                return None, {}, []
+        report_data = self._report_data()
+        if report_data is None:
+            return None, {}, []
+        return self._summary(*report_data)
 
-            live_data = pd.DataFrame(self.live_trading_metrics, columns=["timestamp", "account_value", "price"])
-            live_data.set_index("timestamp", inplace=True)
-            initial_price = live_data.iloc[0]["price"]
-            final_price = live_data.iloc[-1]["price"]
-            snapshot = self.balance_tracker.snapshot(final_price)
-
-            return self.trading_performance_analyzer.generate_performance_summary(
-                live_data,
-                initial_price,
-                self.balance_tracker.get_adjusted_fiat_balance(),
-                self.balance_tracker.get_adjusted_crypto_balance(),
-                final_price,
-                self.balance_tracker.total_fees,
-                snapshot.realized_pnl,
-                snapshot.unrealized_pnl,
-                initial_balance=live_data.iloc[0]["account_value"],
-                armed=self.armed,
-                stop_reason=self.stop_reason,
-            )
-
-    def plot_results(self) -> None:
+    @abstractmethod
+    def _report_data(self) -> tuple[pd.DataFrame, float, float, float] | None:
         """
-        Plots the backtest results using the provided plotter.
-
-        This method generates and displays visualizations of the trading
-        strategy's performance during backtesting. If the bot is running
-        in live or paper trading mode, plotting is not available.
+        Returns the account values, the initial and final prices and the initial balance the report is built from,
+        or None (after a warning) when the session has none.
         """
-        if self.trading_mode == TradingMode.BACKTEST:
-            if self.data is None or self.plotter is None:
-                self.logger.warning("No backtest data to plot.")
-                return
-            self.plotter.plot_results(self.data)
-        else:
-            self.logger.info("Plotting is not available for live/paper trading mode.")
+
+    def _summary(
+        self, data: pd.DataFrame, initial_price: float, final_price: float, initial_balance: float
+    ) -> tuple[PerformanceMetrics | None, dict, list]:
+        """Builds the performance summary from the session's account values and the tracker's balances and PnL."""
+        snapshot = self.balance_tracker.snapshot(final_price)
+        return self.trading_performance_analyzer.generate_performance_summary(
+            data,
+            initial_price,
+            self.balance_tracker.get_adjusted_fiat_balance(),
+            self.balance_tracker.get_adjusted_crypto_balance(),
+            final_price,
+            self.balance_tracker.total_fees,
+            snapshot.realized_pnl,
+            snapshot.unrealized_pnl,
+            initial_balance=initial_balance,
+            armed=self.armed,
+            stop_reason=self.stop_reason,
+        )
 
     async def _handle_take_profit_stop_loss(self, current_price: float) -> bool:
         """
@@ -582,96 +326,6 @@ class GridTradingStrategy(TradingStrategyInterface):
             self.grid_manager.atr_grid = atr_grid
 
         self.logger.info("Restored strategy state (trailing stop / ATR grid baseline).")
-
-    def _precompute_backtest_atr(self) -> None:
-        """
-        Precomputes ATR series for the trailing stop and dynamic spacing features, aligned on self.data.
-        """
-        if self.data is None:
-            return
-        trailing_config = self.config_manager.config.risk_management.trailing_stop_loss
-        if trailing_config.enabled:
-            self._trailing_atr_series = ATRCalculator.compute_series(self.data, trailing_config.atr_period)
-        dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
-        if dynamic_spacing.enabled:
-            self._dynamic_atr_series = ATRCalculator.compute_series(self.data, dynamic_spacing.atr_period)
-
-    def _backtest_atr_at(self, series: pd.Series | None, index: int) -> float:
-        """Returns the ATR value at the given candle index, or NaN if the series is disabled."""
-        if series is None:
-            return math.nan
-        return float(series.iloc[index])
-
-    @staticmethod
-    def _timeframe_to_seconds(timeframe: str) -> int:
-        # "M" = calendar month, approximated as 30 days (ccxt and the config schema accept "1M").
-        units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "M": 2_592_000}
-        return int(timeframe[:-1]) * units[timeframe[-1]]
-
-    def _enabled_atr_periods(self) -> set[int]:
-        periods: set[int] = set()
-        trailing_config = self.config_manager.config.risk_management.trailing_stop_loss
-        if trailing_config.enabled:
-            periods.add(trailing_config.atr_period)
-        dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
-        if dynamic_spacing.enabled:
-            periods.add(dynamic_spacing.atr_period)
-        return periods
-
-    async def _maybe_refresh_live_atr(self, now: pd.Timestamp) -> bool:
-        """
-        Fetches recent candles and refreshes self._live_atr for every enabled ATR-based
-        feature once a candle boundary has passed. No-op if no such feature is enabled.
-
-        Returns:
-            bool: True only when a fresh candle was actually fetched and ingested this call;
-            False when no feature is armed, the boundary has not been reached yet, or the
-            fetch failed. Callers use this to bar-count volatility regrids per closed candle.
-        """
-        periods = self._enabled_atr_periods()
-        if not periods:
-            return False
-
-        timeframe = self.config_manager.config.trading_settings.timeframe
-        interval = pd.Timedelta(seconds=self._timeframe_to_seconds(timeframe))
-        if self._next_candle_close is None:
-            self._next_candle_close = now.ceil(interval)
-            return False
-        if now < self._next_candle_close:
-            return False
-
-        self._next_candle_close = self._next_candle_close + interval
-        limit = max(periods) * 3  # enough history for Wilder smoothing to stabilize
-        try:
-            candles = await self.exchange_service.fetch_recent_ohlcv(self.trading_pair, timeframe, limit)
-        except DataFetchError as e:
-            self.logger.warning(f"ATR refresh failed, keeping previous ATR: {e}")
-            return False
-
-        for period in periods:
-            self._live_atr[period] = ATRCalculator.compute(candles, period)
-        return True
-
-    def _initialize_dynamic_grid_backtest(self) -> int:
-        """
-        When dynamic spacing is on and the grid was not built from a static range,
-        builds the initial grid from the first available ATR.
-        Returns the candle index at which the trading loop may start.
-        """
-        dynamic_spacing = self.config_manager.config.grid_strategy.dynamic_spacing
-        if not dynamic_spacing.enabled or self.grid_manager.is_initialized:
-            return 0
-
-        period = dynamic_spacing.atr_period
-        warmup_index = period + 1
-        if self.data is None or len(self.data) <= warmup_index:
-            raise ValueError("Not enough candles to warm up ATR for dynamic grid initialization.")
-
-        atr = self._backtest_atr_at(self._dynamic_atr_series, warmup_index)
-        center = float(self.data["close"].iloc[warmup_index])
-        self.grid_manager.regrid(center, atr)
-        self.logger.info(f"Initial dynamic grid built at candle {warmup_index} (center {center}, ATR {atr}).")
-        return warmup_index
 
     async def _evaluate_tp_or_sl(self, current_price: float) -> bool:
         """

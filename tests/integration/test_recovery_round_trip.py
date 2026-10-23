@@ -27,7 +27,7 @@ from grid_trading_bot.core.persistence.run_files import RunFiles
 from grid_trading_bot.core.persistence.serializers import pending_placement_to_dict
 from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
 from grid_trading_bot.core.services import live_exchange_service
-from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
+from grid_trading_bot.strategies.live_grid_strategy import LiveGridStrategy
 from tests.fakes.fake_exchange import ExchangeState, FakeExchange
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
@@ -42,7 +42,7 @@ def exchange(tmp_path, monkeypatch):
     state = ExchangeState.create(tmp_path / "exchange.json", price=ARMING_PRICE, quote=1000.0)
     monkeypatch.setattr(FakeExchange, "state_path", state.path)
     monkeypatch.setattr(live_exchange_service, "ccxtpro", SimpleNamespace(binance=FakeExchange))
-    monkeypatch.setattr(GridTradingStrategy, "TICKER_REFRESH_INTERVAL", 0.05)
+    monkeypatch.setattr(LiveGridStrategy, "TICKER_REFRESH_INTERVAL", 0.05)
     monkeypatch.setenv("EXCHANGE_API_KEY", "test")
     monkeypatch.setenv("EXCHANGE_SECRET_KEY", "test")
     monkeypatch.setenv("APPRISE_NOTIFICATION_URLS", "")

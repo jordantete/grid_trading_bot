@@ -1,46 +1,18 @@
-import asyncio
-import dataclasses
-import logging
 from unittest.mock import AsyncMock, Mock
 
-import pandas as pd
 import pytest
-from tests.fakes.config import bot_config_from, config_manager_from
+from tests.fakes.config import config_manager_from
+from tests.fixtures.strategies import use_dynamic_spacing, use_trailing_stop
 
-from grid_trading_bot.config.config_manager import ConfigManager
-from grid_trading_bot.config.schema import DynamicSpacingConfig, TrailingStopLossConfig, TrailingTrigger
-from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.config.schema import TrailingTrigger
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
 from grid_trading_bot.core.exceptions import BookingError
-from grid_trading_bot.core.grid_management.grid_manager import GridManager
-from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
 from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
-from grid_trading_bot.core.order_handling.order_manager import OrderManager
-from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
 from grid_trading_bot.core.risk_management.trailing_stop_loss import TrailingStopLoss
-from grid_trading_bot.core.services.exceptions import DataFetchError
-from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
-from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
-from grid_trading_bot.strategies.plotter import Plotter
-from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
-
-
-def _use_dynamic_spacing(strategy, **fields):
-    config = strategy.config_manager.config
-    grid_strategy = dataclasses.replace(
-        config.grid_strategy, dynamic_spacing=DynamicSpacingConfig(enabled=True, **fields)
-    )
-    strategy.config_manager.config = dataclasses.replace(config, grid_strategy=grid_strategy)
-
-
-def _use_trailing_stop(strategy, **fields):
-    config = strategy.config_manager.config
-    risk_management = dataclasses.replace(
-        config.risk_management, trailing_stop_loss=TrailingStopLossConfig(enabled=True, **fields)
-    )
-    strategy.config_manager.config = dataclasses.replace(config, risk_management=risk_management)
+from grid_trading_bot.strategies.backtest_grid_strategy import BacktestGridStrategy
+from grid_trading_bot.strategies.live_grid_strategy import LiveGridStrategy
 
 
 def _order_manager_regrid(rebuilt=True):
@@ -73,106 +45,7 @@ def _executed_buy() -> Order:
     )
 
 
-@pytest.fixture
-def strategy_fixture(valid_config):
-    """
-    Builds a real GridTradingStrategy with mocked collaborators, attached directly
-    as attributes (config_manager, grid_manager, order_manager, balance_tracker, etc.)
-    since the strategy stores each constructor argument as an instance attribute.
-    """
-    config_manager = Mock(spec=ConfigManager)
-    exchange_service = Mock(spec=ExchangeInterface)
-    grid_manager = Mock(spec=GridManager)
-    order_manager = Mock(spec=OrderManager)
-    balance_tracker = Mock(spec=BalanceTracker)
-    trading_performance_analyzer = Mock(spec=TradingPerformanceAnalyzer)
-    plotter = Mock(spec=Plotter)
-    event_bus = Mock(spec=EventBus)
-    event_bus.publish = AsyncMock()
-    order_simulator = Mock(spec=OrderSimulator)
-    order_simulator.simulate_order_fills = AsyncMock()
-
-    config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1d"}})
-
-    order_manager.initialize_grid_orders = AsyncMock()
-    order_manager.execute_take_profit_or_stop_loss_order = AsyncMock()
-
-    return GridTradingStrategy(
-        config_manager=config_manager,
-        event_bus=event_bus,
-        exchange_service=exchange_service,
-        grid_manager=grid_manager,
-        order_manager=order_manager,
-        balance_tracker=balance_tracker,
-        trading_performance_analyzer=trading_performance_analyzer,
-        trading_mode=TradingMode.BACKTEST,
-        trading_pair="BTC/USDT",
-        plotter=plotter,
-        order_simulator=order_simulator,
-    )
-
-
 class TestGridTradingStrategy:
-    @pytest.fixture
-    def setup_strategy(self, valid_config):
-        config_manager = Mock(spec=ConfigManager)
-        exchange_service = Mock(spec=ExchangeInterface)
-        grid_manager = Mock(spec=GridManager)
-        order_manager = Mock(spec=OrderManager)
-        balance_tracker = Mock(spec=BalanceTracker)
-        trading_performance_analyzer = Mock(spec=TradingPerformanceAnalyzer)
-        plotter = Mock(spec=Plotter)
-        event_bus = Mock(spec=EventBus)
-        order_simulator = Mock(spec=OrderSimulator)
-        order_simulator.simulate_order_fills = AsyncMock()
-
-        config_manager.config = bot_config_from(
-            valid_config,
-            {
-                "trading_settings": {"timeframe": "1d"},
-                "risk_management": {
-                    "take_profit": {"enabled": True, "threshold": 20000},
-                    "stop_loss": {"enabled": True, "threshold": 10000},
-                },
-            },
-        )
-
-        def create_strategy(trading_mode: TradingMode = TradingMode.BACKTEST):
-            return GridTradingStrategy(
-                config_manager=config_manager,
-                event_bus=event_bus,
-                exchange_service=exchange_service,
-                grid_manager=grid_manager,
-                order_manager=order_manager,
-                balance_tracker=balance_tracker,
-                trading_performance_analyzer=trading_performance_analyzer,
-                trading_mode=trading_mode,
-                trading_pair="BTC/USDT",
-                plotter=plotter,
-                order_simulator=order_simulator,
-            )
-
-        return (
-            create_strategy,
-            config_manager,
-            exchange_service,
-            grid_manager,
-            order_manager,
-            balance_tracker,
-            trading_performance_analyzer,
-            plotter,
-            event_bus,
-        )
-
-    @pytest.mark.asyncio
-    async def test_a_backtest_candle_without_an_order_simulator_raises(self, setup_strategy):
-        create_strategy, *_ = setup_strategy
-        strategy = create_strategy()
-        strategy.order_simulator = None
-
-        with pytest.raises(RuntimeError, match="order simulator"):
-            await strategy._simulate_backtest_candle(0, 100.0, 101.0, 99.0, pd.Timestamp("2024-01-01"))
-
     @pytest.mark.asyncio
     async def test_initialize_strategy(self, setup_strategy):
         create_strategy, _, _, grid_manager, *_ = setup_strategy
@@ -194,10 +67,13 @@ class TestGridTradingStrategy:
         exchange_service.close_connection.assert_called_once()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("mode", [TradingMode.LIVE, TradingMode.PAPER_TRADING, TradingMode.BACKTEST])
-    async def test_stop_leaves_orders_and_the_exchange_to_the_bot(self, mode, setup_strategy):
+    @pytest.mark.parametrize(
+        ("strategy_class", "mode_label"),
+        [(LiveGridStrategy, "live"), (LiveGridStrategy, "paper"), (BacktestGridStrategy, None)],
+    )
+    async def test_stop_leaves_orders_and_the_exchange_to_the_bot(self, strategy_class, mode_label, setup_strategy):
         create_strategy, _, exchange_service, _, order_manager, *_ = setup_strategy
-        strategy = create_strategy(mode)
+        strategy = create_strategy(strategy_class, mode_label)
         exchange_service.close_connection = AsyncMock()
         exchange_service.close = AsyncMock()
         order_manager.close_positions = AsyncMock()
@@ -208,147 +84,6 @@ class TestGridTradingStrategy:
         exchange_service.close_connection.assert_awaited_once()
         exchange_service.close.assert_not_awaited()
         order_manager.close_positions.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_run_backtest(self, setup_strategy):
-        create_strategy, _, _, grid_manager, order_manager, balance_tracker, *_ = setup_strategy
-        strategy = create_strategy()
-
-        mock_data = pd.DataFrame(
-            {
-                "close": [10000, 10500, 11000],
-                "high": [10100, 10600, 11100],
-                "low": [9900, 10400, 10900],
-            },
-            index=pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
-        )
-        strategy._initialize_historical_data = AsyncMock(return_value=mock_data)
-
-        balance_tracker.get_total_balance_value.side_effect = [10000, 9500, 10000, 10000]
-        balance_tracker.get_adjusted_crypto_balance.return_value = 0.5
-        balance_tracker.crypto_balance = 1
-        grid_manager.get_trigger_price.return_value = 8900
-        order_manager.initialize_grid_orders = AsyncMock()
-        strategy._initialize_grid_orders_once = AsyncMock(side_effect=[False, True, True])
-        strategy._handle_take_profit_stop_loss = AsyncMock(side_effect=[False, False, False])
-
-        await strategy.run()
-
-        expected_account_values = pd.Series([9500, 10000, 10000], index=strategy.data.index, name="account_value")
-        pd.testing.assert_series_equal(strategy.data["account_value"], expected_account_values.astype("float64"))
-        expected_crypto_values = pd.Series([5000, 5250, 5500], index=strategy.data.index, name="crypto_value")
-        pd.testing.assert_series_equal(strategy.data["crypto_value"], expected_crypto_values.astype("float64"))
-        assert strategy._starting_account_value == 10000
-        strategy._handle_take_profit_stop_loss.assert_awaited()
-
-    @pytest.mark.asyncio
-    async def test_run_live_trading(self, setup_strategy):
-        create_strategy, _, exchange_service, *_ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-        exchange_service.listen_to_ticker_updates = AsyncMock()
-
-        await strategy.run()
-
-        exchange_service.listen_to_ticker_updates.assert_called_once()
-
-    def test_generate_performance_report(self, setup_strategy):
-        create_strategy, _, _, _, _, balance_tracker, trading_performance_analyzer, _, _ = setup_strategy
-        strategy = create_strategy()
-        strategy.data = pd.DataFrame({"close": [10000, 10500, 11000]})
-        strategy.close_prices = strategy.data["close"].values
-        initial_price = strategy.data["close"].iloc[0]
-        final_price = strategy.data["close"].iloc[-1]
-        balance_tracker.get_adjusted_fiat_balance.return_value = 5000
-        balance_tracker.get_adjusted_crypto_balance.return_value = 1
-        balance_tracker.total_fees = 10
-        strategy._starting_account_value = 15000
-        trading_performance_analyzer.generate_performance_summary = Mock()
-        balance_tracker.snapshot.return_value = AccountSnapshot(
-            price=11000.0, value=16000.0, peak=16000.0, drawdown_pct=0.0, realized_pnl=42.0, unrealized_pnl=-3.0
-        )
-
-        strategy.generate_performance_report()
-
-        balance_tracker.snapshot.assert_called_once_with(final_price)
-        trading_performance_analyzer.generate_performance_summary.assert_called_once_with(
-            strategy.data,
-            initial_price,
-            balance_tracker.get_adjusted_fiat_balance(),
-            balance_tracker.get_adjusted_crypto_balance(),
-            final_price,
-            balance_tracker.total_fees,
-            42.0,
-            -3.0,
-            initial_balance=15000,
-            armed=False,
-            stop_reason=None,
-        )
-
-    def test_plot_results(self, setup_strategy):
-        create_strategy, _, _, _, _, _, _, plotter, _ = setup_strategy
-        strategy = create_strategy()
-        strategy.data = pd.DataFrame({"close": [10000, 10500, 11000]})
-
-        strategy.plot_results()
-
-        plotter.plot_results.assert_called_once_with(strategy.data)
-
-    def test_plot_results_not_available_in_live_mode(self, setup_strategy, caplog):
-        create_strategy, _, _, _, _, _, _, plotter, _ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-
-        with caplog.at_level(logging.INFO):
-            strategy.plot_results()
-
-        assert "Plotting is not available for live/paper trading mode." in [record.message for record in caplog.records]
-        plotter.plot_results.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_initialize_historical_data_live_mode(self, setup_strategy):
-        create_strategy, _, _, _, _, _, _, _, _ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-
-        result = await strategy._initialize_historical_data()
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_initialize_historical_data_backtest_mode(self, setup_strategy, valid_config):
-        create_strategy, config_manager, exchange_service, _, _, _, _, _, _ = setup_strategy
-
-        config_manager.config = bot_config_from(
-            valid_config,
-            {"trading_settings": {"timeframe": "1h", "period": {"start_date": "2024-01-01", "end_date": "2024-01-02"}}},
-        )
-
-        mock_data = pd.DataFrame({"close": [100, 200, 300]})
-        exchange_service.fetch_ohlcv.return_value = mock_data
-
-        strategy = create_strategy(TradingMode.BACKTEST)
-        exchange_service.fetch_ohlcv.reset_mock()
-
-        result = await strategy._initialize_historical_data()
-
-        assert result is not None
-        assert isinstance(result, pd.DataFrame)
-        exchange_service.fetch_ohlcv.assert_called_once_with(
-            "BTC/USDT",
-            "1h",
-            "2024-01-01",
-            "2024-01-02",
-        )
-
-    @pytest.mark.asyncio
-    async def test_initialize_historical_data_error(self, setup_strategy, caplog):
-        create_strategy, _, exchange_service, _, _, _, _, _, _ = setup_strategy
-        strategy = create_strategy(TradingMode.BACKTEST)
-
-        # Mock the exchange service to raise an exception
-        exchange_service.fetch_ohlcv.side_effect = DataFetchError("Failed to fetch data")
-
-        with caplog.at_level(logging.ERROR), pytest.raises(DataFetchError, match="Failed to fetch data"):
-            await strategy._initialize_historical_data()
-
-        assert "Failed to initialize data for backtest trading mode" in caplog.text
 
     @pytest.mark.asyncio
     async def test_evaluate_tp_or_sl_no_crypto_balance(self, setup_strategy):
@@ -444,9 +179,9 @@ class TestGridTradingStrategy:
         order_manager.initialize_grid_orders.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_an_initial_purchase_that_cannot_be_booked_halts_the_bot(self, setup_strategy):
+    async def test_a_booking_error_on_the_initial_purchase_halts_live(self, setup_strategy):
         create_strategy, _, _, grid_manager, order_manager, *_ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
+        strategy = create_strategy(LiveGridStrategy)
         bus = EventBus()
         requests: list[StopRequest] = []
 
@@ -471,9 +206,9 @@ class TestGridTradingStrategy:
         assert request.reason.startswith("Initial purchase not booked: buy market order o1 executed (0.1 at 15100.0")
 
     @pytest.mark.asyncio
-    async def test_an_initial_purchase_that_cannot_be_booked_fails_a_backtest(self, setup_strategy):
+    async def test_a_booking_error_on_the_initial_purchase_fails_a_backtest(self, setup_strategy):
         create_strategy, _, _, grid_manager, order_manager, *_ = setup_strategy
-        strategy = create_strategy(TradingMode.BACKTEST)
+        strategy = create_strategy(BacktestGridStrategy)
         grid_manager.is_within_grid_range.return_value = True
         order_manager.perform_initial_purchase = AsyncMock(side_effect=BookingError(_executed_buy(), ValueError("bad")))
 
@@ -570,84 +305,6 @@ class TestGridTradingStrategy:
         order_manager.perform_initial_purchase.assert_not_called()
         order_manager.initialize_grid_orders.assert_not_called()
 
-    def test_generate_performance_report_live_mode(self, setup_strategy):
-        create_strategy, _, _, _, _, balance_tracker, trading_performance_analyzer, _, _ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-
-        balance_tracker.get_adjusted_fiat_balance.return_value = 5000
-        balance_tracker.get_adjusted_crypto_balance.return_value = 1
-        balance_tracker.total_fees = 10
-
-        strategy.live_trading_metrics = [
-            (pd.Timestamp("2024-01-01"), 10000, 100),
-            (pd.Timestamp("2024-01-02"), 11000, 110),
-        ]
-        balance_tracker.snapshot.return_value = AccountSnapshot(
-            price=11000.0, value=16000.0, peak=16000.0, drawdown_pct=0.0, realized_pnl=42.0, unrealized_pnl=-3.0
-        )
-
-        strategy.generate_performance_report()
-
-        balance_tracker.snapshot.assert_called_once_with(110)
-        trading_performance_analyzer.generate_performance_summary.assert_called_once()
-        assert trading_performance_analyzer.generate_performance_summary.call_args.args[-2:] == (42.0, -3.0)
-
-    def test_generate_performance_report_live_mode_no_metrics(self, setup_strategy):
-        create_strategy, _, _, _, _, _, trading_performance_analyzer, _, _ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-
-        metrics, result, formatted_orders = strategy.generate_performance_report()
-
-        assert metrics is None
-        assert result == {}
-        assert formatted_orders == []
-        trading_performance_analyzer.generate_performance_summary.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_run_live_trading_error_handling(self, setup_strategy):
-        create_strategy, _, exchange_service, _, _, _, _, _, _ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-
-        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=Exception("Connection error"))
-
-        await strategy.run()
-
-        exchange_service.listen_to_ticker_updates.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_a_dead_feed_publishes_a_feed_lost_stop(self, setup_strategy):
-        create_strategy, _, exchange_service, _, _, _, _, _, event_bus = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=DataFetchError("feed died"))
-
-        await strategy._run_live_or_paper_trading()
-
-        request = event_bus.publish.await_args.args[1]
-        assert event_bus.publish.await_args.args[0] == Events.STOP_BOT
-        assert request.kind is StopKind.FEED_LOST
-        assert "feed died" in request.reason
-        assert strategy._running is False
-
-    @pytest.mark.asyncio
-    async def test_an_unexpected_loop_error_publishes_a_crash_stop(self, setup_strategy):
-        create_strategy, _, exchange_service, _, _, _, _, _, event_bus = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=RuntimeError("bug"))
-
-        await strategy._run_live_or_paper_trading()
-
-        assert event_bus.publish.await_args.args[1].kind is StopKind.CRASH
-
-    @pytest.mark.asyncio
-    async def test_run_backtest_with_no_data(self, setup_strategy):
-        create_strategy, _, _, _, _, _, _, _, _ = setup_strategy
-        strategy = create_strategy(TradingMode.BACKTEST)
-        strategy._initialize_historical_data = AsyncMock(return_value=None)
-
-        await strategy.run()
-
-        assert strategy._running is False
-
     @pytest.mark.asyncio
     async def test_initialize_grid_orders_once_skips_initial_purchase_on_recovery(self, setup_strategy):
         create_strategy, _, _, grid_manager, order_manager, _, _, _, _ = setup_strategy
@@ -667,87 +324,11 @@ class TestGridTradingStrategy:
         order_manager.perform_initial_purchase.assert_not_called()
         order_manager.initialize_grid_orders.assert_called_once_with(15000)
 
-    @pytest.mark.asyncio
-    async def test_run_live_trading_stop_condition(self, setup_strategy):
-        create_strategy, _, exchange_service, _, _, _, _, _, _ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-
-        async def stop_strategy(*args, **kwargs):
-            strategy._running = False
-
-        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=stop_strategy)
-
-        await strategy.run()
-
-        assert not strategy._running
-        exchange_service.listen_to_ticker_updates.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_on_ticker_update_error_handling(self, setup_strategy):
-        create_strategy, _, exchange_service, grid_manager, _order_manager, balance_tracker, _, _, _ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-
-        grid_manager.get_trigger_price.return_value = 15000
-        balance_tracker.get_total_balance_value.side_effect = Exception("Balance calculation error")
-
-        async def simulate_ticker_update():
-            callback = exchange_service.listen_to_ticker_updates.call_args[0][1]
-            await callback(15100)
-
-        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=simulate_ticker_update)
-
-        await strategy.run()
-
-        exchange_service.listen_to_ticker_updates.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_volatility_regrid_skipped_on_non_candle_tick(self, setup_strategy):
-        """A ticker tick that does not close a candle must not evaluate the volatility regrid."""
-        create_strategy, _config, exchange_service, *_ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-        strategy._initialize_grid_orders_once = AsyncMock(return_value=True)
-        strategy._maybe_refresh_live_atr = AsyncMock(return_value=False)
-        strategy._maybe_regrid_on_volatility = AsyncMock()
-        strategy._handle_trailing_stop = AsyncMock(return_value=False)
-        strategy._handle_take_profit_stop_loss = AsyncMock(return_value=False)
-
-        async def simulate_ticker_update(*args, **kwargs):
-            callback = exchange_service.listen_to_ticker_updates.call_args[0][1]
-            await callback(15100)
-
-        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=simulate_ticker_update)
-
-        await strategy.run()
-
-        strategy._maybe_refresh_live_atr.assert_awaited_once()
-        strategy._maybe_regrid_on_volatility.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_volatility_regrid_evaluated_on_candle_close_tick(self, setup_strategy):
-        """A ticker tick that closes a candle (refresh returned True) evaluates the volatility regrid."""
-        create_strategy, _config, exchange_service, *_ = setup_strategy
-        strategy = create_strategy(TradingMode.LIVE)
-        strategy._initialize_grid_orders_once = AsyncMock(return_value=True)
-        strategy._maybe_refresh_live_atr = AsyncMock(return_value=True)
-        strategy._maybe_regrid_on_volatility = AsyncMock()
-        strategy._handle_trailing_stop = AsyncMock(return_value=False)
-        strategy._handle_take_profit_stop_loss = AsyncMock(return_value=False)
-
-        async def simulate_ticker_update(*args, **kwargs):
-            callback = exchange_service.listen_to_ticker_updates.call_args[0][1]
-            await callback(15100)
-
-        exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=simulate_ticker_update)
-
-        await strategy.run()
-
-        strategy._maybe_regrid_on_volatility.assert_awaited_once()
-
 
 class TestTrailingStopOrchestration:
     async def test_trailing_stop_with_stop_trigger_liquidates_and_stops(self, strategy_fixture):
         s = strategy_fixture
-        _use_trailing_stop(s, on_trigger=TrailingTrigger.STOP)
+        use_trailing_stop(s, on_trigger=TrailingTrigger.STOP)
         s.balance_tracker.crypto_balance = 1.0
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
         s.trailing_stop.update(close=100.0, atr=5.0)  # stop = 95
@@ -784,8 +365,8 @@ class TestTrailingStopOrchestration:
 
     async def test_trailing_stop_with_regrid_trigger_rebuilds_grid(self, strategy_fixture):
         s = strategy_fixture
-        _use_trailing_stop(s, on_trigger=TrailingTrigger.REGRID)
-        _use_dynamic_spacing(s)
+        use_trailing_stop(s, on_trigger=TrailingTrigger.REGRID)
+        use_dynamic_spacing(s)
         s.balance_tracker.crypto_balance = 1.0
         s.order_manager.regrid = _order_manager_regrid()
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -800,7 +381,7 @@ class TestTrailingStopOrchestration:
 
     async def test_no_trailing_check_without_crypto(self, strategy_fixture):
         s = strategy_fixture
-        _use_trailing_stop(s)
+        use_trailing_stop(s)
         s.balance_tracker.crypto_balance = 0
         s.balance_tracker.get_adjusted_crypto_balance.return_value = 0
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -812,7 +393,7 @@ class TestTrailingStopOrchestration:
 
     async def test_trailing_stop_fires_when_all_crypto_is_reserved(self, strategy_fixture):
         s = strategy_fixture
-        _use_trailing_stop(s, on_trigger=TrailingTrigger.STOP)
+        use_trailing_stop(s, on_trigger=TrailingTrigger.STOP)
         s.balance_tracker.crypto_balance = 0
         s.balance_tracker.get_adjusted_crypto_balance.return_value = 1.0
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -825,7 +406,7 @@ class TestTrailingStopOrchestration:
     async def test_nan_atr_does_not_trigger_restored_stop(self, strategy_fixture):
         """After a restart, a restored stop must not fire while ATR is still NaN (pre-first-candle)."""
         s = strategy_fixture
-        _use_trailing_stop(s, on_trigger=TrailingTrigger.REGRID)
+        use_trailing_stop(s, on_trigger=TrailingTrigger.REGRID)
         s.balance_tracker.crypto_balance = 1.0
         s.order_manager.regrid = AsyncMock()
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -841,7 +422,7 @@ class TestTrailingStopOrchestration:
     async def test_failed_regrid_does_not_reset_ratchet(self, strategy_fixture):
         """When the regrid fails (cancel failure), the trailing ratchet must not be reset."""
         s = strategy_fixture
-        _use_trailing_stop(s, on_trigger=TrailingTrigger.REGRID)
+        use_trailing_stop(s, on_trigger=TrailingTrigger.REGRID)
         s.balance_tracker.crypto_balance = 1.0
         s.order_manager.regrid = _order_manager_regrid(rebuilt=False)
         s.trailing_stop = TrailingStopLoss(atr_multiplier=1.0)
@@ -890,7 +471,7 @@ class TestStrategyStateExportRestore:
 
     def test_restore_sets_trailing_stop_when_enabled(self, strategy_fixture):
         s = strategy_fixture
-        _use_trailing_stop(s)
+        use_trailing_stop(s)
         s.trailing_stop = None
 
         s.restore_strategy_state({"trailing_stop": {"stop_price": 94.0, "atr_multiplier": 2.0}, "atr_grid": None})
@@ -902,7 +483,7 @@ class TestStrategyStateExportRestore:
 
     def test_restore_strategy_state_prefers_config_atr_multiplier(self, strategy_fixture):
         s = strategy_fixture
-        _use_trailing_stop(s, atr_multiplier=3.0)
+        use_trailing_stop(s, atr_multiplier=3.0)
 
         s.restore_strategy_state({"trailing_stop": {"stop_price": 90.0, "atr_multiplier": 2.0}, "atr_grid": None})
 
@@ -936,7 +517,7 @@ class TestStrategyStateExportRestore:
 
 class TestVolatilityRegrid:
     def _setup_dynamic(self, s):
-        _use_dynamic_spacing(s, regrid_threshold=0.3, cooldown_bars=5)
+        use_dynamic_spacing(s, regrid_threshold=0.3, cooldown_bars=5)
         s.grid_manager.is_initialized = True
         s.order_manager.regrid = _order_manager_regrid()
 
@@ -1022,170 +603,3 @@ class TestGridFeasibilityOrchestration:
 
         assert result is True
         strategy.order_manager.perform_initial_purchase.assert_awaited_once_with(100.0)
-
-
-class TestLiveAtrRefresh:
-    async def test_refresh_computes_atr_after_candle_close(self, strategy_fixture, valid_config):
-        s = strategy_fixture
-        s.trading_mode = TradingMode.LIVE
-        s.config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1m"}})
-        _use_trailing_stop(s, atr_period=3)
-        candles = pd.DataFrame(
-            [[pd.Timestamp("2026-01-01 00:00"), 100, 101, 99, 100, 1]] * 6,
-            columns=["timestamp", "open", "high", "low", "close", "volume"],
-        )
-        s.exchange_service.fetch_recent_ohlcv = AsyncMock(return_value=candles)
-        s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
-
-        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
-
-        assert refreshed is True  # fetched a fresh candle close
-        s.exchange_service.fetch_recent_ohlcv.assert_awaited_once()
-        assert 3 in s._live_atr
-        assert s._next_candle_close == pd.Timestamp("2026-01-01 00:02:00")
-
-    async def test_no_fetch_before_candle_close(self, strategy_fixture):
-        s = strategy_fixture
-        s.trading_mode = TradingMode.LIVE
-        _use_trailing_stop(s)
-        s.exchange_service.fetch_recent_ohlcv = AsyncMock()
-        s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
-
-        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:00:30"))
-
-        assert refreshed is False  # boundary not reached
-        s.exchange_service.fetch_recent_ohlcv.assert_not_awaited()
-
-    async def test_first_call_arms_boundary_without_fetch(self, strategy_fixture, valid_config):
-        s = strategy_fixture
-        s.trading_mode = TradingMode.LIVE
-        s.config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1m"}})
-        _use_trailing_stop(s, atr_period=3)
-        s.exchange_service.fetch_recent_ohlcv = AsyncMock()
-        s._next_candle_close = None
-
-        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:00:30"))
-
-        assert refreshed is False  # not armed yet
-        s.exchange_service.fetch_recent_ohlcv.assert_not_awaited()
-        assert s._next_candle_close is not None
-
-    async def test_no_features_returns_false(self, strategy_fixture):
-        s = strategy_fixture
-        s.trading_mode = TradingMode.LIVE
-
-        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
-
-        assert refreshed is False
-
-    async def test_fetch_failure_keeps_last_atr(self, strategy_fixture, valid_config):
-        s = strategy_fixture
-        s.trading_mode = TradingMode.LIVE
-        s.config_manager.config = bot_config_from(valid_config, {"trading_settings": {"timeframe": "1m"}})
-        _use_trailing_stop(s, atr_period=3)
-        s._live_atr[3] = 2.5
-        s.exchange_service.fetch_recent_ohlcv = AsyncMock(side_effect=DataFetchError("boom"))
-        s._next_candle_close = pd.Timestamp("2026-01-01 00:01:00")
-
-        refreshed = await s._maybe_refresh_live_atr(now=pd.Timestamp("2026-01-01 00:01:05"))
-
-        assert refreshed is False  # fetch failed
-        assert s._live_atr[3] == 2.5  # unchanged, bot keeps running
-
-    def test_timeframe_to_seconds_month(self, strategy_fixture):
-        # "1M" (month) must map, not KeyError — the config schema accepts it as a timeframe.
-        assert strategy_fixture._timeframe_to_seconds("1M") == 2_592_000
-        assert strategy_fixture._timeframe_to_seconds("1m") == 60  # minute still distinct
-
-
-class TestTickDrain:
-    @staticmethod
-    def _live_with_one_tick(strategy):
-        strategy.trading_mode = TradingMode.LIVE
-
-        async def one_tick(_pair, on_tick, _interval):
-            await on_tick(100.0)
-
-        strategy.exchange_service.listen_to_ticker_updates = AsyncMock(side_effect=one_tick)
-        return strategy
-
-    @staticmethod
-    def _block_the_tick(strategy, may_finish: asyncio.Event, events: list) -> asyncio.Event:
-        started = asyncio.Event()
-
-        async def slow_arming(*_args, **_kwargs):
-            started.set()
-            await may_finish.wait()
-            events.append("tick finished")
-            return False
-
-        strategy._initialize_grid_orders_once = AsyncMock(side_effect=slow_arming)
-        return started
-
-    async def test_the_drain_waits_for_a_ticker_update_in_flight(self, strategy_fixture):
-        s = self._live_with_one_tick(strategy_fixture)
-        may_finish = asyncio.Event()
-        events = []
-        started = self._block_the_tick(s, may_finish, events)
-        run = asyncio.create_task(s.run())
-        await asyncio.wait_for(started.wait(), timeout=1)
-
-        drain = asyncio.create_task(s.wait_for_tick_to_finish(timeout=5))
-        await asyncio.sleep(0.02)
-        assert not drain.done()
-
-        may_finish.set()
-        await asyncio.wait_for(drain, timeout=1)
-        events.append("drained")
-        await asyncio.wait_for(run, timeout=1)
-
-        assert events == ["tick finished", "drained"]
-
-    async def test_a_stop_published_inside_a_ticker_update_does_not_wait_for_it(self, strategy_fixture):
-        s = self._live_with_one_tick(strategy_fixture)
-        s.event_bus = EventBus()
-        drained = []
-
-        async def on_stop(_request):
-            await s.wait_for_tick_to_finish(timeout=30)
-            drained.append(True)
-
-        s.event_bus.subscribe(Events.STOP_BOT, on_stop)
-        s._initialize_grid_orders_once = AsyncMock(return_value=True)
-        s._maybe_refresh_live_atr = AsyncMock(return_value=False)
-        s._handle_trailing_stop = AsyncMock(return_value=False)
-        s._evaluate_tp_or_sl = AsyncMock(return_value=True)
-
-        await asyncio.wait_for(s.run(), timeout=1)
-
-        assert drained == [True]
-
-    async def test_the_drain_gives_up_after_its_timeout_with_a_warning(self, strategy_fixture, caplog):
-        s = self._live_with_one_tick(strategy_fixture)
-        may_finish = asyncio.Event()
-        started = self._block_the_tick(s, may_finish, [])
-        run = asyncio.create_task(s.run())
-        await asyncio.wait_for(started.wait(), timeout=1)
-
-        with caplog.at_level(logging.WARNING, logger="GridTradingStrategy"):
-            await asyncio.wait_for(s.wait_for_tick_to_finish(timeout=0.05), timeout=1)
-
-        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
-        assert len(warnings) == 1
-        assert "ticker update" in warnings[0].getMessage()
-        may_finish.set()
-        await asyncio.wait_for(run, timeout=1)
-
-
-async def test_a_backtest_without_candles_reports_no_metrics_and_plots_nothing(strategy_fixture, caplog):
-    strategy = strategy_fixture
-    strategy.exchange_service.fetch_ohlcv.side_effect = DataFetchError("no candles")
-
-    with pytest.raises(DataFetchError, match="no candles"):
-        await strategy.run()
-
-    assert strategy.generate_performance_report() == (None, {}, [])
-    caplog.clear()
-    strategy.plot_results()
-    assert "No backtest data to plot." in [record.getMessage() for record in caplog.records]
-    strategy.plotter.plot_results.assert_not_called()

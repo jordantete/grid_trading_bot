@@ -12,7 +12,7 @@ from grid_trading_bot.core.order_handling.execution_strategy.live_order_executio
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
 from grid_trading_bot.core.services import live_exchange_service
-from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
+from grid_trading_bot.strategies.live_grid_strategy import LiveGridStrategy
 from tests.fakes.fake_exchange import FakeExchange
 
 
@@ -37,7 +37,7 @@ def main() -> None:
     FakeExchange.calls_path = Path(sys.argv[2])
     assert hasattr(live_exchange_service, "ccxtpro")
     live_exchange_service.ccxtpro = SimpleNamespace(binance=FakeExchange)
-    GridTradingStrategy.TICKER_REFRESH_INTERVAL = 0.2
+    LiveGridStrategy.TICKER_REFRESH_INTERVAL = 0.2
     LiveOrderExecutionStrategy.LOOKUP_DELAY = 0.05
     OrderManager.LIQUIDATION_BACKOFF = (0.2,)
     if "TRACKER_POLLS_BEFORE_FAILING" in os.environ:
