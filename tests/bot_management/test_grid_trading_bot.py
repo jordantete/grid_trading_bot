@@ -77,7 +77,7 @@ class BotFixtures:
 
 class TestGridTradingBot(BotFixtures):
     @patch(
-        "grid_trading_bot.core.bot_management.grid_trading_bot.ExchangeServiceFactory.create_exchange_service",
+        "grid_trading_bot.core.bot_management.bot_assembly.ExchangeServiceFactory.create_exchange_service",
         side_effect=UnsupportedExchangeError("Unsupported Exchange"),
     )
     def test_initialization_with_unsupported_exchange_error(
@@ -97,7 +97,7 @@ class TestGridTradingBot(BotFixtures):
             logger_instance.error.assert_called_once_with("UnsupportedExchangeError: Unsupported Exchange")
 
     @patch(
-        "grid_trading_bot.core.bot_management.grid_trading_bot.ExchangeServiceFactory.create_exchange_service",
+        "grid_trading_bot.core.bot_management.bot_assembly.ExchangeServiceFactory.create_exchange_service",
         side_effect=DataFetchError("Data Fetch Error"),
     )
     def test_initialization_with_data_fetch_error(
@@ -117,7 +117,7 @@ class TestGridTradingBot(BotFixtures):
             logger_instance.error.assert_called_once_with("DataFetchError: Data Fetch Error")
 
     @patch(
-        "grid_trading_bot.core.bot_management.grid_trading_bot.ExchangeServiceFactory.create_exchange_service",
+        "grid_trading_bot.core.bot_management.bot_assembly.ExchangeServiceFactory.create_exchange_service",
         side_effect=UnsupportedTimeframeError("Unsupported Timeframe"),
     )
     def test_initialization_with_unsupported_timeframe_error(
@@ -137,7 +137,7 @@ class TestGridTradingBot(BotFixtures):
             logger_instance.error.assert_called_once_with("UnsupportedTimeframeError: Unsupported Timeframe")
 
     @patch(
-        "grid_trading_bot.core.bot_management.grid_trading_bot.ExchangeServiceFactory.create_exchange_service",
+        "grid_trading_bot.core.bot_management.bot_assembly.ExchangeServiceFactory.create_exchange_service",
         side_effect=Exception("Unexpected Error"),
     )
     def test_initialization_with_unexpected_exception(
@@ -447,7 +447,7 @@ class TestGridTradingBot(BotFixtures):
             mock_logger_error.assert_any_call("An unexpected error occurred Test Exception")
             assert bot.is_running is False
 
-    @patch("grid_trading_bot.core.bot_management.grid_trading_bot.OrderStatusTracker")
+    @patch("grid_trading_bot.core.bot_management.bot_assembly.OrderStatusTracker")
     @pytest.mark.asyncio
     async def test_stop_bot(self, mock_order_status_tracker, bot):
         bot.is_running = True
@@ -539,7 +539,7 @@ class TestStrategyStatePersistenceWiring:
 
     @pytest.fixture
     def bot(self, config_manager, notification_handler, mock_event_bus):
-        with patch("grid_trading_bot.core.bot_management.grid_trading_bot.SQLiteStateRepository") as mock_repo_cls:
+        with patch("grid_trading_bot.core.bot_management.bot_assembly.SQLiteStateRepository") as mock_repo_cls:
             mock_repo_cls.return_value = MagicMock()
             bot = GridTradingBot(
                 config_path="config.json",
@@ -565,7 +565,7 @@ class TestStrategyStatePersistenceWiring:
         config_manager.config = _live_config(
             valid_config, {"exchange": {"trading_mode": "paper_trading"}, "persistence": {"enabled": True}}
         )
-        with patch("grid_trading_bot.core.bot_management.grid_trading_bot.SQLiteStateRepository") as repo_cls:
+        with patch("grid_trading_bot.core.bot_management.bot_assembly.SQLiteStateRepository") as repo_cls:
             repo_cls.return_value = MagicMock()
             paper_bot = GridTradingBot(
                 config_path="config.json",

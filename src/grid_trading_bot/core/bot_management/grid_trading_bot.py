@@ -3,54 +3,28 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 import inspect
 import logging
-import os
 import time
 import traceback
 from typing import TYPE_CHECKING, Any
 
 from grid_trading_bot.config.config_manager import ConfigManager
 from grid_trading_bot.config.trading_mode import TradingMode
+from grid_trading_bot.core.bot_management.bot_assembly import assemble_bot
 from grid_trading_bot.core.bot_management.event_bus import EventBus, Events
 from grid_trading_bot.core.bot_management.stop_request import StopKind, StopRequest
-from grid_trading_bot.core.grid_management.grid_manager import GridManager
-from grid_trading_bot.core.order_handling.backtest_clock import BacktestClock
-from grid_trading_bot.core.order_handling.balance_source import BalanceSource
-from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot, BalanceTracker
-from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_factory import (
-    OrderExecutionStrategyFactory,
-)
-from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
-from grid_trading_bot.core.order_handling.order_book import OrderBook
-from grid_trading_bot.core.order_handling.order_manager import OrderManager
-from grid_trading_bot.core.order_handling.order_simulator import OrderSimulator
-from grid_trading_bot.core.order_handling.order_status_tracker import OrderStatusTracker
-from grid_trading_bot.core.order_handling.placement_journal import PlacementJournal
+from grid_trading_bot.core.order_handling.balance_tracker import AccountSnapshot
 from grid_trading_bot.core.order_handling.state_store import ArmingFlags
 from grid_trading_bot.core.persistence.run_files import HaltRecord, RunFiles, write_halt_marker
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
-from grid_trading_bot.core.persistence.sqlite_state_repository import SQLiteStateRepository
-from grid_trading_bot.core.persistence.state_persistence_service import StatePersistenceService
-from grid_trading_bot.core.persistence.state_recovery_service import (
-    RecoveryOutcome,
-    RecoveryResult,
-    StateRecoveryService,
-)
-from grid_trading_bot.core.reconciliation.reconciliation_service import ReconciliationService
+from grid_trading_bot.core.persistence.state_recovery_service import RecoveryOutcome, RecoveryResult
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
     UnsupportedExchangeError,
     UnsupportedTimeframeError,
 )
-from grid_trading_bot.core.services.exchange_service_factory import ExchangeServiceFactory
-from grid_trading_bot.core.validation.order_validator import OrderValidator
-from grid_trading_bot.strategies.backtest_grid_strategy import BacktestGridStrategy
-from grid_trading_bot.strategies.live_grid_strategy import LiveGridStrategy
-from grid_trading_bot.strategies.plotter import Plotter
-from grid_trading_bot.strategies.trading_performance_analyzer import TradingPerformanceAnalyzer
 
 if TYPE_CHECKING:
     from grid_trading_bot.core.domain.strategy_type import StrategyType
-    from grid_trading_bot.strategies.grid_trading_strategy import GridTradingStrategy
 
 from .notification.notification_content import NotificationType
 from .notification.notification_handler import NotificationHandler
@@ -88,153 +62,30 @@ class GridTradingBot:
             self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop_bot_event)
             self.no_plot = no_plot
             self.trading_mode: TradingMode = self.config_manager.config.exchange.trading_mode
-            base_currency: str = self.config_manager.config.pair.base_currency
-            quote_currency: str = self.config_manager.config.pair.quote_currency
-            trading_pair = f"{base_currency}/{quote_currency}"
-            self.trading_pair = trading_pair
+            pair = self.config_manager.config.pair
+            self.trading_pair = f"{pair.base_currency}/{pair.quote_currency}"
             strategy_type: StrategyType = self.config_manager.config.grid_strategy.type
             self.logger.info(
                 f"Starting Grid Trading Bot in {self.trading_mode.value} mode with strategy: {strategy_type.value}",
             )
             self.is_running = False
 
-            self.exchange_service = ExchangeServiceFactory.create_exchange_service(
+            components = assemble_bot(
                 self.config_manager,
-                self.trading_mode,
-            )
-            backtest_clock = BacktestClock()
-            order_execution_strategy = OrderExecutionStrategyFactory.create(
-                self.config_manager, self.exchange_service, backtest_clock=backtest_clock
-            )
-            grid_manager = GridManager(self.config_manager, strategy_type)
-            self.grid_manager = grid_manager
-            order_validator = OrderValidator()
-            fee_calculator = FeeCalculator(self.config_manager)
-
-            fail_fast = self.trading_mode == TradingMode.BACKTEST
-            balance_source = BalanceSource.EXCHANGE if self.trading_mode == TradingMode.LIVE else BalanceSource.VIRTUAL
-            self.balance_tracker = BalanceTracker(
-                fee_calculator=fee_calculator,
-                balance_source=balance_source,
-                base_currency=base_currency,
-                quote_currency=quote_currency,
-            )
-            order_book = OrderBook()
-            self.order_book = order_book
-            journal = PlacementJournal()
-
-            self.reconciliation_service = None
-            if self.trading_mode == TradingMode.LIVE:
-                self.reconciliation_service = ReconciliationService(
-                    order_book=order_book,
-                    balance_tracker=self.balance_tracker,
-                    exchange_service=self.exchange_service,
-                    notification_handler=self.notification_handler,
-                    event_bus=self.event_bus,
-                    trading_pair=trading_pair,
-                    base_currency=base_currency,
-                    quote_currency=quote_currency,
-                    reconciliation_interval=self.config_manager.config.execution.reconciliation_interval,
-                    balance_tolerance=self.config_manager.config.execution.reconciliation_balance_tolerance,
-                    journal=journal,
-                )
-
-            self.state_persistence_service = None
-            self.state_recovery_service = None
-            if self._is_live_or_paper() and self.config_manager.config.persistence.enabled:
-                db_path = self.config_manager.get_state_db_path()
-                os.makedirs(os.path.dirname(db_path), exist_ok=True)
-                state_repository = SQLiteStateRepository(db_path)
-                state_repository.initialize()
-
-                self.state_persistence_service = StatePersistenceService(
-                    repository=state_repository,
-                    event_bus=self.event_bus,
-                    notification_handler=self.notification_handler,
-                    order_book=order_book,
-                    grid_manager=grid_manager,
-                    balance_tracker=self.balance_tracker,
-                    config_manager=self.config_manager,
-                    trading_pair=trading_pair,
-                    strategy_type=strategy_type.value,
-                    journal=journal,
-                )
-                self.state_recovery_service = StateRecoveryService(
-                    repository=state_repository,
-                    config_manager=self.config_manager,
-                    grid_manager=grid_manager,
-                    order_book=order_book,
-                    balance_tracker=self.balance_tracker,
-                    exchange_service=self.exchange_service,
-                    order_execution_strategy=order_execution_strategy,
-                    notification_handler=self.notification_handler,
-                    trading_pair=trading_pair,
-                    balance_source=balance_source,
-                    journal=journal,
-                )
-
-            self.order_manager = OrderManager(
-                grid_manager,
-                order_validator,
-                self.balance_tracker,
-                order_book,
-                order_execution_strategy,
                 self.notification_handler,
-                fail_fast,
-                trading_pair,
-                state_store=self.state_persistence_service,
-                journal=journal,
-                config_hash=compute_config_hash(self.config_manager.config),
+                self.event_bus,
+                exchange_free_base=self._exchange_free_base,
             )
-            if self._is_live_or_paper():
-                self.order_manager.exchange_balance = self._exchange_free_base
-
-            self.order_status_tracker = OrderStatusTracker(
-                order_book=order_book,
-                order_execution_strategy=order_execution_strategy,
-                order_update_handler=self.order_manager,
-                polling_interval=self.config_manager.config.execution.order_polling_interval,
-                event_bus=self.event_bus,
-                notify=self.notification_handler.async_send_notification,
-            )
-
-            trading_performance_analyzer = TradingPerformanceAnalyzer(self.config_manager, order_book)
-            self.strategy: GridTradingStrategy
-            if self.trading_mode == TradingMode.BACKTEST:
-                order_simulator = OrderSimulator(
-                    order_book=order_book,
-                    grid_manager=grid_manager,
-                    order_update_handler=self.order_manager,
-                    slippage=self.config_manager.config.execution.backtest_slippage,
-                )
-                self.strategy = BacktestGridStrategy(
-                    self.config_manager,
-                    self.event_bus,
-                    self.exchange_service,
-                    grid_manager,
-                    self.order_manager,
-                    self.balance_tracker,
-                    trading_performance_analyzer,
-                    trading_pair,
-                    plotter=Plotter(grid_manager, order_book),
-                    order_simulator=order_simulator,
-                    backtest_clock=backtest_clock,
-                )
-            else:
-                self.strategy = LiveGridStrategy(
-                    self.config_manager,
-                    self.event_bus,
-                    self.exchange_service,
-                    grid_manager,
-                    self.order_manager,
-                    self.balance_tracker,
-                    trading_performance_analyzer,
-                    trading_pair,
-                    mode_label="live" if self.trading_mode == TradingMode.LIVE else "paper",
-                )
-
-            if self.state_persistence_service:
-                self.state_persistence_service.strategy_state_provider = self.strategy.export_strategy_state
+            self.exchange_service = components.exchange_service
+            self.grid_manager = components.grid_manager
+            self.balance_tracker = components.balance_tracker
+            self.order_book = components.order_book
+            self.reconciliation_service = components.reconciliation_service
+            self.state_persistence_service = components.state_persistence_service
+            self.state_recovery_service = components.state_recovery_service
+            self.order_manager = components.order_manager
+            self.order_status_tracker = components.order_status_tracker
+            self.strategy = components.strategy
 
         except (UnsupportedExchangeError, DataFetchError, UnsupportedTimeframeError) as e:
             self.logger.error(f"{type(e).__name__}: {e}")

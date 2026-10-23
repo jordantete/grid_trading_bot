@@ -8,6 +8,7 @@ from tests.fakes.trading_stack import stack_config
 
 from grid_trading_bot import cli
 from grid_trading_bot.config.config_manager import ConfigManager
+from grid_trading_bot.core.bot_management.bot_assembly import assemble_bot
 from grid_trading_bot.core.bot_management.event_bus import EventBus
 from grid_trading_bot.core.bot_management.grid_trading_bot import GridTradingBot
 from grid_trading_bot.core.bot_management.notification.notification_handler import NotificationHandler
@@ -27,9 +28,9 @@ def fake_exchange(tmp_path, monkeypatch):
     return state
 
 
-def _config_manager(tmp_path, mode: str) -> ConfigManager:
+def _config_manager(tmp_path, mode: str, persistence: bool = True) -> ConfigManager:
     raw = stack_config(trading_mode=mode)
-    raw["persistence"] = {"enabled": True, "db_path": str(tmp_path / "data" / "state.db")}
+    raw["persistence"] = {"enabled": persistence, "db_path": str(tmp_path / "data" / "state.db")}
     return ConfigManager.from_dict(raw)
 
 
@@ -75,3 +76,36 @@ def test_each_mode_builds_its_strategy(tmp_path, fake_exchange, mode, strategy_c
     assert type(bot.strategy) is strategy_class
     if label is not None:
         assert bot.strategy.mode_label == label
+
+
+@pytest.mark.parametrize("persistence", [True, False])
+@pytest.mark.parametrize(
+    ("mode", "strategy_class", "reconciles", "persists"),
+    [
+        ("backtest", BacktestGridStrategy, False, False),
+        ("paper_trading", LiveGridStrategy, False, True),
+        ("live", LiveGridStrategy, True, True),
+    ],
+)
+def test_assemble_bot_returns_the_components_of_the_configured_mode(
+    tmp_path, fake_exchange, mode, strategy_class, reconciles, persists, persistence
+):
+    async def exchange_free_base() -> float:
+        return 0.0
+
+    components = assemble_bot(
+        _config_manager(tmp_path, mode, persistence),
+        NotificationHandler([], enabled=False),
+        EventBus(),
+        exchange_free_base=exchange_free_base,
+    )
+
+    assert type(components.strategy) is strategy_class
+    assert (components.reconciliation_service is not None) is reconciles
+    assert (components.state_persistence_service is not None) is (persists and persistence)
+    assert (components.state_recovery_service is not None) is (persists and persistence)
+    assert components.order_manager.journal is components.journal
+    if persists:
+        assert components.order_manager.exchange_balance is exchange_free_base
+    else:
+        assert components.order_manager.exchange_balance is None
