@@ -11,6 +11,7 @@ services:
     environment:
       - EXCHANGE_API_KEY=${EXCHANGE_API_KEY:-}
       - EXCHANGE_SECRET_KEY=${EXCHANGE_SECRET_KEY:-}
+      - EXCHANGE_PASSWORD=${EXCHANGE_PASSWORD:-}
       - APPRISE_NOTIFICATION_URLS=${APPRISE_NOTIFICATION_URLS:-}
     volumes:
       - ./config:/app/config:ro
