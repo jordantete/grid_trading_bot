@@ -11,8 +11,8 @@ src/grid_trading_bot/
 ├── cli.py                              # Click CLI: run, resume; builds each bot with its controller and health check
 ├── __main__.py                         # python -m support
 ├── config/
-│   ├── config_manager.py               # Accessors over the JSON config
-│   ├── config_validator.py             # Schema and range checks
+│   ├── config_manager.py               # Loads the JSON into BotConfig
+│   ├── schema.py                       # BotConfig, every default and bound, load_config
 │   ├── exceptions.py
 │   └── trading_mode.py                 # backtest, paper_trading, live
 ├── core/

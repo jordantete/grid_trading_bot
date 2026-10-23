@@ -28,7 +28,7 @@ algo_trading/
 ├── grid_trading_bot/                    # EXISTING — the bot (library)
 │   ├── src/grid_trading_bot/
 │   │   ├── config/
-│   │   │   └── config_manager.py        # MODIFIED: add from_dict() classmethod
+│   │   │   └── config_manager.py        # MODIFIED: add from_dict() classmethod (loads through schema.load_config)
 │   │   ├── core/
 │   │   ├── strategies/
 │   │   ├── utils/
@@ -64,7 +64,7 @@ grid_sweep ──depends on──▶ grid_trading_bot
 
 `grid_sweep` imports from `grid_trading_bot`:
 - `ConfigManager` (+ new `from_dict` classmethod)
-- `ConfigValidator`
+- `load_config` and `BotConfig` (`config/schema.py`, validation and defaults)
 - `GridTradingBot`
 - `EventBus`
 - `NotificationHandler`
@@ -514,7 +514,7 @@ class SweepReporter:
 | Import | Usage in grid_sweep | Stability |
 |--------|-------------------|-----------|
 | `ConfigManager` | Create bot config from dict | Needs `from_dict()` addition |
-| `ConfigValidator` | Validate generated configs | Stable |
+| `load_config` | Validate generated configs and apply defaults | Stable |
 | `GridTradingBot` | Run individual backtests | Stable (constructor + `run()`) |
 | `EventBus` | Required by GridTradingBot constructor | Stable |
 | `NotificationHandler` | Required by GridTradingBot constructor | Stable |
@@ -529,13 +529,11 @@ Add a `from_dict` classmethod so configs can be created programmatically without
 
 
 @classmethod
-def from_dict(cls, config_dict: dict[str, Any], config_validator: ConfigValidator | None = None) -> "ConfigManager":
+def from_dict(cls, raw: dict[str, Any]) -> "ConfigManager":
     instance = cls.__new__(cls)
     instance.logger = logging.getLogger(cls.__name__)
     instance.config_file = "<dict>"
-    instance.config_validator = config_validator or ConfigValidator()
-    instance.config = config_dict
-    instance.config_validator.validate(instance.config)
+    instance.config = load_config(raw)
     return instance
 ```
 

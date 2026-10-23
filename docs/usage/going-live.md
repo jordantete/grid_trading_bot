@@ -172,6 +172,13 @@ The saved state belongs to the grid: the database name contains a hash of `grid_
 
 To start a fresh grid after a refusal, cancel the open orders on the exchange and move the database (and its `-wal` and `-shm` files) aside; to retry the recovery once the cause is fixed, relaunch the bot.
 
+### After upgrading to the config schema
+
+- The state database name contains a hash of the config, and this version computes it from the loaded config with its defaults applied, so every state-database hash changes once. An existing paper or live state is not found: the bot makes a fresh start, which the fresh-start guard refuses while orders are still open on the pair. Cancel them on the exchange, or move the old database to the new name, before starting.
+- A bot halted before the upgrade cannot trade again until `resume`: its halt marker records no hash, so the start is refused and the notification names the marker. One `resume` releases every such pre-upgrade halted config of that pair directory, so check the exchange for all of them first. With an explicit `persistence.db_path`, the old database of a bot halted before the upgrade must be moved aside by hand after the `resume`.
+- An unknown or misspelt key, and `execution.max_slippage`, now stop the bot at start (exit 78): check the config before deploying.
+- grid_sweep must be updated in the same push as the bot, because it builds bot configs with the new loader.
+
 ## 6. Monitoring
 
 ### Health checks

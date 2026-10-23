@@ -81,7 +81,7 @@ The project uses a **src layout**: all source code lives under `src/grid_trading
 
 ### Config & Utils
 
-- **`config/`** — `ConfigManager` (accessor methods for nested JSON), `ConfigValidator` (schema validation), `TradingMode` enum, custom `ConfigError` exceptions
+- **`config/`** — `schema.py` (`BotConfig` and its section dataclasses, every default and bound, `load_config`), `ConfigManager` (loads the JSON and exposes `config: BotConfig`), `TradingMode` enum, custom `ConfigError` exceptions
 - **`utils/`** — Logging setup, config name generation, performance results I/O
 
 ### Key Design Patterns
