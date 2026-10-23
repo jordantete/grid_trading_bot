@@ -425,6 +425,27 @@ class BalanceTracker:
             unrealized_pnl=float(self._ledger.unrealized_pnl(position, d_price)),
         )
 
+    def totals(self) -> tuple[Decimal, Decimal]:
+        """The fiat and the crypto held, free plus reserved."""
+        return self._balance + self._reserved_fiat, self._crypto_balance + self._reserved_crypto
+
+    def restore_balances(
+        self,
+        *,
+        fiat: Decimal,
+        crypto: Decimal,
+        reserved_fiat: Decimal,
+        reserved_crypto: Decimal,
+        total_fees: Decimal | None = None,
+    ) -> None:
+        """Sets the free and reserved balances as given, and the total fees unless `total_fees` is None."""
+        self._balance = fiat
+        self._crypto_balance = crypto
+        self._reserved_fiat = reserved_fiat
+        self._reserved_crypto = reserved_crypto
+        if total_fees is not None:
+            self._total_fees = total_fees
+
     def restore_accounting(self, avg_cost: Decimal | None, realized_pnl: Decimal, peak_value: Decimal | None) -> None:
         self._ledger = PnlLedger(avg_cost=avg_cost, realized_pnl=realized_pnl)
         self._peak_value = peak_value

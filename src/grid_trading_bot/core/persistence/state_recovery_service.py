@@ -1,6 +1,4 @@
-import copy
 from dataclasses import dataclass, field
-from decimal import Decimal
 from enum import Enum
 import json
 import logging
@@ -11,31 +9,20 @@ from grid_trading_bot.core.bot_management.notification.notification_handler impo
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_source import BalanceSource
-from grid_trading_bot.core.order_handling.balance_tracker import _QUANTIZE_EXP, BalanceTracker
+from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
 from grid_trading_bot.core.order_handling.execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
-from grid_trading_bot.core.order_handling.order import (
-    ENDED_UNFILLED_STATUSES,
-    FINAL_STATUSES,
-    Order,
-    OrderSide,
-    OrderStatus,
-    OrderType,
-)
+from grid_trading_bot.core.order_handling.order import Order, OrderType
 from grid_trading_bot.core.order_handling.order_book import OrderBook
-from grid_trading_bot.core.order_handling.placement_journal import (
-    PendingPlacement,
-    PlacementJournal,
-    PlacementPurpose,
-    adopt_order,
-    client_order_id_prefix,
-)
-from grid_trading_bot.core.services.exceptions import DataFetchError, OrderNotFoundError, OrderOutcomeUnknownError
+from grid_trading_bot.core.order_handling.placement_journal import PlacementJournal, PlacementPurpose
+from grid_trading_bot.core.services.exceptions import DataFetchError
 from grid_trading_bot.core.services.exchange_interface import ExchangeInterface
 
+from .balance_restore import BalanceRestore
+from .exchange_resolution import ExchangeResolution
 from .serializers import compute_config_hash, dict_to_order, dict_to_pending_placement
-from .state_repository_interface import SavedBalance, StateRepositoryInterface
+from .state_repository_interface import StateRepositoryInterface
 
 
 class RecoveryOutcome(Enum):
@@ -66,28 +53,6 @@ class RecoveryResult:
         return self.outcome is RecoveryOutcome.RESUMED
 
 
-@dataclass
-class _Reconciliation:
-    reconciled: int = 0
-    orphans: int = 0
-    ghosts: int = 0
-    filled_while_down: list[tuple[Order, GridLevel]] = field(default_factory=list)
-    executions: list[tuple[Order, float]] = field(default_factory=list)
-    ended_while_down: list[tuple[Order, GridLevel]] = field(default_factory=list)
-    not_replaced: list[str] = field(default_factory=list)
-    initial_purchase_found: bool = False
-    # Orders whose paired order or replacement a restored placement already is.
-    followed: set[str] = field(default_factory=set)
-
-
-def _optional_decimal(value: str | None) -> Decimal | None:
-    return None if value is None else Decimal(value)
-
-
-def _quantized(value: Decimal) -> Decimal:
-    return value.quantize(_QUANTIZE_EXP)
-
-
 class StateRecoveryService:
     def __init__(
         self,
@@ -115,6 +80,25 @@ class StateRecoveryService:
         self.trading_pair = trading_pair
         self.balance_source = balance_source
         self.journal = journal if journal is not None else PlacementJournal()
+        self.exchange_resolution = ExchangeResolution(
+            grid_manager=grid_manager,
+            order_book=order_book,
+            journal=self.journal,
+            exchange_service=exchange_service,
+            order_execution_strategy=order_execution_strategy,
+            trading_pair=trading_pair,
+            notify=notification_handler.async_send_notification,
+        )
+        self.balance_restore = BalanceRestore(
+            repository=repository,
+            order_book=order_book,
+            balance_tracker=balance_tracker,
+            exchange_service=exchange_service,
+            journal=self.journal,
+            base_currency=config_manager.config.pair.base_currency,
+            quote_currency=config_manager.config.pair.quote_currency,
+            notify=notification_handler.async_send_notification,
+        )
 
     async def attempt_recovery(self) -> RecoveryResult:
         """
@@ -170,7 +154,7 @@ class StateRecoveryService:
 
         # Step 4: Reconcile with exchange (updates statuses, completes grid states for filled orders, resolves the
         # placements already sent)
-        reconciliation = await self._reconcile_with_exchange(current_hash)
+        reconciliation = await self.exchange_resolution.reconcile(current_hash)
 
         # Step 5: Restore balance (reserved recalculated from the open orders and the pending placements)
         balance_source = await self._restore_balance(reconciliation.executions)
@@ -178,12 +162,13 @@ class StateRecoveryService:
         # Step 6: Restore cost basis, realized PnL and peak, then book the fills made while down
         if balance_source == "exchange":
             try:
-                self._restore_accounting(reconciliation.executions)
+                self.balance_restore.restore_accounting(reconciliation.executions)
             except Exception as e:
                 # Reporting-only state: losing it must not turn a good recovery into a fresh start.
                 self.logger.error(
                     f"Failed to restore or replay the cost basis and PnL; they may be incomplete: {e}", exc_info=True
                 )
+                await self.balance_restore.alert_accounting_not_restored(e)
 
         result = RecoveryResult(
             RecoveryOutcome.RESUMED,
@@ -313,315 +298,14 @@ class StateRecoveryService:
             self.logger.info(f"Restored {len(self.journal)} pending placement(s).")
         return liquidation_in_progress
 
-    # ── Step 4: Exchange Reconciliation ──────────────────────────────────
-
-    async def _reconcile_with_exchange(self, config_hash: str) -> _Reconciliation:
-        reconciliation = _Reconciliation(
-            followed={entry.source_order_id for entry in self.journal.entries() if entry.source_order_id is not None}
-        )
-        open_orders = self.order_book.get_open_orders()
-
-        if not open_orders and not len(self.journal):
-            self.logger.info("No open orders to reconcile.")
-            await self._check_orphans(config_hash, reconciliation)
-            return reconciliation
-
-        for order in open_orders:
-            try:
-                exchange_order = await self.order_execution_strategy.get_order(order.identifier, self.trading_pair)
-            except OrderNotFoundError:
-                exchange_order = None
-
-            if exchange_order is None:
-                self.logger.warning(f"Ghost order {order.identifier} not found on exchange. Marking as canceled.")
-                grid_level = self.order_book.get_grid_level_for_order(order)
-                order.status = OrderStatus.CANCELED
-                self.order_book.remove_open_order(order)
-                self._release_grid_level(order)
-                reconciliation.executions.append((order, 0.0))
-                reconciliation.ghosts += 1
-                reconciliation.reconciled += 1
-                level_text = f" at level {grid_level.price}" if grid_level is not None else ""
-                reconciliation.not_replaced.append(
-                    f"ghost {order.identifier} ({order.side.value}{level_text}, fate unknown)"
-                )
-                continue
-
-            self._apply_exchange_view(order, exchange_order, reconciliation)
-
-        for entry in self.journal.entries():
-            if not entry.sent:
-                continue
-            exchange_order = await self.order_execution_strategy.find_order(entry.client_order_id, self.trading_pair)
-            if entry.order_type is OrderType.MARKET:
-                self._resolve_market_entry(entry, exchange_order, reconciliation)
-            else:
-                self._resolve_limit_entry(entry, exchange_order, reconciliation)
-
-        await self._check_orphans(config_hash, reconciliation)
-        return reconciliation
-
-    def _note_ended(self, order: Order, reconciliation: _Reconciliation) -> None:
-        """
-        Queues an order cancelled or expired while down for its re-placement, unless a restored placement already
-        re-places it; a rejected one is only reported.
-        """
-        if order.identifier in reconciliation.followed:
-            self.logger.info(f"Order {order.identifier} is already re-placed by a pending placement.")
-            return
-        grid_level = self.order_book.get_grid_level_for_order(order)
-        if order.status is OrderStatus.REJECTED or grid_level is None:
-            level_text = f" at level {grid_level.price}" if grid_level is not None else ""
-            reconciliation.not_replaced.append(
-                f"{order.status.value} {order.identifier} ({order.side.value}{level_text})"
-            )
-            return
-        reconciliation.ended_while_down.append((order, grid_level))
-
-    def _apply_exchange_view(self, order: Order, view: Order, reconciliation: _Reconciliation) -> None:
-        """
-        Takes the exchange's view of an order the book holds, a saved one or an adopted placement: books what it
-        filled while the bot was down, completes the level of a filled order and frees the level of an ended one.
-        """
-        newly_filled = order.apply_update(view)
-        if view.status == OrderStatus.CLOSED:
-            self.logger.info(f"Order {order.identifier} filled on exchange while bot was down.")
-            self.order_book.remove_open_order(order)
-            grid_level = self.order_book.get_grid_level_for_order(order)
-            if grid_level:
-                self.grid_manager.complete_order(grid_level, order.side, self._level_busy(grid_level))
-                if order.identifier in reconciliation.followed:
-                    self.logger.info(f"Order {order.identifier} is already paired by a pending placement.")
-                else:
-                    reconciliation.filled_while_down.append((order, grid_level))
-            reconciliation.executions.append((order, newly_filled))
-            reconciliation.reconciled += 1
-        elif view.status in ENDED_UNFILLED_STATUSES:
-            self.logger.info(f"Order {order.identifier} ended as {view.status.value} while bot was down.")
-            self.order_book.remove_open_order(order)
-            self._release_grid_level(order)
-            self._note_ended(order, reconciliation)
-            reconciliation.executions.append((order, newly_filled))
-            reconciliation.reconciled += 1
-        elif newly_filled:
-            self.logger.info(f"Order {order.identifier} partly filled while bot was down: {order.filled}.")
-            reconciliation.executions.append((order, newly_filled))
-
-    def _resolve_limit_entry(
-        self, entry: PendingPlacement, exchange_order: Order | None, reconciliation: _Reconciliation
-    ) -> None:
-        """Adopts a sent placement the exchange knows, then settles it like a saved order; resends one it does not."""
-        if exchange_order is None:
-            entry.sent = False
-            self.logger.info(f"Pending placement {entry.client_order_id} never reached the exchange; it is sent again.")
-            return
-        view = copy.copy(exchange_order)
-        adopt_order(entry, exchange_order, self.grid_manager, self.order_book)
-        self.journal.remove(entry.client_order_id)
-        self.logger.info(f"Pending placement {entry.client_order_id} found on the exchange; adopted.")
-        if view.status == OrderStatus.OPEN:
-            reconciliation.reconciled += 1
-        self._apply_exchange_view(exchange_order, view, reconciliation)
-
-    def _resolve_market_entry(
-        self, entry: PendingPlacement, exchange_order: Order | None, reconciliation: _Reconciliation
-    ) -> None:
-        """
-        Books, once, a market placement the exchange executed; one it never received or that ended without a fill is
-        dropped. Raises OrderOutcomeUnknownError while the exchange has not settled the order.
-        """
-        if exchange_order is not None and (
-            exchange_order.status is OrderStatus.OPEN
-            or (not exchange_order.filled and exchange_order.status not in FINAL_STATUSES)
-        ):
-            raise OrderOutcomeUnknownError(
-                f"Pending {entry.purpose.value} {entry.client_order_id} is {exchange_order.status.value} on the "
-                "exchange; its outcome is not final yet."
-            )
-        self.journal.remove(entry.client_order_id)
-        if exchange_order is None or not exchange_order.filled:
-            self.logger.info(f"Pending {entry.purpose.value} {entry.client_order_id} executed nothing; dropped.")
-            return
-        self.logger.info(f"Pending {entry.purpose.value} {entry.client_order_id} executed while bot was down.")
-        # What a market order did not fill was cancelled, so what it filled is final.
-        exchange_order.status = OrderStatus.CLOSED
-        exchange_order.average = exchange_order.average or exchange_order.price or entry.price
-        self.order_book.add_order(exchange_order)
-        reconciliation.executions.append((exchange_order, exchange_order.filled))
-        reconciliation.reconciled += 1
-        if entry.purpose is PlacementPurpose.INITIAL_PURCHASE:
-            reconciliation.initial_purchase_found = True
-
-    async def _check_orphans(self, config_hash: str, reconciliation: _Reconciliation) -> None:
-        """Counts the open exchange orders no saved state covers, and alerts about those this bot placed."""
-        try:
-            exchange_open_orders = await self.exchange_service.fetch_open_orders(self.trading_pair)
-        except Exception as e:
-            self.logger.warning(f"Failed to fetch exchange open orders for orphan check: {e}")
-            return
-        own_prefix = client_order_id_prefix(config_hash)
-        local_ids = {o.identifier for o in self.order_book.get_open_orders()}
-        journal_ids = {entry.client_order_id for entry in self.journal.entries()}
-        own = []
-        for remote in exchange_open_orders:
-            if remote.get("id") in local_ids or remote.get("clientOrderId") in journal_ids:
-                continue
-            reconciliation.orphans += 1
-            if str(remote.get("clientOrderId") or "").startswith(own_prefix):
-                own.append(remote)
-                self.logger.warning(
-                    f"Orphan of this bot on exchange: {remote.get('id')} "
-                    f"(side={remote.get('side')}, price={remote.get('price')}). Not auto-adopting."
-                )
-            else:
-                self.logger.warning(
-                    f"Orphan order on exchange: {remote.get('id')} "
-                    f"(side={remote.get('side')}, price={remote.get('price')}). "
-                    f"Not auto-adopting."
-                )
-        if not own:
-            return
-        listed = ", ".join(f"{o.get('id')} ({o.get('side')} at {o.get('price')})" for o in own)
-        try:
-            await self.notification_handler.async_send_notification(
-                NotificationType.ERROR_OCCURRED,
-                error_details=(
-                    f"{len(own)} order(s) placed by this bot are open on the exchange but in no saved state: "
-                    f"{listed}. They are not adopted: cancel them on the exchange, or leave them if you meant to."
-                ),
-            )
-        except Exception as e:
-            self.logger.warning(f"Failed to send the alert about this bot's orphan orders ({listed}): {e}")
-
     # ── Step 5: Balance Restoration ──────────────────────────────────────
-
-    def _level_busy(self, grid_level: GridLevel) -> bool:
-        return self.order_book.has_open_orders_at(grid_level) or bool(self.journal.pending_at(grid_level.price))
-
-    def _release_grid_level(self, order: Order) -> None:
-        """Frees the grid level of a cancelled order unless another open order or pending placement still sits on it."""
-        grid_level = self.order_book.get_grid_level_for_order(order)
-        if grid_level:
-            self.grid_manager.rollback_order_placement(grid_level, order.side, self._level_busy(grid_level))
-
-    @staticmethod
-    def _reservations(held: list[tuple[OrderSide, float, float]]) -> tuple[Decimal, Decimal]:
-        """
-        What `held` ((side, quantity, price)) needs in reserve: (fiat, crypto). Each amount is taken at the tracker's
-        precision, the way the release that later frees it takes it.
-        """
-        fiat = sum(
-            (_quantized(Decimal(str(quantity * price))) for side, quantity, price in held if side == OrderSide.BUY),
-            Decimal("0"),
-        )
-        crypto = sum(
-            (_quantized(Decimal(str(quantity))) for side, quantity, _ in held if side == OrderSide.SELL),
-            Decimal("0"),
-        )
-        return fiat, crypto
-
-    def _entry_reservations(self) -> tuple[Decimal, Decimal]:
-        """What the pending limit placements hold in reserve: (fiat, crypto)."""
-        return self._reservations([(e.side, e.quantity, e.limit_price) for e in self.journal.limit_entries()])
-
-    def _needed_reservations(self) -> tuple[Decimal, Decimal]:
-        """What the open orders and the pending limit placements need in reserve: (fiat, crypto)."""
-        held = [(o.side, o.remaining, o.price) for o in self.order_book.get_open_orders()]
-        held += [(e.side, e.quantity, e.limit_price) for e in self.journal.limit_entries()]
-        return self._reservations(held)
-
-    def _resplit_reservations(self) -> None:
-        """Reserves exactly what the open orders and the pending placements need, keeping the restored totals."""
-        tracker = self.balance_tracker
-        fiat_total = tracker._balance + tracker._reserved_fiat
-        crypto_total = tracker._crypto_balance + tracker._reserved_crypto
-        tracker._reserved_fiat, tracker._reserved_crypto = self._needed_reservations()
-        tracker._balance = fiat_total - tracker._reserved_fiat
-        tracker._crypto_balance = crypto_total - tracker._reserved_crypto
 
     async def _restore_balance(self, executions: list[tuple[Order, float]]) -> str:
         if self.balance_source is BalanceSource.VIRTUAL:
-            await self._restore_balance_from_db(executions)
+            await self.balance_restore.restore_from_database(executions)
             return "db"
-        await self._restore_balance_from_exchange()
+        await self.balance_restore.restore_from_exchange()
         return "exchange"
-
-    async def _restore_balance_from_db(self, executions: list[tuple[Order, float]]) -> None:
-        """
-        A virtual balance is not the exchange account's: it resumes from the database,
-        then books every execution seen at restart like a live fill.
-        """
-        saved_balance = self.repository.load_balance_state()
-        if saved_balance is None:
-            raise ValueError("The database holds a bot state without its balance state.")
-        tracker = self.balance_tracker
-        tracker._balance = Decimal(saved_balance["fiat_balance"])
-        tracker._crypto_balance = Decimal(saved_balance["crypto_balance"])
-        tracker._reserved_fiat = Decimal(saved_balance["reserved_fiat"])
-        tracker._reserved_crypto = Decimal(saved_balance["reserved_crypto"])
-        tracker._total_fees = Decimal(saved_balance["total_fees"])
-        try:
-            self._restore_saved_accounting(saved_balance)
-        except Exception as e:
-            self.logger.error(f"Failed to restore cost basis and PnL, starting them over: {e}", exc_info=True)
-        # A market order reserved nothing, so it is booked like the purchase or the liquidation it was part of.
-        for order, quantity in executions:
-            if order.order_type is not OrderType.MARKET:
-                await tracker.record_execution(order, quantity)
-            elif order.side is OrderSide.BUY:
-                await tracker.update_after_initial_purchase(order)
-            else:
-                await tracker.update_after_liquidation(order)
-        # A placement written after the last full save is in the journal but not in the saved reservations.
-        self._resplit_reservations()
-        self.logger.info(f"Balance restored from the database with {len(executions)} execution(s) booked.")
-
-    async def _restore_balance_from_exchange(self) -> None:
-        saved_balance = self.repository.load_balance_state()
-
-        exchange_balance = await self.exchange_service.get_balance()
-        base = self.config_manager.config.pair.base_currency
-        quote = self.config_manager.config.pair.quote_currency
-        exchange_fiat = Decimal(str(exchange_balance.get("free", {}).get(quote, 0)))
-        exchange_crypto = Decimal(str(exchange_balance.get("free", {}).get(base, 0)))
-
-        # Exchange "free" excludes the funds of its open orders but still holds those of the pending placements,
-        # which the bot reserves.
-        reserved_fiat, reserved_crypto = self._needed_reservations()
-        entry_fiat, entry_crypto = self._entry_reservations()
-        self.balance_tracker._balance = exchange_fiat - entry_fiat
-        self.balance_tracker._crypto_balance = exchange_crypto - entry_crypto
-        self.balance_tracker._reserved_fiat = reserved_fiat
-        self.balance_tracker._reserved_crypto = reserved_crypto
-
-        # Total fees from DB (exchange doesn't track cumulative fees)
-        if saved_balance:
-            self.balance_tracker._total_fees = Decimal(saved_balance["total_fees"])
-
-        self.logger.info(
-            f"Balance restored from exchange: "
-            f"fiat={self.balance_tracker.balance}, "
-            f"crypto={self.balance_tracker.crypto_balance}, "
-            f"reserved_fiat={self.balance_tracker.reserved_fiat}, "
-            f"reserved_crypto={self.balance_tracker.reserved_crypto}"
-        )
-
-    def _restore_saved_accounting(self, saved_balance: SavedBalance) -> None:
-        self.balance_tracker.restore_accounting(
-            avg_cost=_optional_decimal(saved_balance.get("avg_cost")),
-            realized_pnl=Decimal(saved_balance.get("realized_pnl") or "0"),
-            peak_value=_optional_decimal(saved_balance.get("peak_value")),
-        )
-
-    def _restore_accounting(self, executions: list[tuple[Order, float]]) -> None:
-        saved_balance = self.repository.load_balance_state()
-        if not saved_balance:
-            return
-
-        self._restore_saved_accounting(saved_balance)
-        if executions:
-            starting_position = Decimal(saved_balance["crypto_balance"]) + Decimal(saved_balance["reserved_crypto"])
-            self.balance_tracker.replay_fills_on_cost_basis(starting_position, executions)
 
     # ── Notification ─────────────────────────────────────────────────────
 

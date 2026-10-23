@@ -791,6 +791,37 @@ class TestRecoveryAccounting:
         assert float(bt._ledger.realized_pnl) == pytest.approx(10.0 - 0.11)
         assert bt.total_fees == pytest.approx(0.11)
 
+    def test_restore_balances_sets_free_and_reserved_exactly(self, balance_tracker):
+        bt = balance_tracker
+
+        bt.restore_balances(
+            fiat=Decimal("1234567890.123456789"),
+            crypto=Decimal("0.1"),
+            reserved_fiat=Decimal("0.000000001"),
+            reserved_crypto=Decimal("0.2"),
+            total_fees=Decimal("0.3"),
+        )
+
+        assert bt.totals() == (Decimal("1234567890.123456790"), Decimal("0.3"))
+        assert (bt.crypto_balance, bt.reserved_crypto, bt.total_fees) == (0.1, 0.2, 0.3)
+
+    def test_restore_balances_keeps_fees_when_not_given(self, balance_tracker):
+        bt = balance_tracker
+        bt.restore_balances(
+            fiat=Decimal("5"),
+            crypto=Decimal("1"),
+            reserved_fiat=Decimal("0"),
+            reserved_crypto=Decimal("0"),
+            total_fees=Decimal("3.5"),
+        )
+
+        bt.restore_balances(
+            fiat=Decimal("4"), crypto=Decimal("2"), reserved_fiat=Decimal("1"), reserved_crypto=Decimal("0")
+        )
+
+        assert bt.total_fees == 3.5
+        assert (bt.balance, bt.crypto_balance, bt.reserved_fiat) == (4.0, 2.0, 1.0)
+
 
 class TestFillAccountingFixes:
     async def test_a_sell_beyond_its_reservation_takes_the_excess_from_the_free_crypto(self, balance_tracker):

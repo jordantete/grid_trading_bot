@@ -7,6 +7,7 @@ import pytest
 from tests.fakes.trading_stack import ARMING_PRICE, build_stack, reserved_matches_open_orders
 
 from grid_trading_bot.core.bot_management.event_bus import EventBus
+from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.placement_journal import (
@@ -258,6 +259,23 @@ class TestPaperRecoveryBalances:
         assert after.balances.get_adjusted_crypto_balance() == pytest.approx(
             crypto_total + (filled.amount + partial.amount) * (1 - FEE)
         )
+
+    async def test_a_paper_recovery_whose_saved_accounting_fails_resumes_and_alerts(self, repository, monkeypatch):
+        before = await _armed_and_saved(repository, trading_mode="paper_trading")
+        saved = repository.load_balance_state()
+        monkeypatch.setattr(repository, "load_balance_state", lambda: {**saved, "avg_cost": "not a number"})
+
+        after, result, _ = await _restarted(repository, before, {"free": {}}, "paper_trading")
+
+        assert result.outcome is RecoveryOutcome.RESUMED
+        assert after.balances.get_adjusted_fiat_balance() == pytest.approx(before.balances.get_adjusted_fiat_balance())
+        alerts = [
+            call.kwargs["error"]
+            for call in after.notifications.async_send_notification.await_args_list
+            if call.args[0] is NotificationType.ACCOUNTING_NOT_RESTORED
+        ]
+        assert len(alerts) == 1
+        assert alerts[0].startswith("InvalidOperation")
 
 
 class TestJournalRecovery:

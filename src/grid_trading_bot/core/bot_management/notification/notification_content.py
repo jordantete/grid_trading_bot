@@ -57,6 +57,13 @@ class NotificationType(Enum):
         title="State Recovery Complete",
         message="Bot recovered from previous state:\n{recovery_details}",
     )
+    ACCOUNTING_NOT_RESTORED = NotificationContent(
+        title="Cost basis and PnL not restored",
+        message=(
+            "Restoring the cost basis and PnL failed during recovery: {error}. "
+            "Trading resumed; realized and unrealized PnL may be wrong until the next fresh start."
+        ),
+    )
     CHECKPOINT_FAILED = NotificationContent(
         title="Checkpoint Failed",
         message=(

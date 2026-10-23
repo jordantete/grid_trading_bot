@@ -10,6 +10,8 @@ from grid_trading_bot.core.domain.strategy_type import StrategyType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState, GridLevel
 from grid_trading_bot.core.grid_management.grid_manager import GridManager
 from grid_trading_bot.core.order_handling.balance_source import BalanceSource
+from grid_trading_bot.core.order_handling.balance_tracker import BalanceTracker
+from grid_trading_bot.core.order_handling.fee_calculator import FeeCalculator
 from grid_trading_bot.core.order_handling.order import Order, OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.placement_journal import new_client_order_id
 from grid_trading_bot.core.persistence.serializers import compute_config_hash
@@ -144,11 +146,6 @@ def mock_order_book():
 @pytest.fixture
 def mock_balance_tracker():
     bt = MagicMock()
-    bt._balance = Decimal("0")
-    bt._crypto_balance = Decimal("0")
-    bt._total_fees = Decimal("0")
-    bt._reserved_fiat = Decimal("0")
-    bt._reserved_crypto = Decimal("0")
     bt.release_reserved_fiat = AsyncMock()
     bt.release_reserved_crypto = AsyncMock()
     return bt
@@ -201,6 +198,28 @@ def service(
     )
 
 
+@pytest.fixture
+def balance_tracker(config_manager):
+    return BalanceTracker(FeeCalculator(config_manager), BalanceSource.EXCHANGE, "ETH", "USDT")
+
+
+@pytest.fixture
+def service_with_tracker(service, balance_tracker):
+    """The `service` fixture's collaborators around a real tracker, for tests that read the restored balances."""
+    return StateRecoveryService(
+        repository=service.repository,
+        config_manager=service.config_manager,
+        grid_manager=service.grid_manager,
+        order_book=service.order_book,
+        balance_tracker=balance_tracker,
+        exchange_service=service.exchange_service,
+        order_execution_strategy=service.order_execution_strategy,
+        notification_handler=service.notification_handler,
+        trading_pair=service.trading_pair,
+        balance_source=service.balance_source,
+    )
+
+
 def _set_valid_bot_state(mock_repository, config_manager, **overrides):
     """Configure the repository to return a bot_state whose config hash matches the current config."""
     current_hash = compute_config_hash(config_manager.config)
@@ -211,6 +230,30 @@ def _set_valid_bot_state(mock_repository, config_manager, **overrides):
     }
     bot_state.update(overrides)
     mock_repository.load_bot_state.return_value = bot_state
+
+
+def _one_fill_while_down(service, mock_repository, config_manager, mock_order_book, mock_grid_manager) -> Order:
+    """Arranges a saved buy at 2900 that the exchange filled while the bot was down; returns the local order."""
+    _set_valid_bot_state(mock_repository, config_manager)
+    mock_repository.load_balance_state.return_value = _make_saved_balance(crypto="2.0", reserved_crypto="0.5")
+    gl = GridLevel(2900.0, GridCycleState.WAITING_FOR_BUY_FILL)
+    mock_grid_manager.grid_levels = {2900.0: gl}
+    local_order = _make_exchange_order(identifier="fill-1", side=OrderSide.BUY, price=2900.0)
+    mock_order_book.get_open_orders.return_value = [local_order]
+    mock_order_book.get_grid_level_for_order.return_value = gl
+    exchange_order = _make_exchange_order(
+        identifier="fill-1",
+        status=OrderStatus.CLOSED,
+        side=OrderSide.BUY,
+        price=2900.0,
+        filled=1.0,
+        remaining=0.0,
+        average=2899.0,
+        cost=2899.0,
+    )
+    exchange_order.last_trade_timestamp = 1700000500
+    service.order_execution_strategy.get_order = AsyncMock(return_value=exchange_order)
+    return local_order
 
 
 # ── Tests ────────────────────────────────────────────────────────────────
@@ -536,7 +579,7 @@ class TestStateRecoveryService:
         mock_exchange_service.fetch_open_orders = AsyncMock(
             return_value=[{"id": "own-3", "clientOrderId": own_client_id, "side": "sell", "price": 3000.0}]
         )
-        mock_notification_handler.async_send_notification = AsyncMock(side_effect=[RuntimeError("smtp down"), None])
+        mock_notification_handler.async_send_notification.side_effect = [RuntimeError("smtp down"), None]
 
         result = await service.attempt_recovery()
 
@@ -688,10 +731,10 @@ class TestStateRecoveryService:
     # 8. Balance restored from exchange with recalculated reserved
     async def test_balance_restored_from_exchange(
         self,
-        service,
+        service_with_tracker,
         mock_repository,
         config_manager,
-        mock_balance_tracker,
+        balance_tracker,
         mock_exchange_service,
         mock_order_book,
     ):
@@ -713,21 +756,20 @@ class TestStateRecoveryService:
         # get_open_orders called during balance restoration (after reconciliation)
         mock_order_book.get_open_orders.return_value = [open_buy]
 
-        result = await service.attempt_recovery()
+        result = await service_with_tracker.attempt_recovery()
 
         assert result.recovered is True
         assert result.balance_source == "exchange"
 
         # Balance should use exchange free directly (not exchange_free - reserved)
-        assert mock_balance_tracker._balance == Decimal("6000")
-        assert mock_balance_tracker._crypto_balance == Decimal("3.0")
+        assert (balance_tracker.balance, balance_tracker.crypto_balance) == (6000.0, 3.0)
 
         # Reserved recalculated from open orders: 2950 * 1.0 = 2950
-        assert mock_balance_tracker._reserved_fiat == Decimal("2950.0")
-        assert mock_balance_tracker._reserved_crypto == Decimal("0")
+        assert (balance_tracker.reserved_fiat, balance_tracker.reserved_crypto) == (2950.0, 0.0)
+        assert balance_tracker.totals() == (Decimal("8950"), Decimal("3.0"))
 
         # Fees from DB
-        assert mock_balance_tracker._total_fees == Decimal("15")
+        assert balance_tracker.total_fees == 15.0
 
     async def test_an_unreadable_balance_defers_the_recovery(
         self, service, mock_repository, config_manager, mock_exchange_service
@@ -829,10 +871,10 @@ class TestStateRecoveryService:
     # 13. Balance recalculated from open orders (not stale DB values)
     async def test_balance_reserved_not_from_stale_db(
         self,
-        service,
+        service_with_tracker,
         mock_repository,
         config_manager,
-        mock_balance_tracker,
+        balance_tracker,
         mock_exchange_service,
         mock_order_book,
         mock_grid_manager,
@@ -856,15 +898,15 @@ class TestStateRecoveryService:
         )
         mock_order_book.get_open_orders.return_value = [still_open_order]
 
-        result = await service.attempt_recovery()
+        result = await service_with_tracker.attempt_recovery()
 
         assert result.recovered is True
         assert result.balance_source == "exchange"
 
         # Reserved should be recalculated: 2900 * 1.0 = 2900 (from the one open order)
         # NOT 1000 from the stale DB
-        assert mock_balance_tracker._reserved_fiat == Decimal("2900.0")
-        assert mock_balance_tracker._balance == Decimal("4500")
+        assert balance_tracker.reserved_fiat == 2900.0
+        assert balance_tracker.balance == 4500.0
 
     # 14. Multiple orders filled while down → all collected
     async def test_multiple_orders_filled_while_down(
@@ -1103,30 +1145,35 @@ class TestStateRecoveryService:
         mock_grid_manager,
         mock_balance_tracker,
     ):
-        _set_valid_bot_state(mock_repository, config_manager)
-        mock_repository.load_balance_state.return_value = _make_saved_balance(crypto="2.0", reserved_crypto="0.5")
-        gl = GridLevel(2900.0, GridCycleState.WAITING_FOR_BUY_FILL)
-        mock_grid_manager.grid_levels = {2900.0: gl}
-        local_order = _make_exchange_order(identifier="fill-1", side=OrderSide.BUY, price=2900.0)
-        mock_order_book.get_open_orders.return_value = [local_order]
-        mock_order_book.get_grid_level_for_order.return_value = gl
-        exchange_order = _make_exchange_order(
-            identifier="fill-1",
-            status=OrderStatus.CLOSED,
-            side=OrderSide.BUY,
-            price=2900.0,
-            filled=1.0,
-            remaining=0.0,
-            average=2899.0,
-            cost=2899.0,
-        )
-        exchange_order.last_trade_timestamp = 1700000500
-        service.order_execution_strategy.get_order = AsyncMock(return_value=exchange_order)
+        local_order = _one_fill_while_down(service, mock_repository, config_manager, mock_order_book, mock_grid_manager)
 
         await service.attempt_recovery()
 
         assert local_order.last_trade_timestamp == 1700000500
         mock_balance_tracker.replay_fills_on_cost_basis.assert_called_once_with(Decimal("2.5"), [(local_order, 1.0)])
+
+    async def test_a_live_recovery_whose_cost_basis_replay_fails_resumes_and_alerts(
+        self,
+        service,
+        mock_repository,
+        config_manager,
+        mock_order_book,
+        mock_grid_manager,
+        mock_balance_tracker,
+        mock_notification_handler,
+    ):
+        _one_fill_while_down(service, mock_repository, config_manager, mock_order_book, mock_grid_manager)
+        mock_balance_tracker.replay_fills_on_cost_basis.side_effect = ValueError("fill without a price")
+
+        result = await service.attempt_recovery()
+
+        assert result.outcome is RecoveryOutcome.RESUMED
+        alerts = [
+            call.kwargs["error"]
+            for call in mock_notification_handler.async_send_notification.await_args_list
+            if call.args[0] is NotificationType.ACCOUNTING_NOT_RESTORED
+        ]
+        assert alerts == ["ValueError: fill without a price"]
 
     async def test_a_paper_bot_state_without_its_balance_state_refuses_and_says_so(
         self, service, mock_repository, config_manager, valid_config
