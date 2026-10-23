@@ -751,3 +751,22 @@ class TestMalformedValues:
         valid_config[section][key] = 10**400
 
         assert _refused(valid_config).invalid_fields == [f"{section}.{key}"]
+
+    def test_an_empty_range_is_missing_both_bounds(self, valid_config):
+        valid_config["grid_strategy"]["range"] = {}
+
+        assert _refused(valid_config).missing_fields == ["grid_strategy.range.top", "grid_strategy.range.bottom"]
+
+    @pytest.mark.parametrize(
+        ("section", "key"), [("grid_strategy", "dynamic_spacing"), ("risk_management", "trailing_stop_loss")]
+    )
+    def test_an_empty_optional_section_is_missing_its_flag(self, valid_config, section, key):
+        valid_config[section][key] = {}
+
+        assert _refused(valid_config).missing_fields == [f"{section}.{key}.enabled"]
+
+    @pytest.mark.parametrize(("key", "value"), [("post_only", None), ("name", 3)])
+    def test_a_wrongly_typed_exchange_value_is_refused(self, valid_config, key, value):
+        valid_config["exchange"][key] = value
+
+        assert _refused(valid_config).invalid_fields == [f"exchange.{key}"]

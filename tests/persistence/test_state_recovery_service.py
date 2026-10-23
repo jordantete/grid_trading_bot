@@ -203,21 +203,27 @@ def balance_tracker(config_manager):
     return BalanceTracker(FeeCalculator(config_manager), BalanceSource.EXCHANGE, "ETH", "USDT")
 
 
+def _rebuilt(service: StateRecoveryService, **collaborators) -> StateRecoveryService:
+    """`service` rebuilt with the given collaborators, passed at construction so every part sees them."""
+    params = {
+        "repository": service.repository,
+        "config_manager": service.config_manager,
+        "grid_manager": service.grid_manager,
+        "order_book": service.order_book,
+        "balance_tracker": service.balance_tracker,
+        "exchange_service": service.exchange_service,
+        "order_execution_strategy": service.order_execution_strategy,
+        "notification_handler": service.notification_handler,
+        "trading_pair": service.trading_pair,
+        "balance_source": service.balance_source,
+    }
+    return StateRecoveryService(**{**params, **collaborators})
+
+
 @pytest.fixture
 def service_with_tracker(service, balance_tracker):
     """The `service` fixture's collaborators around a real tracker, for tests that read the restored balances."""
-    return StateRecoveryService(
-        repository=service.repository,
-        config_manager=service.config_manager,
-        grid_manager=service.grid_manager,
-        order_book=service.order_book,
-        balance_tracker=balance_tracker,
-        exchange_service=service.exchange_service,
-        order_execution_strategy=service.order_execution_strategy,
-        notification_handler=service.notification_handler,
-        trading_pair=service.trading_pair,
-        balance_source=service.balance_source,
-    )
+    return _rebuilt(service, balance_tracker=balance_tracker)
 
 
 def _set_valid_bot_state(mock_repository, config_manager, **overrides):
@@ -1069,7 +1075,7 @@ class TestStateRecoveryService:
         Recovery must apply that geometry before matching persisted levels by price, so the
         level states restore onto the runtime grid rather than the config-derived one."""
         real_gm = _make_real_grid_manager(valid_config)
-        service.grid_manager = real_gm
+        service = _rebuilt(service, grid_manager=real_gm)
 
         regridded = [96.0, 98.0, 100.0, 102.0, 104.0]
         strategy_state = {
@@ -1116,7 +1122,7 @@ class TestStateRecoveryService:
         real_gm = _make_real_grid_manager(valid_config)
         real_gm.initialize_grids_and_levels()
         original_keys = set(real_gm.grid_levels.keys())
-        service.grid_manager = real_gm
+        service = _rebuilt(service, grid_manager=real_gm)
 
         strategy_state = {"trailing_stop": None, "atr_grid": 2.0}
         _set_valid_bot_state(mock_repository, config_manager, strategy_state=json.dumps(strategy_state))

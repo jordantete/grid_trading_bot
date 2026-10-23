@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import time
-from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, Mock, PropertyMock, patch
 
 import pytest
 from tests.fakes.config import bot_config_from, deep_merge
@@ -157,14 +157,15 @@ class TestGridTradingBot(BotFixtures):
             logger_instance.error.assert_any_call("An unexpected error occurred.")
             logger_instance.error.assert_any_call(ANY)
 
-    def test_initialization_with_missing_config(self, notification_handler, mock_event_bus):
+    def test_an_error_while_reading_the_config_is_logged_and_raised(self, notification_handler, mock_event_bus):
         config_manager = Mock(spec=ConfigManager)
+        type(config_manager).config = PropertyMock(side_effect=RuntimeError("config unreadable"))
 
         with patch("grid_trading_bot.core.bot_management.grid_trading_bot.logging.getLogger") as mock_logger:
             logger_instance = Mock()
             mock_logger.return_value = logger_instance
 
-            with pytest.raises(AttributeError, match="no attribute 'config'"):
+            with pytest.raises(RuntimeError, match=r"^config unreadable$"):
                 GridTradingBot("config.json", config_manager, notification_handler, mock_event_bus)
 
             logger_instance.error.assert_any_call("An unexpected error occurred.")

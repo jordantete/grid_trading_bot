@@ -61,7 +61,7 @@ def _documented_rows() -> list[Row]:
     section: str | None = None
     in_table = False
     for line in DOC.read_text().splitlines():
-        if line.startswith(("###", "####")):
+        if line.startswith("#"):
             token = re.search(r"`([\w.]+)`", line)
             section = token.group(1) if token else None
             in_table = False
@@ -135,7 +135,8 @@ def test_the_four_documented_sections_are_found():
 
 @pytest.mark.parametrize("row", [row for row in ROWS if not row.is_computed], ids=lambda row: row.id)
 def test_every_documented_default_matches_the_schema(row):
-    assert schema_default(row.section, row.key) == row.default
+    default = schema_default(row.section, row.key)
+    assert (type(default), default) == (type(row.default), row.default)
 
 
 @pytest.mark.parametrize("row", ROWS, ids=lambda row: row.id)

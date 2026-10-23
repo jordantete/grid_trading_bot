@@ -217,6 +217,19 @@ class TestGridTradingStrategy:
 
         assert strategy.stop_reason is None
 
+    @pytest.mark.asyncio
+    async def test_the_booking_error_policy_follows_fail_fast_not_the_strategy_class(self, setup_strategy):
+        create_strategy, _, _, grid_manager, order_manager, *_ = setup_strategy
+        strategy = create_strategy(LiveGridStrategy)
+        order_manager.fail_fast = True
+        grid_manager.is_within_grid_range.return_value = True
+        order_manager.perform_initial_purchase = AsyncMock(side_effect=BookingError(_executed_buy(), ValueError("bad")))
+
+        with pytest.raises(BookingError):
+            await strategy._initialize_grid_orders_once(current_price=15100, grid_orders_initialized=False)
+
+        assert strategy.stop_reason is None
+
     def test_get_formatted_orders(self, setup_strategy):
         create_strategy, _, _, _, _, _, trading_performance_analyzer, _, _ = setup_strategy
         strategy = create_strategy()

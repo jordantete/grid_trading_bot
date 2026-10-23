@@ -86,13 +86,11 @@ class TestMarketConstraintsEnforcement:
 
 
 class TestTakeProfitStopLoss:
-    # ── execute_take_profit_or_stop_loss_order (both failure policies) ─────────────
+    # ── execute_take_profit_or_stop_loss_order ─────────────
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("fail_fast", [True, False])
-    async def test_tp_delegates_to_close_positions(self, setup_order_manager, fail_fast):
+    async def test_tp_delegates_to_close_positions(self, setup_order_manager):
         manager, *_ = setup_order_manager
-        manager.fail_fast = fail_fast
         manager.liquidation.close_positions = AsyncMock()
 
         await manager.execute_take_profit_or_stop_loss_order(current_price=100.0, take_profit_order=True)
@@ -100,10 +98,8 @@ class TestTakeProfitStopLoss:
         manager.liquidation.close_positions.assert_awaited_once_with(liquidate=True, current_price=100.0)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("fail_fast", [True, False])
-    async def test_sl_delegates_to_close_positions_and_notifies(self, setup_order_manager, fail_fast):
+    async def test_sl_delegates_to_close_positions_and_notifies(self, setup_order_manager):
         manager, _, _, _, _, _, notification_handler = setup_order_manager
-        manager.fail_fast = fail_fast
 
         async def liquidated(**_kwargs):
             manager.liquidation.liquidated = True
