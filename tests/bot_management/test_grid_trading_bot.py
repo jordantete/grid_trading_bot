@@ -56,7 +56,6 @@ class BotFixtures:
     def mock_event_bus(self):
         event_bus = Mock(spec=EventBus)
         event_bus.subscribe = Mock()
-        event_bus.publish_sync = Mock()
         return event_bus
 
     @pytest.fixture
@@ -70,7 +69,6 @@ class BotFixtures:
             config_manager=config_manager,
             notification_handler=notification_handler,
             event_bus=mock_event_bus,
-            save_performance_results_path="results.json",
             no_plot=True,
         )
         bot.exchange_service.fetch_open_orders = AsyncMock(return_value=[])
@@ -536,7 +534,6 @@ class TestStrategyStatePersistenceWiring:
     def mock_event_bus(self):
         event_bus = Mock(spec=EventBus)
         event_bus.subscribe = Mock()
-        event_bus.publish_sync = Mock()
         return event_bus
 
     @pytest.fixture
@@ -552,7 +549,6 @@ class TestStrategyStatePersistenceWiring:
                 config_manager=config_manager,
                 notification_handler=notification_handler,
                 event_bus=mock_event_bus,
-                save_performance_results_path="results.json",
                 no_plot=True,
             )
             bot.exchange_service.fetch_open_orders = AsyncMock(return_value=[])

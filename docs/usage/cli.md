@@ -34,7 +34,6 @@ uv run grid_trading_bot run --config config/config.json
 | `--config` | string | Yes | Path to configuration file. Can be specified multiple times for concurrent execution. |
 | `--save_performance_results` | string | No | Path to save simulation results as JSON (e.g., `results.json`). |
 | `--no-plot` | flag | No | Disable interactive Plotly charts at the end of simulation. |
-| `--profile` | flag | No | Enable profiling for performance analysis. |
 
 ### `--version`
 
@@ -87,14 +86,6 @@ uv run grid_trading_bot run \
   --config config/config2.json \
   --save_performance_results combined_results.json \
   --no-plot
-```
-
-### With profiling
-
-Generate a `.prof` file for performance analysis:
-
-```bash
-uv run grid_trading_bot run --config config/config.json --profile
 ```
 
 ### `resume`

@@ -9,8 +9,7 @@ from tests.fakes.trading_stack import ARMING_PRICE, build_stack, reserved_matche
 
 from grid_trading_bot.core.bot_management.notification.notification_content import NotificationType
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
-from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
-from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
+from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus
 from grid_trading_bot.core.order_handling.placement_journal import PlacementPurpose
 from grid_trading_bot.core.services.exceptions import (
     DataFetchError,
@@ -151,9 +150,7 @@ class TestFills:
         store = _observing_store(stack)
         stack.manager.state_store = store
         buy = stack.execution.order_at(100.0, OrderSide.BUY)
-        stack.execution.fail_next_limit_order = OrderExecutionFailedError(
-            "network down", OrderSide.SELL, OrderType.LIMIT, "BTC/USDT", 1.0, 110.0
-        )
+        stack.execution.fail_next_limit_order = OrderRejectedError("network down")
         crypto_before = stack.balances.get_adjusted_crypto_balance()
 
         await stack.manager.apply_order_update(stack.execution.fill(buy.identifier))
@@ -395,16 +392,9 @@ class TestEndedOrders:
         assert NotificationType.ORDER_CANCELLED in _sent(stack)
         assert NotificationType.ERROR_OCCURRED in _sent(stack)
 
-    @pytest.mark.parametrize(
-        "error",
-        [
-            OrderExecutionFailedError("network down", OrderSide.BUY, OrderType.LIMIT, "BTC/USDT", 1.0, 90.0),
-            OrderRejectedError("insufficient funds"),
-        ],
-    )
-    async def test_a_failed_replacement_releases_its_reservation(self, stack, error):
+    async def test_a_failed_replacement_releases_its_reservation(self, stack):
         buy = stack.execution.order_at(90.0, OrderSide.BUY)
-        stack.execution.fail_next_limit_order = error
+        stack.execution.fail_next_limit_order = OrderRejectedError("insufficient funds")
 
         await stack.manager.apply_order_update(stack.execution.end(buy.identifier, OrderStatus.CANCELED))
 
@@ -573,9 +563,7 @@ class TestNotificationsAfterTheLock:
     async def test_a_failed_grid_order_notifies_after_the_lock(self):
         stack = build_stack()
         sent = self._record_sends(stack)
-        stack.execution.fail_next_limit_order = OrderExecutionFailedError(
-            "network down", OrderSide.BUY, OrderType.LIMIT, "BTC/USDT", 1.0, 80.0
-        )
+        stack.execution.fail_next_limit_order = OrderRejectedError("network down")
 
         await stack.manager.initialize_grid_orders(ARMING_PRICE)
 

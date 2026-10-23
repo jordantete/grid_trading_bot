@@ -66,7 +66,6 @@ class GridTradingBot:
         config_manager: ConfigManager,
         notification_handler: NotificationHandler,
         event_bus: EventBus,
-        save_performance_results_path: str | None = None,
         no_plot: bool = False,
         run_files: RunFiles | None = None,
     ):
@@ -84,7 +83,6 @@ class GridTradingBot:
             self.notification_handler = notification_handler
             self.event_bus = event_bus
             self.event_bus.subscribe(Events.STOP_BOT, self._handle_stop_bot_event)
-            self.save_performance_results_path = save_performance_results_path
             self.no_plot = no_plot
             self.trading_mode: TradingMode = self.config_manager.config.exchange.trading_mode
             base_currency: str = self.config_manager.config.pair.base_currency

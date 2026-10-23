@@ -167,7 +167,6 @@ async def run_backtest_bot(make_config_file):
             config_manager=config_manager,
             notification_handler=notification_handler,
             event_bus=event_bus,
-            save_performance_results_path=None,
             no_plot=True,
         )
 

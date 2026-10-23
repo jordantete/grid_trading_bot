@@ -97,31 +97,6 @@ class EventBus:
                 if isinstance(result, Exception):
                     self.logger.error(f"Exception in async event callback: {result}", exc_info=result)
 
-    def publish_sync(
-        self,
-        event_type: str,
-        data: Any,
-    ) -> None:
-        """
-        Publishes an event synchronously to all subscribers.
-        """
-        if event_type in self.subscribers:
-            self.logger.info(f"Publishing sync event: {event_type} with data: {data}")
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            for callback in self.subscribers[event_type]:
-                if inspect.iscoroutinefunction(callback):
-                    if loop is not None:
-                        asyncio.run_coroutine_threadsafe(self._safe_invoke_async(callback, data), loop)
-                    else:
-                        self.logger.warning(
-                            f"No running event loop; cannot schedule async callback '{callback.__name__}'"
-                        )
-                else:
-                    self._safe_invoke_sync(callback, data)
-
     async def _safe_invoke_async(
         self,
         callback: Callable[[Any], Awaitable[Any]],

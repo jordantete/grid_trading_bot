@@ -22,7 +22,7 @@ def _params(args):
 def test_one_config_is_parsed(config_file):
     params = _params(["--config", config_file])
 
-    assert params == {"config": (config_file,), "save_performance_results": None, "no_plot": False, "profile": False}
+    assert params == {"config": (config_file,), "save_performance_results": None, "no_plot": False}
 
 
 def test_several_configs_are_parsed_in_order(tmp_path, config_file):
@@ -60,8 +60,9 @@ def test_no_plot_is_a_flag(config_file):
     assert _params(["--config", config_file, "--no-plot"])["no_plot"] is True
 
 
-def test_profile_is_a_flag(config_file):
-    assert _params(["--config", config_file, "--profile"])["profile"] is True
+def test_profile_is_not_an_option(config_file):
+    with pytest.raises(click.NoSuchOption, match="No such option '--profile'"):
+        _params(["--config", config_file, "--profile"])
 
 
 def test_config_without_a_value_is_a_usage_error():

@@ -7,7 +7,3 @@ class BotControllerError(GridBotError):
 
 class CommandParsingError(BotControllerError):
     """Exception raised when there is an error parsing a command."""
-
-
-class StrategyControlError(BotControllerError):
-    """Exception raised when starting, stopping, or restarting the strategy fails."""

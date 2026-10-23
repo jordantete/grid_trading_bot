@@ -70,12 +70,6 @@ class TestEventBus:
 
         assert calls == ["first", "second"]
 
-    def test_publish_sync(self, event_bus):
-        sync_callback = Mock()
-        event_bus.subscribe(Events.STOP_BOT, sync_callback)
-        event_bus.publish_sync(Events.STOP_BOT, {"data": "test"})
-        sync_callback.assert_called_once_with({"data": "test"})
-
     @pytest.mark.asyncio
     async def test_safe_invoke_async(self, event_bus, caplog):
         async_callback = AsyncMock()

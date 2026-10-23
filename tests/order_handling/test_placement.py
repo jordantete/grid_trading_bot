@@ -12,7 +12,6 @@ from grid_trading_bot.core.bot_management.notification.notification_content impo
 from grid_trading_bot.core.exceptions import BookingError
 from grid_trading_bot.core.grid_management.grid_level import GridCycleState
 from grid_trading_bot.core.order_handling import order_manager as order_manager_module
-from grid_trading_bot.core.order_handling.exceptions import OrderExecutionFailedError
 from grid_trading_bot.core.order_handling.order import OrderSide, OrderStatus, OrderType
 from grid_trading_bot.core.order_handling.order_manager import OrderManager
 from grid_trading_bot.core.order_handling.placement_journal import PendingPlacement, PlacementPurpose
@@ -178,9 +177,7 @@ class TestSubmitLimit:
 
     async def test_an_execution_failure_drops_the_entry_and_reports_a_failed_order(self):
         stack = build_stack(store=RecordingStore())
-        stack.execution.fail_next_limit_order = OrderExecutionFailedError(
-            "exchange refused", OrderSide.BUY, OrderType.LIMIT, "BTC/USDT", 1.0, 80.0
-        )
+        stack.execution.fail_next_limit_order = OrderRejectedError("exchange refused")
 
         await stack.manager.initialize_grid_orders(ARMING_PRICE)
 

@@ -26,7 +26,7 @@ from ..order_handling.balance_tracker import BalanceTracker
 from ..order_handling.order_book import OrderBook
 from ..validation.exceptions import InvalidOrderQuantityError
 from ..validation.order_validator import OrderValidator
-from .exceptions import GridFeasibilityError, OrderExecutionFailedError
+from .exceptions import GridFeasibilityError
 from .execution_strategy.order_execution_strategy_interface import (
     OrderExecutionStrategyInterface,
 )
@@ -366,12 +366,7 @@ class OrderManager:
             await self._drop_entry(entry)
             context = f"Placement of the {entry.side.value} order at {entry.price} failed"
             self.logger.error(f"{context}: {e}", exc_info=True)
-            notification = (
-                NotificationType.ORDER_FAILED
-                if isinstance(e, OrderExecutionFailedError)
-                else NotificationType.ERROR_OCCURRED
-            )
-            self._notify(notification, error_details=f"{context}: {e}")
+            self._notify(NotificationType.ERROR_OCCURRED, error_details=f"{context}: {e}")
             return None
         return self._adopt(entry, order)
 
@@ -379,6 +374,7 @@ class OrderManager:
         """Moves an order the exchange holds for `entry` from the journal into the book."""
         adopt_order(entry, order, self.grid_manager, self.order_book)
         self.journal.remove(entry.client_order_id)
+        self._retry_errors_alerted.discard(entry.client_order_id)
         if entry.attempts > 1:
             self.logger.info(f"Placement {entry.client_order_id} placed after {entry.attempts} attempts.")
         if entry.purpose is PlacementPurpose.PAIRED:
@@ -388,6 +384,7 @@ class OrderManager:
     async def _drop_entry(self, entry: PendingPlacement) -> None:
         """Removes a limit entry that will not become an order: releases its funds and frees its level."""
         self.journal.remove(entry.client_order_id)
+        self._retry_errors_alerted.discard(entry.client_order_id)
         await self._release_funds(entry.side, entry.quantity, entry.limit_price)
         grid_level = self.grid_manager.grid_levels.get(entry.level_price) if entry.level_price is not None else None
         if grid_level is not None:
@@ -511,7 +508,7 @@ class OrderManager:
             await self.balance_tracker.release_reserved_crypto(quantity)
 
     def _handle_order_error(self, error: Exception, context: str) -> None:
-        if isinstance(error, OrderExecutionFailedError | DataFetchError | OrderRefusedError):
+        if isinstance(error, DataFetchError | OrderRefusedError):
             self.logger.error(f"{context} - {error!s}", exc_info=True)
             self._notify(
                 NotificationType.ORDER_FAILED,

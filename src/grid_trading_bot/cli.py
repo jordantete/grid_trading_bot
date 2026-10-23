@@ -76,8 +76,6 @@ async def run_bot(
     config_manager: ConfigManager,
     config_name: str,
     lifecycle: ProcessLifecycle,
-    profile: bool = False,
-    save_performance_results_path: str | None = None,
     no_plot: bool = False,
 ) -> BotOutcome:
     current_bot.set(config_name)
@@ -128,8 +126,6 @@ async def run_bot(
             event_bus,
             notification_handler,
             run_files,
-            profile,
-            save_performance_results_path,
             no_plot,
         )
     finally:
@@ -144,8 +140,6 @@ async def _run_bot(
     event_bus: EventBus,
     notification_handler: NotificationHandler,
     run_files: RunFiles | None,
-    profile: bool,
-    save_performance_results_path: str | None,
     no_plot: bool,
 ) -> BotOutcome:
     bot = GridTradingBot(
@@ -153,7 +147,6 @@ async def _run_bot(
         config_manager,
         notification_handler,
         event_bus,
-        save_performance_results_path,
         no_plot,
         run_files=run_files,
     )
@@ -161,12 +154,6 @@ async def _run_bot(
     health_check = HealthCheck(
         bot, notification_handler, event_bus, check_interval=config_manager.config.execution.health_check_interval
     )
-
-    if profile:
-        import cProfile
-
-        cProfile.runctx("asyncio.run(bot.run())", globals(), locals(), "profile_results.prof")
-        return BotOutcome(EXIT_OK)
 
     result = None
     crashed = False
@@ -261,13 +248,7 @@ def main():
     default=False,
     help="Disable the display of plots at the end of the simulation.",
 )
-@click.option(
-    "--profile",
-    is_flag=True,
-    default=False,
-    help="Enable profiling for performance analysis.",
-)
-def run(config, save_performance_results, no_plot, profile):
+def run(config, save_performance_results, no_plot):
     """Run the trading bot with the specified configuration."""
     config_managers = [initialize_config(config_path) for config_path in config]
     config_names = [generate_config_name(config_manager) for config_manager in config_managers]
@@ -288,8 +269,6 @@ def run(config, save_performance_results, no_plot, profile):
                         config_manager,
                         config_name,
                         lifecycle,
-                        profile,
-                        save_performance_results,
                         no_plot,
                     )
                     for config_path, config_manager, config_name in zip(

@@ -3,7 +3,7 @@ import pytest
 from grid_trading_bot.config.exceptions import ConfigError, ConfigFileNotFoundError
 from grid_trading_bot.core.bot_management.bot_controller.exceptions import BotControllerError, CommandParsingError
 from grid_trading_bot.core.exceptions import GridBotError, OrderRefusedError
-from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError, OrderExecutionFailedError
+from grid_trading_bot.core.order_handling.exceptions import GridFeasibilityError
 from grid_trading_bot.core.services.exceptions import (
     CircuitBreakerOpenError,
     DataFetchError,
@@ -35,7 +35,6 @@ from grid_trading_bot.core.validation.exceptions import (
         (BotControllerError, GridBotError),
         (CommandParsingError, GridBotError),
         (GridFeasibilityError, GridBotError),
-        (OrderExecutionFailedError, GridBotError),
         (ExchangeServiceError, GridBotError),
         (DataFetchError, ExchangeServiceError),
         (OrderNotFoundError, DataFetchError),
