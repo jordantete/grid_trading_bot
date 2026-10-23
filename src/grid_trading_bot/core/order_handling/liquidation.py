@@ -109,10 +109,11 @@ class Liquidation:
         """
         Sells the free crypto at market until none is left. A failed attempt is retried after a growing delay,
         except a sale the exchange executed and the bot could not book, which ends the liquidation with an alert and
-        keeps its entry so it is never sent again; a refusal re-reads the exchange balance first, and a remainder under
-        the exchange minimum stops with an alert. Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL
-        seconds. A backtest re-raises what is neither an exchange failure nor a refusal, since nothing would ever
-        interrupt its retries.
+        keeps its entry so it is never sent again; a refusal re-reads the exchange balance first (in paper trading the
+        test account's, where the sale executes, not the virtual books), and a remainder under the exchange minimum
+        stops with an alert. Alerts at the first failure, then every LIQUIDATION_ALERT_INTERVAL seconds. With
+        `fail_fast`, what is neither an exchange failure nor a refusal is re-raised, since nothing would ever interrupt
+        the retries.
         """
         failures = 0
         last_alert_at: float | None = None

@@ -115,7 +115,7 @@ class BalanceTracker:
         exchange_service: ExchangeInterface,
     ) -> tuple[Decimal, Decimal]:
         """
-        Fetches live balances from the exchange asynchronously.
+        Fetches the free quote and base balances from the exchange.
 
         Args:
             exchange_service: The exchange instance.

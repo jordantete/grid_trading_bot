@@ -96,7 +96,7 @@ That window lasts as long as the stop waits for the price update in progress, 20
 A take-profit, stop-loss or trailing stop cancels the grid, then sells the free crypto at market and retries until the sale goes through:
 
 - after a network error, an exchange outage, an open circuit breaker or any unexpected error, it tries again after 1, 2, 4, 8 and 16 seconds, then every 30 seconds;
-- after a refusal (insufficient balance, invalid order), it reads the free balance on the exchange, waits the same delay, then sells that amount; when that read fails, it sells what the books hold;
+- after a refusal (insufficient balance, invalid order), it reads the free balance on the exchange, waits the same delay, then sells that amount; when that read fails, it sells what the books hold. In paper trading this is the test account's balance, not the virtual one: the sale executes on the test account, so selling more than it holds would only be refused again. When the two differ, the liquidation ends on the "no more free crypto" alert below;
 - when what is left is under the exchange minimum at the current price, or is an amount the exchange cannot round, it stops and alerts ("Liquidation stopped: X left, under the exchange minimum");
 - when the exchange holds no more free crypto while the books still show some, it stops and alerts ("Liquidation stopped: the exchange holds no more free X; the books still show Y").
 
